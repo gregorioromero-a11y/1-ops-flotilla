@@ -406,6 +406,18 @@ function ModuleEnvios() {
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
   const [selectedDate, setSelectedDate] = useState("2026-02-26");
+  const [openMenu, setOpenMenu] = useState(null);
+
+  const updateRuta = (index, field, value) => {
+    const updated = [...rutas];
+    updated[index] = { ...updated[index], [field]: value };
+    setRutas(updated);
+  };
+
+  const deleteRuta = (index) => {
+    setRutas(rutas.filter((_, i) => i !== index));
+    setOpenMenu(null);
+  };
 
   const getRisk = (r) => {
     if (r.pctEntrega < 50) return "high";
@@ -620,8 +632,15 @@ function ModuleEnvios() {
                 </td>
                 {/* Transportista */}
                 <td style={{ padding: "14px 12px", fontSize: 12, fontWeight: 600, color: C.text }}>{r.carrier}</td>
-                {/* Tipo ruta */}
-                <td style={{ padding: "14px 12px", fontSize: 12, color: C.textMuted }}>{r.tipoRuta}</td>
+                {/* Tipo ruta - editable dropdown */}
+                <td style={{ padding: "10px 12px" }}>
+                  <select value={r.tipoRuta} onChange={e => updateRuta(rutas.indexOf(r), "tipoRuta", e.target.value)} style={{
+                    fontSize: 12, padding: "4px 8px", borderRadius: 6, border: `1px solid ${C.border}`, backgroundColor: C.white, color: C.text, cursor: "pointer", fontWeight: 500,
+                  }}>
+                    <option value="Última milla">Última milla</option>
+                    <option value="Half mile">Half mile</option>
+                  </select>
+                </td>
                 {/* Intercambios */}
                 <td style={{ padding: "14px 12px", fontSize: 13, fontWeight: 600, color: r.intercambios > 0 ? C.blue : C.textMuted }}>
                   {r.intercambios > 0 ? `+ ${r.intercambios}` : "—"}
@@ -630,9 +649,32 @@ function ModuleEnvios() {
                 <td style={{ padding: "14px 12px", fontSize: 11, color: C.textMuted }}>
                   {r.salida ? `Desp.: ${r.salida.substring(0, 16)}` : "Sin salida"}
                 </td>
-                {/* More */}
-                <td style={{ padding: "14px 8px", textAlign: "center" }}>
-                  <button style={{ padding: 4, border: "none", background: "none", cursor: "pointer", color: C.textMuted, fontSize: 16 }}>•••</button>
+                {/* More - action menu */}
+                <td style={{ padding: "14px 8px", textAlign: "center", position: "relative" }}>
+                  <button onClick={(e) => { e.stopPropagation(); setOpenMenu(openMenu === i ? null : i); }} style={{ padding: 4, border: "none", background: "none", cursor: "pointer", color: C.textMuted, fontSize: 16 }}>•••</button>
+                  {openMenu === i && (
+                    <div style={{
+                      position: "absolute", right: 12, top: 40, backgroundColor: C.white, borderRadius: 8,
+                      boxShadow: "0 4px 16px rgba(0,0,0,0.12)", border: `1px solid ${C.border}`, zIndex: 100, minWidth: 140, overflow: "hidden",
+                    }}>
+                      <button onClick={() => { setOpenMenu(null); /* edit logic */ }} style={{
+                        width: "100%", padding: "10px 16px", border: "none", backgroundColor: "transparent", cursor: "pointer",
+                        fontSize: 12, fontWeight: 600, color: C.text, textAlign: "left", display: "flex", alignItems: "center", gap: 8,
+                      }}
+                      onMouseEnter={ev => ev.currentTarget.style.backgroundColor = C.bg}
+                      onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
+                        <IC.Edit /> Editar
+                      </button>
+                      <button onClick={() => deleteRuta(rutas.indexOf(r))} style={{
+                        width: "100%", padding: "10px 16px", border: "none", backgroundColor: "transparent", cursor: "pointer",
+                        fontSize: 12, fontWeight: 600, color: C.red, textAlign: "left", display: "flex", alignItems: "center", gap: 8,
+                      }}
+                      onMouseEnter={ev => ev.currentTarget.style.backgroundColor = C.redBg}
+                      onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
+                        <IC.Trash /> Eliminar
+                      </button>
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}
