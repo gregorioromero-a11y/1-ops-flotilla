@@ -373,93 +373,201 @@ function ModuleDashboard() {
   );
 }
 
+// --- MINI CIRCLE GAUGE for Table Rows ---
+function CircleGauge({ value, size = 40 }) {
+  const r = (size - 6) / 2;
+  const circ = 2 * Math.PI * r;
+  const offset = circ - (value / 100) * circ;
+  const color = value >= 90 ? C.green : value >= 75 ? "#3B82F6" : value >= 50 ? C.yellow : C.red;
+  return (
+    <div style={{ position: "relative", width: size, height: size, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#E5E7EB" strokeWidth={3} />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={3}
+          strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" />
+      </svg>
+      <span style={{ position: "absolute", fontSize: 9, fontWeight: 700, color }}>{Math.round(value)}%</span>
+    </div>
+  );
+}
+
+// --- Risk Icon ---
+function RiskIcon({ level }) {
+  if (level === "high") return <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: "50%", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 800 }}>!</span>;
+  if (level === "medium") return <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: "50%", backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11, fontWeight: 800 }}>!</span>;
+  return null;
+}
+
 // --- REGISTRAR ENVÍOS (Data Capture Module) ---
 function ModuleEnvios() {
-  const [showForm, setShowForm] = useState(false);
-  const [envios, setEnvios] = useState(mockEnvios);
-  const [form, setForm] = useState({ fecha: "2026-02-26", unidad: "", operador: "", origen: "", destino: "", paquetes: "", peso: "", tipo: "T1 Envíos", status: "En tránsito" });
-  const [filterTipo, setFilterTipo] = useState("Todos");
-  
-  const handleSave = () => {
-    const newEnvio = {
-      ...form,
-      id: `ENV-${4202 + envios.length}`,
-      paquetes: parseInt(form.paquetes) || 0,
-      peso: parseFloat(form.peso) || 0,
-    };
-    setEnvios([newEnvio, ...envios]);
-    setShowForm(false);
-    setForm({ fecha: "2026-02-26", unidad: "", operador: "", origen: "", destino: "", paquetes: "", peso: "", tipo: "T1 Envíos", status: "En tránsito" });
+  const [rutas, setRutas] = useState(mockRutas);
+  const [filter, setFilter] = useState("Todas");
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState("");
+  const [selectedDate, setSelectedDate] = useState("2026-02-26");
+
+  const getRisk = (r) => {
+    if (r.pctEntrega < 50) return "high";
+    if (r.pctEntrega < 80 || r.noVisitados > r.total * 0.3) return "medium";
+    return null;
   };
-  
-  const filtered = filterTipo === "Todos" ? envios : envios.filter(e => e.tipo === filterTipo);
+
+  const filtered = rutas.filter(r => {
+    if (filter === "Todas") return true;
+    if (filter === "En ruta") return r.status === "En curso";
+    if (filter === "En riesgo") return getRisk(r) === "high" || getRisk(r) === "medium";
+    if (filter === "Completadas") return r.status === "Completada";
+    return true;
+  });
+
+  const totalRutas = rutas.length;
+  const totalEntregados = rutas.reduce((s, r) => s + r.entregados, 0);
+  const totalPaquetes = rutas.reduce((s, r) => s + r.total, 0);
+  const pctGeneral = totalPaquetes > 0 ? ((totalEntregados / totalPaquetes) * 100).toFixed(1) : 0;
+  const enCurso = rutas.filter(r => r.status === "En curso").length;
+  const completadas = rutas.filter(r => r.status === "Completada").length;
+  const enRiesgo = rutas.filter(r => getRisk(r)).length;
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    setUploadMsg("");
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        // Parse with SheetJS - dynamically import
+        import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs").then((XLSX) => {
+          const data = new Uint8Array(evt.target.result);
+          const wb = XLSX.read(data, { type: "array" });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json(ws);
+
+          const parsed = json.map((row, i) => {
+            const total = parseInt(row["Total"]) || 0;
+            const entregados = parseInt(row["Entregados"]) || 0;
+            const recolecciones = parseInt(row["Recolecciones"]) || 0;
+            const pct = parseFloat(row["Porcentaje de entrega"]) || 0;
+            const intentados = (parseInt(row["315-Not Delivered"]) || 0) + (parseInt(row["311-Not Home"]) || 0) + (parseInt(row["312-Business Closed"]) || 0) + (parseInt(row["313-Without access"]) || 0) + (parseInt(row["314-Wrong address"]) || 0) + (parseInt(row["316-Missing"]) || 0) + (parseInt(row["318-Reject by customer"]) || 0) + (parseInt(row["305-Codigo no proporcionado"]) || 0);
+            const noVisitados = total - entregados - intentados;
+            const salida = row["Fecha y hora de salida"] || "";
+            const intercambios = (parseInt(row["Entregados en intento 2"]) || 0) + (parseInt(row["Entregados en intento 3"]) || 0) + (parseInt(row["Entregados en intento 4+"]) || 0);
+
+            return {
+              idRuta: row["ID ruta"] || `R-${i}`,
+              carrier: row["Carrier"] || "—",
+              operador: row["Nombre operador"] || "Sin nombre",
+              correo: row["Correo operador"] || "",
+              placa: row["Placa"] || "",
+              almacen: row["Almacén (Facility que entrega)"] || "T1 ENVIOS",
+              economico: row["Económico"] || "",
+              status: row["Status"] || "En curso",
+              total,
+              entregados,
+              recolecciones,
+              pctEntrega: pct,
+              intentados,
+              noVisitados: noVisitados > 0 ? noVisitados : 0,
+              salida: typeof salida === "string" ? salida : "",
+              intercambios,
+              kmEstimados: row["Kilometros estimados"] || "—",
+              kmRecorridos: row["Kilometros recorridos"] || "—",
+              tiempoEstimado: row["Tiempo estimado"] || "—",
+              tiempoReal: row["Tiempo real en ruta"] || "—",
+              tipoRuta: "Última milla",
+            };
+          });
+
+          setRutas(parsed);
+          setUploadMsg(`✓ ${parsed.length} rutas cargadas correctamente`);
+          setUploading(false);
+          setShowUpload(false);
+        }).catch(() => {
+          // Fallback: manual CSV-like parse
+          setUploadMsg("Error: No se pudo cargar la librería de Excel. Intente con un archivo .csv");
+          setUploading(false);
+        });
+      } catch (err) {
+        setUploadMsg("Error al procesar el archivo: " + err.message);
+        setUploading(false);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  // Status indicator bar color
+  const getBarColor = (r) => {
+    if (r.status === "Completada") return C.green;
+    if (getRisk(r) === "high") return C.red;
+    if (getRisk(r) === "medium") return C.yellow;
+    return "#F59E0B";
+  };
 
   return (
     <div>
+      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Registrar Envíos</h1>
-          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Captura de datos operativos · Reemplaza Google Sheets</p>
+          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Vista de rutas operativas · Carga masiva desde Excel</p>
         </div>
-        <button onClick={() => setShowForm(!showForm)} style={{
-          padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent,
-          color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-        }}>
-          {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Nuevo envío</>}
-        </button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600 }} />
+          <button onClick={() => setShowUpload(!showUpload)} style={{
+            padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showUpload ? C.textMuted : C.accent,
+            color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+          }}>
+            {showUpload ? <><IC.X /> Cancelar</> : <><IC.Download /> Carga masiva</>}
+          </button>
+        </div>
       </div>
 
-      {/* Form */}
-      {showForm && (
-        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: `2px solid ${C.accent}`, marginBottom: 20 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>📦  Registrar nuevo envío</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
-            {[
-              { label: "Fecha", key: "fecha", type: "date" },
-              { label: "Unidad", key: "unidad", placeholder: "T1-015", type: "select", options: mockUnidades.map(u => u.id) },
-              { label: "Operador", key: "operador", placeholder: "Nombre completo", type: "select", options: mockOperadores.map(o => o.nombre) },
-              { label: "Tipo operación", key: "tipo", type: "select", options: ["T1 Envíos", "Warehouse", "HalfMile", "Same Day"] },
-              { label: "Origen", key: "origen", placeholder: "CDMX Reforma" },
-              { label: "Destino", key: "destino", placeholder: "GDL Centro" },
-              { label: "Paquetes", key: "paquetes", placeholder: "84", type: "number" },
-              { label: "Peso total (kg)", key: "peso", placeholder: "420", type: "number" },
-            ].map(field => (
-              <div key={field.key}>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>{field.label}</label>
-                {field.type === "select" ? (
-                  <select value={form[field.key]} onChange={e => setForm({...form, [field.key]: e.target.value})} style={{
-                    width: "100%", padding: "8px 10px", borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, boxSizing: "border-box",
-                  }}>
-                    <option value="">Seleccionar...</option>
-                    {field.options.map(o => <option key={o} value={o}>{o}</option>)}
-                  </select>
-                ) : (
-                  <input type={field.type || "text"} value={form[field.key]} onChange={e => setForm({...form, [field.key]: e.target.value})}
-                    placeholder={field.placeholder} style={{
-                      width: "100%", padding: "8px 10px", borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, boxSizing: "border-box",
-                    }} />
-                )}
-              </div>
-            ))}
-          </div>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
-            <button onClick={() => setShowForm(false)} style={{ padding: "8px 20px", borderRadius: 8, border: `1px solid ${C.border}`, backgroundColor: C.white, fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Cancelar</button>
-            <button onClick={handleSave} style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✓ Guardar envío</button>
+      {/* Summary cards */}
+      <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+        <StatCard label="Total rutas" value={totalRutas.toString()} icon={<IC.Truck />} color={C.blue} />
+        <StatCard label="En curso" value={enCurso.toString()} icon={<IC.Clock />} color={C.yellow} />
+        <StatCard label="Completadas" value={completadas.toString()} icon={<IC.Check />} color={C.green} />
+        <StatCard label="% Entrega general" value={pctGeneral + "%"} subvalue={`${totalEntregados} / ${totalPaquetes} paquetes`} icon={<IC.BarChart />} color={C.accent} />
+      </div>
+
+      {/* Upload area */}
+      {showUpload && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: `2px dashed ${C.accent}`, marginBottom: 20, textAlign: "center" }}>
+          <div style={{ fontSize: 36, marginBottom: 10 }}>📊</div>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6, color: C.text }}>Carga masiva de rutas</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 16 }}>Sube tu archivo Excel (.xlsx) con las columnas: ID ruta, Carrier, Nombre operador, Total, Entregados, etc.</div>
+          <label style={{
+            display: "inline-flex", alignItems: "center", gap: 8, padding: "12px 28px", borderRadius: 8,
+            backgroundColor: C.accent, color: "white", fontSize: 14, fontWeight: 700, cursor: "pointer",
+          }}>
+            <IC.Download /> Seleccionar archivo Excel
+            <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} style={{ display: "none" }} />
+          </label>
+          {uploading && <div style={{ marginTop: 12, fontSize: 13, color: C.blue, fontWeight: 600 }}>⏳ Procesando archivo...</div>}
+          {uploadMsg && <div style={{ marginTop: 12, fontSize: 13, color: uploadMsg.startsWith("✓") ? C.green : C.red, fontWeight: 600 }}>{uploadMsg}</div>}
+          <div style={{ marginTop: 14, fontSize: 11, color: C.textMuted }}>
+            Formato esperado: el mismo que genera tu sistema de ruteo (ID ruta, Carrier, Nombre operador, Status, Total, Entregados, Porcentaje de entrega, etc.)
           </div>
         </div>
       )}
 
-      {/* Filter bar */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {["Todos", "T1 Envíos", "Warehouse", "HalfMile", "Same Day"].map(f => (
-          <button key={f} onClick={() => setFilterTipo(f)} style={{
-            padding: "6px 14px", borderRadius: 20, border: `1px solid ${filterTipo === f ? C.accent : C.border}`,
-            backgroundColor: filterTipo === f ? C.accentLight : C.white, color: filterTipo === f ? C.accent : C.textMuted,
-            fontSize: 12, fontWeight: 600, cursor: "pointer",
-          }}>{f}</button>
-        ))}
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 12, color: C.textMuted, alignSelf: "center" }}>{filtered.length} registros</span>
+      {/* Date + Filter bar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
+          {new Date(selectedDate + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })}
+          <span style={{ marginLeft: 8, fontSize: 12, color: C.textMuted }}>({filtered.length} rutas)</span>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {["Todas", "En ruta", "En riesgo", "Completadas"].map(f => (
+            <button key={f} onClick={() => setFilter(f)} style={{
+              padding: "6px 16px", borderRadius: 6, border: `1px solid ${filter === f ? C.accent : C.border}`,
+              backgroundColor: filter === f ? C.accentLight : C.white, color: filter === f ? C.accent : C.textMuted,
+              fontSize: 12, fontWeight: 600, cursor: "pointer",
+            }}>{f}</button>
+          ))}
+        </div>
       </div>
 
       {/* Table */}
@@ -467,39 +575,92 @@ function ModuleEnvios() {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>
-              {["ID", "Fecha", "Unidad", "Operador", "Origen → Destino", "Pqtes", "Kg", "Tipo", "Status", ""].map(h => (
-                <th key={h} style={{ padding: "10px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
-              ))}
+              <th style={{ width: 30, padding: "10px 8px" }}></th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Empleado</th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Estatus</th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Transportista</th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Tipo de ruta</th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Intercambios</th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Fechas</th>
+              <th style={{ width: 40, padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted }}>Ver más</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((e, i) => (
-              <tr key={i} style={{ borderBottom: `1px solid ${C.border}`, cursor: "pointer" }}
+            {filtered.map((r, i) => (
+              <tr key={i} style={{ borderBottom: `1px solid ${C.border}`, position: "relative" }}
                 onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
                 onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
-                <td style={{ padding: "10px", fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{e.id}</td>
-                <td style={{ padding: "10px", fontSize: 12, color: C.textMuted }}>{e.fecha}</td>
-                <td style={{ padding: "10px", fontSize: 12, fontWeight: 600 }}>{e.unidad}</td>
-                <td style={{ padding: "10px", fontSize: 12 }}>{e.operador}</td>
-                <td style={{ padding: "10px", fontSize: 12 }}>{e.origen} → {e.destino}</td>
-                <td style={{ padding: "10px", fontSize: 12, fontWeight: 600, textAlign: "center" }}>{e.paquetes}</td>
-                <td style={{ padding: "10px", fontSize: 12, color: C.textMuted, textAlign: "center" }}>{e.peso}</td>
-                <td style={{ padding: "10px" }}>
-                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, backgroundColor: e.tipo === "T1 Envíos" ? C.accentLight : e.tipo === "Warehouse" ? C.blueBg : e.tipo === "HalfMile" ? C.purpleBg : C.yellowBg, color: e.tipo === "T1 Envíos" ? C.accent : e.tipo === "Warehouse" ? C.blue : e.tipo === "HalfMile" ? C.purple : C.yellow, fontWeight: 700 }}>{e.tipo}</span>
+                {/* Color bar */}
+                <td style={{ padding: 0, position: "relative", width: 4 }}>
+                  <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, backgroundColor: getBarColor(r) }} />
+                  <div style={{ paddingLeft: 12 }}>
+                    <input type="checkbox" style={{ cursor: "pointer" }} />
+                  </div>
                 </td>
-                <td style={{ padding: "10px" }}><StatusBadge status={e.status} /></td>
-                <td style={{ padding: "10px", display: "flex", gap: 4 }}>
-                  <button style={{ padding: 4, border: "none", background: "none", cursor: "pointer", color: C.textMuted }}><IC.Edit /></button>
-                  <button style={{ padding: 4, border: "none", background: "none", cursor: "pointer", color: C.textMuted }}><IC.Trash /></button>
+                {/* Empleado + risk */}
+                <td style={{ padding: "14px 12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{r.operador}</span>
+                    <RiskIcon level={getRisk(r)} />
+                  </div>
+                </td>
+                {/* Estatus with gauge */}
+                <td style={{ padding: "10px 12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <CircleGauge value={r.pctEntrega} size={44} />
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>
+                        {r.entregados} Entregados | {r.intentados} Intentados
+                      </div>
+                      <div style={{ fontSize: 11, color: C.textMuted }}>
+                        {r.noVisitados} No visitados | {r.total} Total
+                      </div>
+                    </div>
+                  </div>
+                </td>
+                {/* Transportista */}
+                <td style={{ padding: "14px 12px", fontSize: 12, fontWeight: 600, color: C.text }}>{r.carrier}</td>
+                {/* Tipo ruta */}
+                <td style={{ padding: "14px 12px", fontSize: 12, color: C.textMuted }}>{r.tipoRuta}</td>
+                {/* Intercambios */}
+                <td style={{ padding: "14px 12px", fontSize: 13, fontWeight: 600, color: r.intercambios > 0 ? C.blue : C.textMuted }}>
+                  {r.intercambios > 0 ? `+ ${r.intercambios}` : "—"}
+                </td>
+                {/* Fechas */}
+                <td style={{ padding: "14px 12px", fontSize: 11, color: C.textMuted }}>
+                  {r.salida ? `Desp.: ${r.salida.substring(0, 16)}` : "Sin salida"}
+                </td>
+                {/* More */}
+                <td style={{ padding: "14px 8px", textAlign: "center" }}>
+                  <button style={{ padding: 4, border: "none", background: "none", cursor: "pointer", color: C.textMuted, fontSize: 16 }}>•••</button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        {filtered.length === 0 && (
+          <div style={{ padding: 48, textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 10 }}>📦</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.textMuted }}>No hay rutas para mostrar</div>
+            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 4 }}>Usa "Carga masiva" para importar tu archivo Excel de rutas</div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
+// Mock data for rutas (matches the Excel format)
+const mockRutas = [
+  { idRuta: "2530312", carrier: "FAST INTEGRAL", operador: "Ludwing Yael Miguel Plata", status: "En curso", total: 34, entregados: 30, intentados: 2, noVisitados: 2, pctEntrega: 88.24, salida: "2026-02-26 06:16:41", intercambios: 2, tipoRuta: "Última milla" },
+  { idRuta: "2530322", carrier: "FAST INTEGRAL", operador: "Sergio Loeza Diaz", status: "Completada", total: 43, entregados: 37, intentados: 6, noVisitados: 0, pctEntrega: 86.05, salida: "2026-02-26 06:20:00", intercambios: 7, tipoRuta: "Última milla" },
+  { idRuta: "2530320", carrier: "KEKO", operador: "Mariana Tapia Rosales", status: "En curso", total: 43, entregados: 29, intentados: 0, noVisitados: 14, pctEntrega: 67.44, salida: "2026-02-26 06:21:02", intercambios: 20, tipoRuta: "Última milla" },
+  { idRuta: "2530412", carrier: "FAST INTEGRAL", operador: "Jesus de Israel Colin Tovar", status: "Completada", total: 42, entregados: 36, intentados: 6, noVisitados: 0, pctEntrega: 85.71, salida: "2026-02-26 06:43:53", intercambios: 4, tipoRuta: "Última milla" },
+  { idRuta: "2530409", carrier: "ADET", operador: "Juan Pablo Muñoz Moreno", status: "En curso", total: 55, entregados: 48, intentados: 7, noVisitados: 0, pctEntrega: 87.27, salida: "2026-02-26 06:44:59", intercambios: 25, tipoRuta: "Última milla" },
+  { idRuta: "2530427", carrier: "KEKO", operador: "Jesús Reyes Santiago", status: "En curso", total: 33, entregados: 25, intentados: 5, noVisitados: 3, pctEntrega: 75.76, salida: "2026-02-26 06:51:33", intercambios: 7, tipoRuta: "Última milla" },
+  { idRuta: "2530458", carrier: "FAST INTEGRAL", operador: "MARCO ANTONIO BARBER CASTRO", status: "Completada", total: 34, entregados: 0, intentados: 0, noVisitados: 34, pctEntrega: 0, salida: "2026-02-26 06:54:11", intercambios: 0, tipoRuta: "Última milla" },
+  { idRuta: "2530461", carrier: "FAST INTEGRAL", operador: "MARCO ANTONIO BARBER CASTRO", status: "En curso", total: 33, entregados: 10, intentados: 1, noVisitados: 22, pctEntrega: 30.30, salida: "2026-02-26 07:09:00", intercambios: 6, tipoRuta: "Última milla" },
+];
 
 // --- UNIDADES ---
 function ModuleUnidades() {
