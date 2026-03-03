@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
+import * as XLSX from "xlsx";
 
 // ============================================================
 // T1 ENVÍOS — OPS FLOTILLA KPI PLATFORM
@@ -480,6 +481,7 @@ function ModuleEnvios() {
   const completadas = rutas.filter(r => r.status === "Completada").length;
   const enRiesgo = rutas.filter(r => getRisk(r)).length;
 
+  // ===== FIXED: Use XLSX directly from npm import instead of dynamic CDN import =====
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -487,76 +489,73 @@ function ModuleEnvios() {
     setUploadMsg("");
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try {
-        // Parse with SheetJS - dynamically import
-        import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs").then(async (XLSX) => {
-          const data = new Uint8Array(evt.target.result);
-          const wb = XLSX.read(data, { type: "array" });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const json = XLSX.utils.sheet_to_json(ws);
+        const data = new Uint8Array(evt.target.result);
+        const wb = XLSX.read(data, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws);
 
-          const parsed = json.map((row, i) => {
-            const total = parseInt(row["Total"]) || 0;
-            const entregados = parseInt(row["Entregados"]) || 0;
-            const recolecciones = parseInt(row["Recolecciones"]) || 0;
-            const pct = parseFloat(row["Porcentaje de entrega"]) || 0;
-            const intentados = (parseInt(row["315-Not Delivered"]) || 0) + (parseInt(row["311-Not Home"]) || 0) + (parseInt(row["312-Business Closed"]) || 0) + (parseInt(row["313-Without access"]) || 0) + (parseInt(row["314-Wrong address"]) || 0) + (parseInt(row["316-Missing"]) || 0) + (parseInt(row["318-Reject by customer"]) || 0) + (parseInt(row["305-Codigo no proporcionado"]) || 0);
-            const noVisitados = total - entregados - intentados;
-            const salida = row["Fecha y hora de salida"] || "";
-            const intercambios = (parseInt(row["Entregados en intento 2"]) || 0) + (parseInt(row["Entregados en intento 3"]) || 0) + (parseInt(row["Entregados en intento 4+"]) || 0);
+        const parsed = json.map((row, i) => {
+          const total = parseInt(row["Total"]) || 0;
+          const entregados = parseInt(row["Entregados"]) || 0;
+          const recolecciones = parseInt(row["Recolecciones"]) || 0;
+          const pct = parseFloat(row["Porcentaje de entrega"]) || 0;
+          const intentados = (parseInt(row["315-Not Delivered"]) || 0) + (parseInt(row["311-Not Home"]) || 0) + (parseInt(row["312-Business Closed"]) || 0) + (parseInt(row["313-Without access"]) || 0) + (parseInt(row["314-Wrong address"]) || 0) + (parseInt(row["316-Missing"]) || 0) + (parseInt(row["318-Reject by customer"]) || 0) + (parseInt(row["305-Codigo no proporcionado"]) || 0);
+          const noVisitados = total - entregados - intentados;
+          const salida = row["Fecha y hora de salida"] || "";
+          const intercambios = (parseInt(row["Entregados en intento 2"]) || 0) + (parseInt(row["Entregados en intento 3"]) || 0) + (parseInt(row["Entregados en intento 4+"]) || 0);
 
-            return {
-              idRuta: row["ID ruta"] || `R-${i}`,
-              carrier: row["Carrier"] || "—",
-              operador: row["Nombre operador"] || "Sin nombre",
-              correo: row["Correo operador"] || "",
-              placa: row["Placa"] || "",
-              almacen: row["Almacén (Facility que entrega)"] || "T1 ENVIOS",
-              economico: row["Económico"] || "",
-              status: row["Status"] || "En curso",
-              total,
-              entregados,
-              recolecciones,
-              pctEntrega: pct,
-              intentados,
-              noVisitados: noVisitados > 0 ? noVisitados : 0,
-              salida: typeof salida === "string" ? salida : "",
-              intercambios,
-              kmEstimados: row["Kilometros estimados"] || "—",
-              kmRecorridos: row["Kilometros recorridos"] || "—",
-              tiempoEstimado: row["Tiempo estimado"] || "—",
-              tiempoReal: row["Tiempo real en ruta"] || "—",
-              tipoRuta: "Última milla",
-            };
-          });
-
-          setRutas(parsed);
-          setUploadMsg(`✓ ${parsed.length} rutas cargadas correctamente`);
-          setUploading(false);
-          setShowUpload(false);
-
-          // Save to Supabase
-          const dbRows = parsed.map(r => ({
-            id_ruta: r.idRuta, carrier: r.carrier, operador: r.operador,
-            correo_operador: r.correo, placa: r.placa, almacen: r.almacen,
-            economico: r.economico, status: r.status, total: r.total,
-            entregados: r.entregados, recolecciones: r.recolecciones,
-            pct_entrega: r.pctEntrega, intentados: r.intentados,
-            no_visitados: r.noVisitados, fecha_salida: r.salida || null,
-            intercambios: r.intercambios, tipo_ruta: r.tipoRuta,
-            km_estimados: r.kmEstimados, km_recorridos: r.kmRecorridos,
-            tiempo_estimado: r.tiempoEstimado, tiempo_real: r.tiempoReal,
-            fecha_registro: selectedDate,
-          }));
-          const { error } = await supabase.from("rutas").insert(dbRows);
-          if (error) { console.error("Supabase insert error:", error); }
-          else { loadRutas(); }
-        }).catch(() => {
-          // Fallback: manual CSV-like parse
-          setUploadMsg("Error: No se pudo cargar la librería de Excel. Intente con un archivo .csv");
-          setUploading(false);
+          return {
+            idRuta: row["ID ruta"] || `R-${i}`,
+            carrier: row["Carrier"] || "—",
+            operador: row["Nombre operador"] || "Sin nombre",
+            correo: row["Correo operador"] || "",
+            placa: row["Placa"] || "",
+            almacen: row["Almacén (Facility que entrega)"] || "T1 ENVIOS",
+            economico: row["Económico"] || "",
+            status: row["Status"] || "En curso",
+            total,
+            entregados,
+            recolecciones,
+            pctEntrega: pct,
+            intentados,
+            noVisitados: noVisitados > 0 ? noVisitados : 0,
+            salida: typeof salida === "string" ? salida : "",
+            intercambios,
+            kmEstimados: row["Kilometros estimados"] || "—",
+            kmRecorridos: row["Kilometros recorridos"] || "—",
+            tiempoEstimado: row["Tiempo estimado"] || "—",
+            tiempoReal: row["Tiempo real en ruta"] || "—",
+            tipoRuta: "Última milla",
+          };
         });
+
+        setRutas(parsed);
+        setUploadMsg(`✓ ${parsed.length} rutas cargadas correctamente`);
+        setUploading(false);
+        setShowUpload(false);
+
+        // Save to Supabase
+        const dbRows = parsed.map(r => ({
+          id_ruta: r.idRuta, carrier: r.carrier, operador: r.operador,
+          correo_operador: r.correo, placa: r.placa, almacen: r.almacen,
+          economico: r.economico, status: r.status, total: r.total,
+          entregados: r.entregados, recolecciones: r.recolecciones,
+          pct_entrega: r.pctEntrega, intentados: r.intentados,
+          no_visitados: r.noVisitados, fecha_salida: r.salida || null,
+          intercambios: r.intercambios, tipo_ruta: r.tipoRuta,
+          km_estimados: r.kmEstimados, km_recorridos: r.kmRecorridos,
+          tiempo_estimado: r.tiempoEstimado, tiempo_real: r.tiempoReal,
+          fecha_registro: selectedDate,
+        }));
+        const { error } = await supabase.from("rutas").insert(dbRows);
+        if (error) {
+          console.error("Supabase insert error:", error);
+          setUploadMsg(`✓ ${parsed.length} rutas cargadas (error al guardar en BD: ${error.message})`);
+        } else {
+          loadRutas();
+        }
       } catch (err) {
         setUploadMsg("Error al procesar el archivo: " + err.message);
         setUploading(false);
