@@ -1,10 +1,17 @@
 "use client";
 import { useState, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 // ============================================================
 // T1 ENVÍOS — OPS FLOTILLA KPI PLATFORM
 // Replaces: Google Sheets (capture) + Looker Studio (dashboard)
 // ============================================================
+
+// --- SUPABASE CONFIG ---
+const supabase = createClient(
+  "https://owhsbmtroxzhscpzozts.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93aHNibXRyb3h6aHNjcHpvenRzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NTI4NTMsImV4cCI6MjA4ODEyODg1M30.CU1IiseDJnjk8F8L2DaIDbU3UJk1RrRTK61nJe7Oiec"
+);
 
 const C = {
   bg: "#F8F9FC",
@@ -400,21 +407,53 @@ function RiskIcon({ level }) {
 
 // --- REGISTRAR ENVÍOS (Data Capture Module) ---
 function ModuleEnvios() {
-  const [rutas, setRutas] = useState(mockRutas);
+  const [rutas, setRutas] = useState([]);
   const [filter, setFilter] = useState("Todas");
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
   const [selectedDate, setSelectedDate] = useState("2026-02-26");
   const [openMenu, setOpenMenu] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  const updateRuta = (index, field, value) => {
+  // Load rutas from Supabase on mount
+  useEffect(() => { loadRutas(); }, []);
+
+  const loadRutas = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("rutas").select("*").order("created_at", { ascending: false });
+    if (data && data.length > 0) {
+      setRutas(data.map(r => ({
+        id: r.id, idRuta: r.id_ruta, carrier: r.carrier || "—", operador: r.operador || "Sin nombre",
+        correo: r.correo_operador || "", placa: r.placa || "", almacen: r.almacen || "T1 ENVIOS",
+        economico: r.economico || "", status: r.status || "En curso", total: r.total || 0,
+        entregados: r.entregados || 0, recolecciones: r.recolecciones || 0,
+        pctEntrega: parseFloat(r.pct_entrega) || 0, intentados: r.intentados || 0,
+        noVisitados: r.no_visitados || 0, salida: r.fecha_salida || "",
+        intercambios: r.intercambios || 0, tipoRuta: r.tipo_ruta || "Última milla",
+        kmEstimados: r.km_estimados || "—", kmRecorridos: r.km_recorridos || "—",
+        tiempoEstimado: r.tiempo_estimado || "—", tiempoReal: r.tiempo_real || "—",
+      })));
+    } else {
+      setRutas(mockRutas);
+    }
+    setLoading(false);
+  };
+
+  const updateRuta = async (index, field, value) => {
     const updated = [...rutas];
     updated[index] = { ...updated[index], [field]: value };
     setRutas(updated);
+    const r = updated[index];
+    if (r.id) {
+      const dbField = field === "tipoRuta" ? "tipo_ruta" : field;
+      await supabase.from("rutas").update({ [dbField]: value }).eq("id", r.id);
+    }
   };
 
-  const deleteRuta = (index) => {
+  const deleteRuta = async (index) => {
+    const r = rutas[index];
+    if (r.id) { await supabase.from("rutas").delete().eq("id", r.id); }
     setRutas(rutas.filter((_, i) => i !== index));
     setOpenMenu(null);
   };
@@ -451,7 +490,7 @@ function ModuleEnvios() {
     reader.onload = (evt) => {
       try {
         // Parse with SheetJS - dynamically import
-        import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs").then((XLSX) => {
+        import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs").then(async (XLSX) => {
           const data = new Uint8Array(evt.target.result);
           const wb = XLSX.read(data, { type: "array" });
           const ws = wb.Sheets[wb.SheetNames[0]];
@@ -496,6 +535,23 @@ function ModuleEnvios() {
           setUploadMsg(`✓ ${parsed.length} rutas cargadas correctamente`);
           setUploading(false);
           setShowUpload(false);
+
+          // Save to Supabase
+          const dbRows = parsed.map(r => ({
+            id_ruta: r.idRuta, carrier: r.carrier, operador: r.operador,
+            correo_operador: r.correo, placa: r.placa, almacen: r.almacen,
+            economico: r.economico, status: r.status, total: r.total,
+            entregados: r.entregados, recolecciones: r.recolecciones,
+            pct_entrega: r.pctEntrega, intentados: r.intentados,
+            no_visitados: r.noVisitados, fecha_salida: r.salida || null,
+            intercambios: r.intercambios, tipo_ruta: r.tipoRuta,
+            km_estimados: r.kmEstimados, km_recorridos: r.kmRecorridos,
+            tiempo_estimado: r.tiempoEstimado, tiempo_real: r.tiempoReal,
+            fecha_registro: selectedDate,
+          }));
+          const { error } = await supabase.from("rutas").insert(dbRows);
+          if (error) { console.error("Supabase insert error:", error); }
+          else { loadRutas(); }
         }).catch(() => {
           // Fallback: manual CSV-like parse
           setUploadMsg("Error: No se pudo cargar la librería de Excel. Intente con un archivo .csv");
