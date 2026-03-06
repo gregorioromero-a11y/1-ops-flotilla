@@ -490,6 +490,7 @@ function ModuleEnvios() {
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
+        const XLSX = await import("xlsx");
         const data = new Uint8Array(evt.target.result);
         const wb = XLSX.read(data, { type: "array" });
         const ws = wb.Sheets[wb.SheetNames[0]];
