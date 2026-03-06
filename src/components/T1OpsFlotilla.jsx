@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
-import * as XLSX from "xlsx";
+
 
 // ============================================================
 // T1 ENVÍOS — OPS FLOTILLA KPI PLATFORM
@@ -417,6 +417,16 @@ function ModuleEnvios() {
   const [openMenu, setOpenMenu] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Load SheetJS library via script tag (avoids SSR/module issues)
+  useEffect(() => {
+    if (typeof window !== "undefined" && !window.XLSX) {
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      script.async = true;
+      document.head.appendChild(script);
+    }
+  }, []);
+
   // Load rutas from Supabase on mount
   useEffect(() => { loadRutas(); }, []);
 
@@ -481,16 +491,29 @@ function ModuleEnvios() {
   const completadas = rutas.filter(r => r.status === "Completada").length;
   const enRiesgo = rutas.filter(r => getRisk(r)).length;
 
-  // ===== FIXED: Use XLSX directly from npm import instead of dynamic CDN import =====
+  // ===== FIXED: Uses window.XLSX loaded via CDN script tag =====
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     setUploading(true);
     setUploadMsg("");
 
+    // Check if XLSX library is loaded
+    if (typeof window === "undefined" || !window.XLSX) {
+      setUploadMsg("⏳ Cargando librería, intente de nuevo en 2 segundos...");
+      setUploading(false);
+      // Try loading again
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      script.async = true;
+      document.head.appendChild(script);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
+        const XLSX = window.XLSX;
         const data = new Uint8Array(evt.target.result);
         const wb = XLSX.read(data, { type: "array" });
         const ws = wb.Sheets[wb.SheetNames[0]];
