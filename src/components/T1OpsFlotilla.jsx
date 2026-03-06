@@ -436,7 +436,7 @@ function ModuleEnvios() {
         tiempoEstimado: r.tiempo_estimado || "—", tiempoReal: r.tiempo_real || "—",
       })));
     } else {
-      setRutas(mockRutas);
+      setRutas([]);
     }
     setLoading(false);
   };
