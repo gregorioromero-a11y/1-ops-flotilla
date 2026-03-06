@@ -414,6 +414,7 @@ function ModuleEnvios() {
   const [uploadMsg, setUploadMsg] = useState("");
   const [selectedDate, setSelectedDate] = useState("2026-02-26");
   const [openMenu, setOpenMenu] = useState(null);
+  const [selectedRows, setSelectedRows] = useState(new Set());
   const [loading, setLoading] = useState(true);
 
   // Load rutas from Supabase on mount
@@ -456,6 +457,48 @@ function ModuleEnvios() {
     if (r.id) { await supabase.from("rutas").delete().eq("id", r.id); }
     setRutas(rutas.filter((_, i) => i !== index));
     setOpenMenu(null);
+  };
+
+  const toggleRow = (idx) => {
+    setSelectedRows(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx); else next.add(idx);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selectedRows.size === filtered.length) {
+      setSelectedRows(new Set());
+    } else {
+      setSelectedRows(new Set(filtered.map((_, i) => i)));
+    }
+  };
+
+  const bulkUpdateTipo = async (tipo) => {
+    const updated = [...rutas];
+    for (const idx of selectedRows) {
+      const r = filtered[idx];
+      const realIdx = rutas.indexOf(r);
+      if (realIdx >= 0) {
+        updated[realIdx] = { ...updated[realIdx], tipoRuta: tipo };
+        if (r.id) {
+          await supabase.from("rutas").update({ tipo_ruta: tipo }).eq("id", r.id);
+        }
+      }
+    }
+    setRutas(updated);
+    setSelectedRows(new Set());
+  };
+
+  const bulkDelete = async () => {
+    if (!confirm("¿Eliminar " + selectedRows.size + " rutas seleccionadas?")) return;
+    const toDelete = [...selectedRows].map(idx => filtered[idx]);
+    for (const r of toDelete) {
+      if (r.id) { await supabase.from("rutas").delete().eq("id", r.id); }
+    }
+    setRutas(rutas.filter(r => !toDelete.includes(r)));
+    setSelectedRows(new Set());
   };
 
   const getRisk = (r) => {
@@ -637,12 +680,29 @@ function ModuleEnvios() {
         </div>
       </div>
 
+      {/* Bulk action bar */}
+      {selectedRows.size > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", marginBottom: 12, backgroundColor: C.accentLight, borderRadius: 10, border: "1px solid " + C.accent }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.accent }}>{selectedRows.size} seleccionada{selectedRows.size > 1 ? "s" : ""}</span>
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted }}>Tipo de ruta:</span>
+          <button onClick={() => bulkUpdateTipo("Última milla")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", color: C.text }}>Última milla</button>
+          <button onClick={() => bulkUpdateTipo("Half mile")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", color: C.text }}>Half mile</button>
+          <button onClick={() => bulkUpdateTipo("Same Day")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", color: C.text }}>Same Day</button>
+          <div style={{ width: 1, height: 24, backgroundColor: C.border, margin: "0 4px" }} />
+          <button onClick={bulkDelete} style={{ padding: "5px 14px", borderRadius: 6, border: "none", backgroundColor: C.red, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>Eliminar</button>
+          <button onClick={() => setSelectedRows(new Set())} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, cursor: "pointer", color: C.textMuted }}>✕</button>
+        </div>
+      )}
+
       {/* Table */}
       <div style={{ backgroundColor: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>
-              <th style={{ width: 30, padding: "10px 8px" }}></th>
+              <th style={{ width: 30, padding: "10px 8px" }}>
+                <input type="checkbox" checked={selectedRows.size === filtered.length && filtered.length > 0} onChange={toggleAll} style={{ cursor: "pointer", accentColor: C.accent }} />
+              </th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Empleado</th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Estatus</th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Transportista</th>
@@ -661,7 +721,7 @@ function ModuleEnvios() {
                 <td style={{ padding: 0, position: "relative", width: 4 }}>
                   <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, backgroundColor: getBarColor(r) }} />
                   <div style={{ paddingLeft: 12 }}>
-                    <input type="checkbox" style={{ cursor: "pointer" }} />
+                    <input type="checkbox" checked={selectedRows.has(i)} onChange={() => toggleRow(i)} style={{ cursor: "pointer", accentColor: C.accent }} />
                   </div>
                 </td>
                 {/* Empleado + risk */}
