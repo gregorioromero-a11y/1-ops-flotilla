@@ -264,6 +264,33 @@ function OpsBar({ data }) {
 // --- DASHBOARD ---
 function ModuleDashboard() {
   const [periodo, setPeriodo] = useState("Febrero 2026");
+  const [carrierData, setCarrierData] = useState([]);
+
+  useEffect(() => {
+    const loadCarrierData = async () => {
+      const { data } = await supabase.from("rutas").select("carrier, total, entregados, intentados, no_visitados, pct_entrega");
+      if (data && data.length > 0) {
+        const grouped = {};
+        data.forEach(r => {
+          const c = r.carrier || "Sin carrier";
+          if (!grouped[c]) grouped[c] = { carrier: c, envios: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, rutas: 0 };
+          grouped[c].rutas += 1;
+          grouped[c].total += (r.total || 0);
+          grouped[c].entregados += (r.entregados || 0);
+          grouped[c].intentados += (r.intentados || 0);
+          grouped[c].noVisitados += (r.no_visitados || 0);
+        });
+        const arr = Object.values(grouped).map(g => ({
+          ...g,
+          pctEntrega: g.total > 0 ? ((g.entregados / g.total) * 100).toFixed(1) : 0,
+          devoluciones: g.intentados,
+          noEntregados: g.total - g.entregados,
+        })).sort((a, b) => b.total - a.total);
+        setCarrierData(arr);
+      }
+    };
+    loadCarrierData();
+  }, []);
   
   return (
     <div>
@@ -347,6 +374,119 @@ function ModuleDashboard() {
           </table>
         </div>
       </div>
+
+      {/* Desempeño por Proveedor */}
+      {carrierData.length > 0 && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 22, border: "1px solid " + C.border, marginBottom: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Desempeño por Proveedor (Carrier)</div>
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Comparativa de métricas operativas por transportista</div>
+            </div>
+          </div>
+
+          {/* Bar chart - % Entrega */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>% Entrega promedio</div>
+            {carrierData.map((c, i) => {
+              const pct = parseFloat(c.pctEntrega);
+              const color = pct >= 90 ? C.green : pct >= 75 ? C.yellow : C.red;
+              const badge = pct >= 90 ? "Excelente" : pct >= 75 ? "Bueno" : "En riesgo";
+              const badgeBg = pct >= 90 ? C.greenBg : pct >= 75 ? C.yellowBg : C.redBg;
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <div style={{ width: 130, fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.carrier}</div>
+                  <div style={{ flex: 1, height: 22, backgroundColor: "#F3F4F6", borderRadius: 6, overflow: "hidden", position: "relative" }}>
+                    <div style={{ width: pct + "%", height: "100%", backgroundColor: color, borderRadius: 6, transition: "width 0.5s", display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8 }}>
+                      {pct > 20 && <span style={{ fontSize: 10, fontWeight: 700, color: "white" }}>{c.pctEntrega}%</span>}
+                    </div>
+                  </div>
+                  {pct <= 20 && <span style={{ fontSize: 10, fontWeight: 700, color }}>{c.pctEntrega}%</span>}
+                  <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: badgeBg, color, minWidth: 60, textAlign: "center" }}>{badge}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Bar chart - Total envíos */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>Total de paquetes</div>
+            {(() => {
+              const maxTotal = Math.max(...carrierData.map(c => c.total));
+              return carrierData.map((c, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <div style={{ width: 130, fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.carrier}</div>
+                  <div style={{ flex: 1, height: 22, backgroundColor: "#F3F4F6", borderRadius: 6, overflow: "hidden" }}>
+                    <div style={{ display: "flex", height: "100%", borderRadius: 6 }}>
+                      <div style={{ width: (c.entregados / maxTotal * 100) + "%", backgroundColor: C.green, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        {c.entregados > maxTotal * 0.15 && <span style={{ fontSize: 9, fontWeight: 700, color: "white" }}>{c.entregados}</span>}
+                      </div>
+                      <div style={{ width: (c.noEntregados / maxTotal * 100) + "%", backgroundColor: C.red, opacity: 0.7, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        {c.noEntregados > maxTotal * 0.1 && <span style={{ fontSize: 9, fontWeight: 700, color: "white" }}>{c.noEntregados}</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: C.text, minWidth: 40, textAlign: "right" }}>{c.total}</span>
+                </div>
+              ));
+            })()}
+            <div style={{ display: "flex", gap: 16, marginTop: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}><div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: C.green }} /><span style={{ fontSize: 10, color: C.textMuted }}>Entregados</span></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}><div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: C.red, opacity: 0.7 }} /><span style={{ fontSize: 10, color: C.textMuted }}>No entregados</span></div>
+            </div>
+          </div>
+
+          {/* Bar chart - Devoluciones / Intentados */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>Devoluciones (intentos fallidos)</div>
+            {(() => {
+              const maxDev = Math.max(...carrierData.map(c => c.devoluciones), 1);
+              return carrierData.map((c, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <div style={{ width: 130, fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.carrier}</div>
+                  <div style={{ flex: 1, height: 22, backgroundColor: "#F3F4F6", borderRadius: 6, overflow: "hidden" }}>
+                    <div style={{ width: (c.devoluciones / maxDev * 100) + "%", height: "100%", backgroundColor: "#F59E0B", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8 }}>
+                      {c.devoluciones > maxDev * 0.15 && <span style={{ fontSize: 10, fontWeight: 700, color: "white" }}>{c.devoluciones}</span>}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: C.yellow, minWidth: 30, textAlign: "right" }}>{c.devoluciones}</span>
+                </div>
+              ));
+            })()}
+          </div>
+
+          {/* Summary table */}
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid " + C.border }}>
+                {["Carrier", "Rutas", "Paquetes", "Entregados", "No entregados", "Devoluciones", "% Entrega", "Desempeño"].map(h => (
+                  <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {carrierData.map((c, i) => {
+                const pct = parseFloat(c.pctEntrega);
+                const color = pct >= 90 ? C.green : pct >= 75 ? C.yellow : C.red;
+                const badge = pct >= 90 ? "Excelente" : pct >= 75 ? "Bueno" : "En riesgo";
+                const badgeBg = pct >= 90 ? C.greenBg : pct >= 75 ? C.yellowBg : C.redBg;
+                return (
+                  <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
+                    <td style={{ padding: "10px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
+                    <td style={{ padding: "10px", fontSize: 13 }}>{c.rutas}</td>
+                    <td style={{ padding: "10px", fontSize: 13, fontWeight: 600 }}>{c.total.toLocaleString()}</td>
+                    <td style={{ padding: "10px", fontSize: 13, color: C.green, fontWeight: 600 }}>{c.entregados.toLocaleString()}</td>
+                    <td style={{ padding: "10px", fontSize: 13, color: C.red }}>{c.noEntregados.toLocaleString()}</td>
+                    <td style={{ padding: "10px", fontSize: 13, color: C.yellow, fontWeight: 600 }}>{c.devoluciones}</td>
+                    <td style={{ padding: "10px", fontSize: 13, fontWeight: 700, color }}>{c.pctEntrega}%</td>
+                    <td style={{ padding: "10px" }}><span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: badgeBg, color }}>{badge}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Recent activity */}
       <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 22, border: `1px solid ${C.border}` }}>
