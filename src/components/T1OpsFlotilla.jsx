@@ -74,6 +74,7 @@ const navSections = [
     { id: "unidades", label: "Unidades", icon: IC.Truck },
     { id: "operadores", label: "Operadores", icon: IC.Users },
     { id: "costos", label: "Costos / Gastos", icon: IC.Dollar },
+    { id: "carriers", label: "Carriers / Proveedores", icon: IC.Truck, badge: "Nuevo" },
   ]},
   { label: "OPERACIONES", items: [
     { id: "t1envios", label: "T1 Envíos", icon: IC.Package },
@@ -1174,6 +1175,187 @@ function ModuleCostos() {
   );
 }
 
+// --- CARRIERS / PROVEEDORES ---
+function ModuleCarriers() {
+  const [carriers, setCarriers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ proveedor: "", tipo_unidad: "SEDAN", operacion: "LM", costo_unidad: "", ubicacion: "TIENDA" });
+  const [editId, setEditId] = useState(null);
+
+  useEffect(() => { loadCarriers(); }, []);
+
+  const loadCarriers = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("carriers").select("*").order("proveedor", { ascending: true });
+    setCarriers(data || []);
+    setLoading(false);
+  };
+
+  const saveCarrier = async () => {
+    if (!form.proveedor || !form.costo_unidad) return;
+    const row = { proveedor: form.proveedor.toUpperCase(), tipo_unidad: form.tipo_unidad, operacion: form.operacion, costo_unidad: parseFloat(form.costo_unidad), ubicacion: form.ubicacion };
+    if (editId) {
+      await supabase.from("carriers").update(row).eq("id", editId);
+    } else {
+      await supabase.from("carriers").insert([row]);
+    }
+    setForm({ proveedor: "", tipo_unidad: "SEDAN", operacion: "LM", costo_unidad: "", ubicacion: "TIENDA" });
+    setShowForm(false);
+    setEditId(null);
+    loadCarriers();
+  };
+
+  const editCarrier = (c) => {
+    setForm({ proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, operacion: c.operacion, costo_unidad: c.costo_unidad.toString(), ubicacion: c.ubicacion });
+    setEditId(c.id);
+    setShowForm(true);
+  };
+
+  const deleteCarrier = async (id) => {
+    if (!confirm("¿Eliminar este carrier?")) return;
+    await supabase.from("carriers").delete().eq("id", id);
+    loadCarriers();
+  };
+
+  // Group carriers by proveedor
+  const grouped = {};
+  carriers.forEach(c => {
+    if (!grouped[c.proveedor]) grouped[c.proveedor] = [];
+    grouped[c.proveedor].push(c);
+  });
+  const proveedores = Object.keys(grouped);
+
+  const totalProveedores = proveedores.length;
+  const totalUnidades = carriers.length;
+  const promedioLM = carriers.filter(c => c.operacion === "LM");
+  const avgCostoLM = promedioLM.length > 0 ? (promedioLM.reduce((s, c) => s + parseFloat(c.costo_unidad), 0) / promedioLM.length).toFixed(0) : 0;
+  const promedioHM = carriers.filter(c => c.operacion === "HM");
+  const avgCostoHM = promedioHM.length > 0 ? (promedioHM.reduce((s, c) => s + parseFloat(c.costo_unidad), 0) / promedioHM.length).toFixed(0) : 0;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Carriers / Proveedores</h1>
+          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Catálogo de proveedores, tipos de unidad y costos asociados</p>
+        </div>
+        <button onClick={() => { setShowForm(!showForm); setEditId(null); setForm({ proveedor: "", tipo_unidad: "SEDAN", operacion: "LM", costo_unidad: "", ubicacion: "TIENDA" }); }} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Agregar carrier</>}
+        </button>
+      </div>
+
+      {/* StatCards */}
+      <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+        <StatCard label="Proveedores" value={totalProveedores.toString()} icon={<IC.Users />} color={C.blue} />
+        <StatCard label="Tipos de unidad" value={totalUnidades.toString()} icon={<IC.Truck />} color={C.green} />
+        <StatCard label="Costo prom. LM" value={"$" + avgCostoLM} subvalue={promedioLM.length + " unidades"} icon={<IC.Dollar />} color={C.accent} />
+        <StatCard label="Costo prom. HM" value={avgCostoHM > 0 ? "$" + avgCostoHM : "—"} subvalue={promedioHM.length + " unidades"} icon={<IC.Dollar />} color={C.purple} />
+      </div>
+
+      {/* Form */}
+      {showForm && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>{editId ? "✏️ Editar carrier" : "🚛 Nuevo carrier / tipo de unidad"}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 14 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
+              <input value={form.proveedor} onChange={e => setForm({...form, proveedor: e.target.value})} placeholder="Ej: CARDO, KEKO" style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Tipo de unidad</label>
+              <select value={form.tipo_unidad} onChange={e => setForm({...form, tipo_unidad: e.target.value})} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                <option value="SEDAN">SEDAN</option>
+                <option value="VAN">VAN</option>
+                <option value="SPRINTER">SPRINTER</option>
+                <option value="3.5 TON">3.5 TON</option>
+                <option value="MOTO">MOTO</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Operación</label>
+              <select value={form.operacion} onChange={e => setForm({...form, operacion: e.target.value})} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                <option value="LM">LM (Última milla)</option>
+                <option value="HM">HM (Half mile)</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Costo / Unidad / Día ($)</label>
+              <input type="number" value={form.costo_unidad} onChange={e => setForm({...form, costo_unidad: e.target.value})} placeholder="995" style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Ubicación</label>
+              <select value={form.ubicacion} onChange={e => setForm({...form, ubicacion: e.target.value})} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                <option value="TIENDA">TIENDA</option>
+                <option value="CEDIS">CEDIS</option>
+                <option value="ALMACEN">ALMACEN</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
+            <button onClick={() => { setShowForm(false); setEditId(null); }} style={{ padding: "8px 20px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Cancelar</button>
+            <button onClick={saveCarrier} style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{editId ? "✓ Guardar cambios" : "✓ Agregar carrier"}</button>
+          </div>
+        </div>
+      )}
+
+      {/* Carrier cards grouped by proveedor */}
+      {proveedores.map((prov, pi) => {
+        const units = grouped[prov];
+        const totalCosto = units.reduce((s, c) => s + parseFloat(c.costo_unidad), 0);
+        return (
+          <div key={pi} style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, marginBottom: 14, overflow: "hidden" }}>
+            <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "#FAFBFF" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: C.accent + "18", display: "flex", alignItems: "center", justifyContent: "center", color: C.accent }}><IC.Truck /></div>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{prov}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted }}>{units.length} tipo{units.length > 1 ? "s" : ""} de unidad · Costo total: ${totalCosto.toLocaleString()}/día</div>
+                </div>
+              </div>
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid " + C.border }}>
+                  {["Tipo unidad", "Operación", "Costo/Unidad/Día", "Ubicación", "Acciones"].map(h => (
+                    <th key={h} style={{ padding: "8px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {units.map((c, ci) => (
+                  <tr key={ci} style={{ borderBottom: "1px solid " + C.border }}>
+                    <td style={{ padding: "12px 16px" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: c.tipo_unidad === "SEDAN" ? C.blueBg : c.tipo_unidad === "VAN" ? C.purpleBg : C.yellowBg, color: c.tipo_unidad === "SEDAN" ? C.blue : c.tipo_unidad === "VAN" ? C.purple : C.yellow }}>{c.tipo_unidad}</span>
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: c.operacion === "LM" ? C.greenBg : C.accentLight, color: c.operacion === "LM" ? C.green : C.accent }}>{c.operacion === "LM" ? "Última milla" : "Half mile"}</span>
+                    </td>
+                    <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: C.text }}>${parseFloat(c.costo_unidad).toLocaleString()}</td>
+                    <td style={{ padding: "12px 16px", fontSize: 12, color: C.textMuted }}>{c.ubicacion}</td>
+                    <td style={{ padding: "12px 16px", display: "flex", gap: 6 }}>
+                      <button onClick={() => editCarrier(c)} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid " + C.border, backgroundColor: C.white, cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 4 }}><IC.Edit /> Editar</button>
+                      <button onClick={() => deleteCarrier(c.id)} style={{ padding: "4px 10px", borderRadius: 4, border: "none", backgroundColor: C.redBg, cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.red, display: "flex", alignItems: "center", gap: 4 }}><IC.Trash /> Eliminar</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+
+      {carriers.length === 0 && !loading && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 48, border: "1px solid " + C.border, textAlign: "center" }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>🚛</div>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>No hay carriers registrados</div>
+          <div style={{ fontSize: 13, color: C.textMuted, marginTop: 8 }}>Usa "Agregar carrier" para registrar proveedores y sus tipos de unidad con costos</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- OPS Type Module (T1 Envíos, Warehouse, HalfMile, Same Day) ---
 function ModuleOpsType({ tipo, color }) {
   const data = opsBreakdown.find(o => o.tipo === tipo) || opsBreakdown[0];
@@ -1267,6 +1449,7 @@ export default function T1OpsFlotilla() {
       case "unidades": return <ModuleUnidades />;
       case "operadores": return <ModuleOperadores />;
       case "costos": return <ModuleCostos />;
+      case "carriers": return <ModuleCarriers />;
       case "t1envios": return <ModuleOpsType tipo="T1 Envíos" color={C.accent} />;
       case "warehouse": return <ModuleOpsType tipo="Warehouse" color={C.blue} />;
       case "halfmile": return <ModuleOpsType tipo="HalfMile" color={C.purple} />;
