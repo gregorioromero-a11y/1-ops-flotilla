@@ -1180,7 +1180,7 @@ function ModuleCarriers() {
   const [carriers, setCarriers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ proveedor: "", tipo_unidad: "SEDAN", operacion: "LM", costo_unidad: "", ubicacion: "TIENDA" });
+  const [form, setForm] = useState({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", ubicacion: "TIENDA" });
   const [editId, setEditId] = useState(null);
 
   useEffect(() => { loadCarriers(); }, []);
@@ -1194,20 +1194,20 @@ function ModuleCarriers() {
 
   const saveCarrier = async () => {
     if (!form.proveedor || !form.costo_unidad) return;
-    const row = { proveedor: form.proveedor.toUpperCase(), tipo_unidad: form.tipo_unidad, operacion: form.operacion, costo_unidad: parseFloat(form.costo_unidad), ubicacion: form.ubicacion };
+    const row = { proveedor: form.proveedor.toUpperCase(), tipo_unidad: form.tipo_unidad, costo_unidad: parseFloat(form.costo_unidad), ubicacion: form.ubicacion };
     if (editId) {
       await supabase.from("carriers").update(row).eq("id", editId);
     } else {
       await supabase.from("carriers").insert([row]);
     }
-    setForm({ proveedor: "", tipo_unidad: "SEDAN", operacion: "LM", costo_unidad: "", ubicacion: "TIENDA" });
+    setForm({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", ubicacion: "TIENDA" });
     setShowForm(false);
     setEditId(null);
     loadCarriers();
   };
 
   const editCarrier = (c) => {
-    setForm({ proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, operacion: c.operacion, costo_unidad: c.costo_unidad.toString(), ubicacion: c.ubicacion });
+    setForm({ proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, costo_unidad: c.costo_unidad.toString(), ubicacion: c.ubicacion });
     setEditId(c.id);
     setShowForm(true);
   };
@@ -1228,10 +1228,8 @@ function ModuleCarriers() {
 
   const totalProveedores = proveedores.length;
   const totalUnidades = carriers.length;
-  const promedioLM = carriers.filter(c => c.operacion === "LM");
-  const avgCostoLM = promedioLM.length > 0 ? (promedioLM.reduce((s, c) => s + parseFloat(c.costo_unidad), 0) / promedioLM.length).toFixed(0) : 0;
-  const promedioHM = carriers.filter(c => c.operacion === "HM");
-  const avgCostoHM = promedioHM.length > 0 ? (promedioHM.reduce((s, c) => s + parseFloat(c.costo_unidad), 0) / promedioHM.length).toFixed(0) : 0;
+  const avgCosto = carriers.length > 0 ? (carriers.reduce((s, c) => s + parseFloat(c.costo_unidad), 0) / carriers.length).toFixed(0) : 0;
+  const costoTotal = carriers.reduce((s, c) => s + parseFloat(c.costo_unidad), 0);
 
   return (
     <div>
@@ -1240,7 +1238,7 @@ function ModuleCarriers() {
           <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Carriers / Proveedores</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Catálogo de proveedores, tipos de unidad y costos asociados</p>
         </div>
-        <button onClick={() => { setShowForm(!showForm); setEditId(null); setForm({ proveedor: "", tipo_unidad: "SEDAN", operacion: "LM", costo_unidad: "", ubicacion: "TIENDA" }); }} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => { setShowForm(!showForm); setEditId(null); setForm({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", ubicacion: "TIENDA" }); }} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
           {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Agregar carrier</>}
         </button>
       </div>
@@ -1249,15 +1247,15 @@ function ModuleCarriers() {
       <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
         <StatCard label="Proveedores" value={totalProveedores.toString()} icon={<IC.Users />} color={C.blue} />
         <StatCard label="Tipos de unidad" value={totalUnidades.toString()} icon={<IC.Truck />} color={C.green} />
-        <StatCard label="Costo prom. LM" value={"$" + avgCostoLM} subvalue={promedioLM.length + " unidades"} icon={<IC.Dollar />} color={C.accent} />
-        <StatCard label="Costo prom. HM" value={avgCostoHM > 0 ? "$" + avgCostoHM : "—"} subvalue={promedioHM.length + " unidades"} icon={<IC.Dollar />} color={C.purple} />
+        <StatCard label="Costo promedio" value={"$" + avgCosto} subvalue="por unidad/día" icon={<IC.Dollar />} color={C.accent} />
+        <StatCard label="Costo total/día" value={"$" + costoTotal.toLocaleString()} subvalue={totalUnidades + " unidades"} icon={<IC.Dollar />} color={C.purple} />
       </div>
 
       {/* Form */}
       {showForm && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
           <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>{editId ? "✏️ Editar carrier" : "🚛 Nuevo carrier / tipo de unidad"}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
               <input value={form.proveedor} onChange={e => setForm({...form, proveedor: e.target.value})} placeholder="Ej: CARDO, KEKO" style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
@@ -1272,13 +1270,7 @@ function ModuleCarriers() {
                 <option value="MOTO">MOTO</option>
               </select>
             </div>
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Operación</label>
-              <select value={form.operacion} onChange={e => setForm({...form, operacion: e.target.value})} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
-                <option value="LM">LM (Última milla)</option>
-                <option value="HM">HM (Half mile)</option>
-              </select>
-            </div>
+
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Costo / Unidad / Día ($)</label>
               <input type="number" value={form.costo_unidad} onChange={e => setForm({...form, costo_unidad: e.target.value})} placeholder="995" style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
@@ -1317,7 +1309,7 @@ function ModuleCarriers() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "2px solid " + C.border }}>
-                  {["Tipo unidad", "Operación", "Costo/Unidad/Día", "Ubicación", "Acciones"].map(h => (
+                  {["Tipo unidad", "Costo/Unidad/Día", "Ubicación", "Acciones"].map(h => (
                     <th key={h} style={{ padding: "8px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                   ))}
                 </tr>
@@ -1328,9 +1320,7 @@ function ModuleCarriers() {
                     <td style={{ padding: "12px 16px" }}>
                       <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: c.tipo_unidad === "SEDAN" ? C.blueBg : c.tipo_unidad === "VAN" ? C.purpleBg : C.yellowBg, color: c.tipo_unidad === "SEDAN" ? C.blue : c.tipo_unidad === "VAN" ? C.purple : C.yellow }}>{c.tipo_unidad}</span>
                     </td>
-                    <td style={{ padding: "12px 16px" }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: c.operacion === "LM" ? C.greenBg : C.accentLight, color: c.operacion === "LM" ? C.green : C.accent }}>{c.operacion === "LM" ? "Última milla" : "Half mile"}</span>
-                    </td>
+
                     <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: C.text }}>${parseFloat(c.costo_unidad).toLocaleString()}</td>
                     <td style={{ padding: "12px 16px", fontSize: 12, color: C.textMuted }}>{c.ubicacion}</td>
                     <td style={{ padding: "12px 16px", display: "flex", gap: 6 }}>
