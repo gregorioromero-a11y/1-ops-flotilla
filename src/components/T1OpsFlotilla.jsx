@@ -558,12 +558,12 @@ function ModuleEnvios() {
   const [selectedRows, setSelectedRows] = useState(new Set());
   const [loading, setLoading] = useState(true);
 
-  // Load rutas from Supabase on mount
-  useEffect(() => { loadRutas(); }, []);
+  // Load rutas from Supabase on mount and when date changes
+  useEffect(() => { loadRutas(); }, [selectedDate]);
 
   const loadRutas = async () => {
     setLoading(true);
-    const { data } = await supabase.from("rutas").select("*").order("created_at", { ascending: false });
+    const { data } = await supabase.from("rutas").select("*").eq("fecha_registro", selectedDate).order("created_at", { ascending: false });
     if (data && data.length > 0) {
       setRutas(data.map(r => ({
         id: r.id, idRuta: r.id_ruta, carrier: r.carrier || "—", operador: r.operador || "Sin nombre",
