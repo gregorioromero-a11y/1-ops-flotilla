@@ -1199,14 +1199,6 @@ function ModuleCostos() {
                 <option value="Half mile">Half mile</option>
               </select>
             </div>
-            {/* Operacion */}
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Operación</label>
-              <select value={form.operacion} onChange={e => setForm({...form, operacion: e.target.value})} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
-                <option value="Última milla">Última milla</option>
-                <option value="Half mile">Half mile</option>
-              </select>
-            </div>
             {/* Cantidad */}
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Cantidad</label>
