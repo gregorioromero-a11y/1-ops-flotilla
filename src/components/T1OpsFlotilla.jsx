@@ -1099,7 +1099,8 @@ function ModuleCostos() {
   const [carriers, setCarriers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ fecha: new Date().toISOString().split("T")[0], proveedor: "", tipo_unidad: "", cantidad: "1", operacion: "Última milla" });
+  const [form, setForm] = useState({ fecha: new Date().toISOString().split("T")[0], proveedor: "" });
+  const [lineas, setLineas] = useState([{ tipo_unidad: "", operacion: "Última milla", cantidad: "1" }]);
   const [filtroDesde, setFiltroDesde] = useState(new Date().toISOString().split("T")[0]);
   const [filtroHasta, setFiltroHasta] = useState(new Date().toISOString().split("T")[0]);
 
@@ -1124,34 +1125,59 @@ function ModuleCostos() {
   // Get tipos for selected proveedor
   const tiposDisponibles = carriers.filter(c => c.proveedor === form.proveedor);
 
-  // Get selected carrier info
-  const selectedCarrier = carriers.find(c => c.proveedor === form.proveedor && c.tipo_unidad === form.tipo_unidad);
-  const costoUnitario = selectedCarrier ? parseFloat(selectedCarrier.costo_unidad) : 0;
-  const costoTotal = costoUnitario * (parseInt(form.cantidad) || 0);
+  // Calculate totals for all lines
+  const getCarrierForLine = (line) => carriers.find(c => c.proveedor === form.proveedor && c.tipo_unidad === line.tipo_unidad);
+  const getCostoLine = (line) => {
+    const carr = getCarrierForLine(line);
+    return (carr ? parseFloat(carr.costo_unidad) : 0) * (parseInt(line.cantidad) || 0);
+  };
+  const costoTotalForm = lineas.reduce((s, l) => s + getCostoLine(l), 0);
+  const allLinesValid = form.proveedor && lineas.every(l => l.tipo_unidad && l.cantidad);
 
   const [saveMsg, setSaveMsg] = useState("");
 
+  const addLinea = () => {
+    setLineas([...lineas, { tipo_unidad: "", operacion: "Última milla", cantidad: "1" }]);
+  };
+
+  const removeLinea = (idx) => {
+    if (lineas.length <= 1) return;
+    setLineas(lineas.filter((_, i) => i !== idx));
+  };
+
+  const updateLinea = (idx, field, value) => {
+    const updated = [...lineas];
+    updated[idx] = { ...updated[idx], [field]: value };
+    setLineas(updated);
+  };
+
   const saveRegistro = async () => {
-    if (!form.proveedor || !form.tipo_unidad || !form.cantidad) return;
+    if (!allLinesValid) return;
     setSaveMsg("");
-    const row = {
-      fecha: form.fecha,
-      unidad: form.proveedor + " - " + form.tipo_unidad,
-      tipo: form.operacion,
-      monto: costoTotal,
-      litros: parseInt(form.cantidad),
-      km: costoUnitario,
-      factura: null,
-      notas: form.cantidad + " unidades x $" + costoUnitario.toLocaleString() + "/unidad"
-    };
-    const { error } = await supabase.from("costos").insert([row]);
+    const rows = lineas.map(l => {
+      const carr = getCarrierForLine(l);
+      const costoUnit = carr ? parseFloat(carr.costo_unidad) : 0;
+      const cant = parseInt(l.cantidad) || 0;
+      return {
+        fecha: form.fecha,
+        unidad: form.proveedor + " - " + l.tipo_unidad,
+        tipo: l.operacion,
+        monto: costoUnit * cant,
+        litros: cant,
+        km: costoUnit,
+        factura: null,
+        notas: cant + " unidades x $" + costoUnit.toLocaleString() + "/unidad"
+      };
+    });
+    const { error } = await supabase.from("costos").insert(rows);
     if (error) {
       console.error("Supabase error:", error);
       setSaveMsg("Error: " + error.message);
       return;
     }
-    setSaveMsg("✓ Registro guardado");
-    setForm({ fecha: form.fecha, proveedor: "", tipo_unidad: "", cantidad: "1", operacion: "Última milla" });
+    setSaveMsg("✓ " + rows.length + " registros guardados");
+    setForm({ fecha: form.fecha, proveedor: "" });
+    setLineas([{ tipo_unidad: "", operacion: "Última milla", cantidad: "1" }]);
     loadData();
     setTimeout(() => setSaveMsg(""), 3000);
   };
@@ -1212,60 +1238,78 @@ function ModuleCostos() {
       {showForm && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
           <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>💰 Registro diario de unidades</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 1.3fr 1fr 0.7fr", gap: 14, alignItems: "flex-end" }}>
-            {/* Fecha */}
+          {/* Fecha + Proveedor */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 14, marginBottom: 14 }}>
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Fecha</label>
               <input type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
             </div>
-            {/* Proveedor */}
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
-              <select value={form.proveedor} onChange={e => setForm({...form, proveedor: e.target.value, tipo_unidad: "", operacion: "Última milla"})} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+              <select value={form.proveedor} onChange={e => { setForm({...form, proveedor: e.target.value}); setLineas([{ tipo_unidad: "", operacion: "Última milla", cantidad: "1" }]); }} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
                 <option value="">Seleccionar proveedor...</option>
                 {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
-            {/* Tipo unidad */}
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Tipo de unidad</label>
-              <select value={form.tipo_unidad} onChange={e => setForm({...form, tipo_unidad: e.target.value})} disabled={!form.proveedor} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", opacity: form.proveedor ? 1 : 0.5 }}>
-                <option value="">{form.proveedor ? "Seleccionar tipo..." : "Primero selecciona proveedor"}</option>
-                {tiposDisponibles.map(c => <option key={c.id} value={c.tipo_unidad}>{c.tipo_unidad} — {c.operacion} — ${parseFloat(c.costo_unidad).toLocaleString()}/día</option>)}
-              </select>
-            </div>
-            {/* Operacion */}
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Operación</label>
-              <select value={form.operacion} onChange={e => setForm({...form, operacion: e.target.value})} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
-                <option value="Última milla">Última milla</option>
-                <option value="Half mile">Half mile</option>
-              </select>
-            </div>
-            {/* Cantidad */}
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Cantidad</label>
-              <input type="number" min="1" value={form.cantidad} onChange={e => setForm({...form, cantidad: e.target.value})} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
-            </div>
           </div>
 
-          {/* Cost preview */}
-          {selectedCarrier && (
-            <div style={{ marginTop: 16, padding: "14px 18px", borderRadius: 8, backgroundColor: "#F0FDF4", border: "1px solid " + C.green + "40", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontSize: 12, color: C.textMuted }}>Cálculo automático</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginTop: 2 }}>{form.cantidad} unidad{parseInt(form.cantidad) !== 1 ? "es" : ""} × ${costoUnitario.toLocaleString()}/unidad/día</div>
+          {/* Lines */}
+          {form.proveedor && (
+            <div>
+              <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 0.7fr 40px", gap: 10, marginBottom: 6 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.textMuted }}>TIPO DE UNIDAD</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.textMuted }}>OPERACIÓN</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.textMuted }}>CANT.</span>
+                <span></span>
               </div>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 11, color: C.textMuted }}>Costo total del día</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: C.green }}>${costoTotal.toLocaleString()}</div>
+              {lineas.map((l, idx) => {
+                const carr = getCarrierForLine(l);
+                const costoLine = getCostoLine(l);
+                return (
+                  <div key={idx} style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 0.7fr 40px", gap: 10, marginBottom: 8, alignItems: "center" }}>
+                    <select value={l.tipo_unidad} onChange={e => updateLinea(idx, "tipo_unidad", e.target.value)} style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
+                      <option value="">Seleccionar tipo...</option>
+                      {tiposDisponibles.map(c => <option key={c.id} value={c.tipo_unidad}>{c.tipo_unidad} — ${parseFloat(c.costo_unidad).toLocaleString()}/día</option>)}
+                    </select>
+                    <select value={l.operacion} onChange={e => updateLinea(idx, "operacion", e.target.value)} style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
+                      <option value="Última milla">Última milla</option>
+                      <option value="Half mile">Half mile</option>
+                    </select>
+                    <input type="number" min="1" value={l.cantidad} onChange={e => updateLinea(idx, "cantidad", e.target.value)} style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }} />
+                    {lineas.length > 1 ? (
+                      <button onClick={() => removeLinea(idx)} style={{ padding: 4, border: "none", backgroundColor: C.redBg, borderRadius: 4, cursor: "pointer", color: C.red, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}><IC.X /></button>
+                    ) : <div />}
+                  </div>
+                );
+              })}
+              <button onClick={addLinea} style={{ padding: "6px 14px", borderRadius: 6, border: "1px dashed " + C.accent, backgroundColor: "transparent", color: C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}><IC.Plus /> Agregar otro tipo de unidad</button>
+            </div>
+          )}
+
+          {/* Cost preview */}
+          {costoTotalForm > 0 && (
+            <div style={{ marginTop: 16, padding: "14px 18px", borderRadius: 8, backgroundColor: "#F0FDF4", border: "1px solid " + C.green + "40" }}>
+              {lineas.filter(l => l.tipo_unidad).map((l, idx) => {
+                const carr = getCarrierForLine(l);
+                const costoUnit = carr ? parseFloat(carr.costo_unidad) : 0;
+                const cant = parseInt(l.cantidad) || 0;
+                return (
+                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.text, marginBottom: 4 }}>
+                    <span>{l.tipo_unidad} ({l.operacion}) — {cant} unid. × ${costoUnit.toLocaleString()}</span>
+                    <span style={{ fontWeight: 700 }}>${(costoUnit * cant).toLocaleString()}</span>
+                  </div>
+                );
+              })}
+              <div style={{ borderTop: "1px solid " + C.green + "30", marginTop: 8, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: C.textMuted }}>Costo total del día</span>
+                <span style={{ fontSize: 22, fontWeight: 800, color: C.green }}>${costoTotalForm.toLocaleString()}</span>
               </div>
             </div>
           )}
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
             <button onClick={() => setShowForm(false)} style={{ padding: "8px 20px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Cancelar</button>
-            <button onClick={saveRegistro} disabled={!selectedCarrier} style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: selectedCarrier ? C.green : C.border, color: "white", fontSize: 13, fontWeight: 700, cursor: selectedCarrier ? "pointer" : "default" }}>✓ Registrar</button>
+            <button onClick={saveRegistro} disabled={!allLinesValid} style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: allLinesValid ? C.green : C.border, color: "white", fontSize: 13, fontWeight: 700, cursor: allLinesValid ? "pointer" : "default" }}>✓ Registrar {lineas.filter(l => l.tipo_unidad).length > 1 ? "(" + lineas.filter(l => l.tipo_unidad).length + " líneas)" : ""}</button>
           </div>
           {saveMsg && <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: saveMsg.startsWith("✓") ? C.green : C.red }}>{saveMsg}</div>}
         </div>
