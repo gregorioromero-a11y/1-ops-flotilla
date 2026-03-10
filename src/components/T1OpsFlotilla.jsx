@@ -1100,6 +1100,8 @@ function ModuleCostos() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ fecha: new Date().toISOString().split("T")[0], proveedor: "", tipo_unidad: "", cantidad: "1", operacion: "Última milla" });
+  const [filtroDesde, setFiltroDesde] = useState(new Date().toISOString().split("T")[0]);
+  const [filtroHasta, setFiltroHasta] = useState(new Date().toISOString().split("T")[0]);
 
   useEffect(() => {
     loadData();
@@ -1160,11 +1162,17 @@ function ModuleCostos() {
     loadData();
   };
 
-  // Totals
-  const totalGasto = registros.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const totalUM = registros.filter(r => r.tipo === "Última milla").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const totalHM = registros.filter(r => r.tipo === "Half mile").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const totalUnidades = registros.reduce((s, r) => s + (parseInt(r.litros) || 0), 0);
+  // Filter by date range
+  const registrosFiltrados = registros.filter(r => {
+    const fecha = (r.fecha || "").substring(0, 10);
+    return fecha >= filtroDesde && fecha <= filtroHasta;
+  });
+
+  // Totals from filtered
+  const totalGasto = registrosFiltrados.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  const totalUM = registrosFiltrados.filter(r => r.tipo === "Última milla").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  const totalHM = registrosFiltrados.filter(r => r.tipo === "Half mile").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  const totalUnidades = registrosFiltrados.reduce((s, r) => s + (parseInt(r.litros) || 0), 0);
 
   return (
     <div>
@@ -1176,6 +1184,20 @@ function ModuleCostos() {
         <button onClick={() => setShowForm(!showForm)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
           {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Registrar día</>}
         </button>
+      </div>
+
+      {/* Date filter */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted }}>Periodo:</span>
+        <input type="date" value={filtroDesde} onChange={e => { setFiltroDesde(e.target.value); if (e.target.value > filtroHasta) setFiltroHasta(e.target.value); }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
+        <span style={{ fontSize: 12, color: C.textMuted }}>al</span>
+        <input type="date" value={filtroHasta} onChange={e => { if (e.target.value >= filtroDesde) setFiltroHasta(e.target.value); }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
+        <span style={{ fontSize: 11, color: C.textMuted, marginLeft: 4 }}>
+          {filtroDesde === filtroHasta
+            ? new Date(filtroDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
+            : new Date(filtroDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" }) + " — " + new Date(filtroHasta + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
+          }
+        </span>
       </div>
 
       {/* StatCards */}
@@ -1260,7 +1282,7 @@ function ModuleCostos() {
             </tr>
           </thead>
           <tbody>
-            {registros.map((r, i) => (
+            {registrosFiltrados.map((r, i) => (
               <tr key={i} style={{ borderBottom: "1px solid " + C.border }}
                 onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
                 onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
@@ -1279,7 +1301,7 @@ function ModuleCostos() {
             ))}
           </tbody>
         </table>
-        {registros.length === 0 && (
+        {registrosFiltrados.length === 0 && (
           <div style={{ padding: 48, textAlign: "center" }}>
             <div style={{ fontSize: 36, marginBottom: 10 }}>��</div>
             <div style={{ fontSize: 14, fontWeight: 600, color: C.textMuted }}>No hay registros de costos</div>
