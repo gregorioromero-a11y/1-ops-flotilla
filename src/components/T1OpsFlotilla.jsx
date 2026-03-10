@@ -1106,8 +1106,11 @@ function ModuleCostos() {
   const costoUnitario = selectedCarrier ? parseFloat(selectedCarrier.costo_unidad) : 0;
   const costoTotal = costoUnitario * (parseInt(form.cantidad) || 0);
 
+  const [saveMsg, setSaveMsg] = useState("");
+
   const saveRegistro = async () => {
     if (!form.proveedor || !form.tipo_unidad || !form.cantidad) return;
+    setSaveMsg("");
     const row = {
       fecha: form.fecha,
       unidad: form.proveedor + " - " + form.tipo_unidad,
@@ -1116,13 +1119,18 @@ function ModuleCostos() {
       litros: parseInt(form.cantidad),
       km: costoUnitario,
       factura: null,
-      notas: form.cantidad + " unidades × $" + costoUnitario.toLocaleString() + "/unidad"
+      notas: form.cantidad + " unidades x $" + costoUnitario.toLocaleString() + "/unidad"
     };
     const { error } = await supabase.from("costos").insert([row]);
-    if (error) { console.error(error); return; }
+    if (error) {
+      console.error("Supabase error:", error);
+      setSaveMsg("Error: " + error.message);
+      return;
+    }
+    setSaveMsg("✓ Registro guardado");
     setForm({ fecha: form.fecha, proveedor: "", tipo_unidad: "", cantidad: "1" });
-    setShowForm(false);
     loadData();
+    setTimeout(() => setSaveMsg(""), 3000);
   };
 
   const deleteRegistro = async (id) => {
@@ -1208,6 +1216,7 @@ function ModuleCostos() {
             <button onClick={() => setShowForm(false)} style={{ padding: "8px 20px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Cancelar</button>
             <button onClick={saveRegistro} disabled={!selectedCarrier} style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: selectedCarrier ? C.green : C.border, color: "white", fontSize: 13, fontWeight: 700, cursor: selectedCarrier ? "pointer" : "default" }}>✓ Registrar</button>
           </div>
+          {saveMsg && <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: saveMsg.startsWith("✓") ? C.green : C.red }}>{saveMsg}</div>}
         </div>
       )}
 
