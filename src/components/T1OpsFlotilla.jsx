@@ -1180,7 +1180,7 @@ function ModuleCarriers() {
   const [carriers, setCarriers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", ubicacion: "TIENDA" });
+  const [form, setForm] = useState({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", operacion: "Última milla" });
   const [editId, setEditId] = useState(null);
 
   useEffect(() => { loadCarriers(); }, []);
@@ -1194,20 +1194,20 @@ function ModuleCarriers() {
 
   const saveCarrier = async () => {
     if (!form.proveedor || !form.costo_unidad) return;
-    const row = { proveedor: form.proveedor.toUpperCase(), tipo_unidad: form.tipo_unidad, costo_unidad: parseFloat(form.costo_unidad), ubicacion: form.ubicacion };
+    const row = { proveedor: form.proveedor.toUpperCase(), tipo_unidad: form.tipo_unidad, costo_unidad: parseFloat(form.costo_unidad), operacion: form.operacion };
     if (editId) {
       await supabase.from("carriers").update(row).eq("id", editId);
     } else {
       await supabase.from("carriers").insert([row]);
     }
-    setForm({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", ubicacion: "TIENDA" });
+    setForm({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", operacion: "Última milla" });
     setShowForm(false);
     setEditId(null);
     loadCarriers();
   };
 
   const editCarrier = (c) => {
-    setForm({ proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, costo_unidad: c.costo_unidad.toString(), ubicacion: c.ubicacion });
+    setForm({ proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, costo_unidad: c.costo_unidad.toString(), operacion: c.operacion || "Última milla" });
     setEditId(c.id);
     setShowForm(true);
   };
@@ -1238,7 +1238,7 @@ function ModuleCarriers() {
           <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Carriers / Proveedores</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Catálogo de proveedores, tipos de unidad y costos asociados</p>
         </div>
-        <button onClick={() => { setShowForm(!showForm); setEditId(null); setForm({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", ubicacion: "TIENDA" }); }} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => { setShowForm(!showForm); setEditId(null); setForm({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", operacion: "Última milla" }); }} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
           {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Agregar carrier</>}
         </button>
       </div>
@@ -1276,11 +1276,10 @@ function ModuleCarriers() {
               <input type="number" value={form.costo_unidad} onChange={e => setForm({...form, costo_unidad: e.target.value})} placeholder="995" style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
             </div>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Ubicación</label>
-              <select value={form.ubicacion} onChange={e => setForm({...form, ubicacion: e.target.value})} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
-                <option value="TIENDA">TIENDA</option>
-                <option value="CEDIS">CEDIS</option>
-                <option value="ALMACEN">ALMACEN</option>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Operación</label>
+              <select value={form.operacion} onChange={e => setForm({...form, operacion: e.target.value})} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                <option value="Última milla">Última milla</option>
+                <option value="Half mile">Half mile</option>
               </select>
             </div>
           </div>
@@ -1309,7 +1308,7 @@ function ModuleCarriers() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "2px solid " + C.border }}>
-                  {["Tipo unidad", "Costo/Unidad/Día", "Ubicación", "Acciones"].map(h => (
+                  {["Tipo unidad", "Operación", "Costo/Unidad/Día", "Acciones"].map(h => (
                     <th key={h} style={{ padding: "8px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                   ))}
                 </tr>
@@ -1321,8 +1320,10 @@ function ModuleCarriers() {
                       <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: c.tipo_unidad === "SEDAN" ? C.blueBg : c.tipo_unidad === "VAN" ? C.purpleBg : C.yellowBg, color: c.tipo_unidad === "SEDAN" ? C.blue : c.tipo_unidad === "VAN" ? C.purple : C.yellow }}>{c.tipo_unidad}</span>
                     </td>
 
+                    <td style={{ padding: "12px 16px" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: c.operacion === "Última milla" ? C.greenBg : C.accentLight, color: c.operacion === "Última milla" ? C.green : C.accent }}>{c.operacion || "Última milla"}</span>
+                    </td>
                     <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: C.text }}>${parseFloat(c.costo_unidad).toLocaleString()}</td>
-                    <td style={{ padding: "12px 16px", fontSize: 12, color: C.textMuted }}>{c.ubicacion}</td>
                     <td style={{ padding: "12px 16px", display: "flex", gap: 6 }}>
                       <button onClick={() => editCarrier(c)} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid " + C.border, backgroundColor: C.white, cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 4 }}><IC.Edit /> Editar</button>
                       <button onClick={() => deleteCarrier(c.id)} style={{ padding: "4px 10px", borderRadius: 4, border: "none", backgroundColor: C.redBg, cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.red, display: "flex", alignItems: "center", gap: 4 }}><IC.Trash /> Eliminar</button>
