@@ -1179,9 +1179,13 @@ function ModuleCostos() {
 function ModuleCarriers() {
   const [carriers, setCarriers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", operacion: "Última milla" });
+  const [showNewCarrier, setShowNewCarrier] = useState(false);
+  const [newCarrierName, setNewCarrierName] = useState("");
+  const [addingUnitTo, setAddingUnitTo] = useState(null);
+  const [unitForm, setUnitForm] = useState({ tipo_unidad: "Sedan", operacion: "Última milla", costo_unidad: "" });
   const [editId, setEditId] = useState(null);
+
+  const TIPOS_UNIDAD = ["Moto", "Sedan", "SmallVan", "Van", "LargeVan", "5 Ton", "Rabon", "Torton", "Tracto"];
 
   useEffect(() => { loadCarriers(); }, []);
 
@@ -1192,33 +1196,46 @@ function ModuleCarriers() {
     setLoading(false);
   };
 
-  const saveCarrier = async () => {
-    if (!form.proveedor || !form.costo_unidad) return;
-    const row = { proveedor: form.proveedor.toUpperCase(), tipo_unidad: form.tipo_unidad, costo_unidad: parseFloat(form.costo_unidad), operacion: form.operacion };
+  const createCarrier = async () => {
+    if (!newCarrierName.trim()) return;
+    await supabase.from("carriers").insert([{ proveedor: newCarrierName.trim().toUpperCase(), tipo_unidad: "—", operacion: "—", costo_unidad: 0 }]);
+    setNewCarrierName("");
+    setShowNewCarrier(false);
+    loadCarriers();
+  };
+
+  const addUnit = async (proveedor) => {
+    if (!unitForm.costo_unidad) return;
     if (editId) {
-      await supabase.from("carriers").update(row).eq("id", editId);
+      await supabase.from("carriers").update({ tipo_unidad: unitForm.tipo_unidad, operacion: unitForm.operacion, costo_unidad: parseFloat(unitForm.costo_unidad) }).eq("id", editId);
     } else {
-      await supabase.from("carriers").insert([row]);
+      await supabase.from("carriers").insert([{ proveedor, tipo_unidad: unitForm.tipo_unidad, operacion: unitForm.operacion, costo_unidad: parseFloat(unitForm.costo_unidad) }]);
     }
-    setForm({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", operacion: "Última milla" });
-    setShowForm(false);
+    setUnitForm({ tipo_unidad: "Sedan", operacion: "Última milla", costo_unidad: "" });
+    setAddingUnitTo(null);
     setEditId(null);
     loadCarriers();
   };
 
-  const editCarrier = (c) => {
-    setForm({ proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, costo_unidad: c.costo_unidad.toString(), operacion: c.operacion || "Última milla" });
+  const editUnit = (c) => {
+    setUnitForm({ tipo_unidad: c.tipo_unidad, operacion: c.operacion || "Última milla", costo_unidad: c.costo_unidad.toString() });
     setEditId(c.id);
-    setShowForm(true);
+    setAddingUnitTo(c.proveedor);
   };
 
-  const deleteCarrier = async (id) => {
-    if (!confirm("¿Eliminar este carrier?")) return;
+  const deleteUnit = async (id) => {
+    if (!confirm("¿Eliminar este tipo de unidad?")) return;
     await supabase.from("carriers").delete().eq("id", id);
     loadCarriers();
   };
 
-  // Group carriers by proveedor
+  const deleteCarrier = async (proveedor) => {
+    if (!confirm("¿Eliminar " + proveedor + " y todos sus tipos de unidad?")) return;
+    await supabase.from("carriers").delete().eq("proveedor", proveedor);
+    loadCarriers();
+  };
+
+  // Group by proveedor
   const grouped = {};
   carriers.forEach(c => {
     if (!grouped[c.proveedor]) grouped[c.proveedor] = [];
@@ -1226,10 +1243,11 @@ function ModuleCarriers() {
   });
   const proveedores = Object.keys(grouped);
 
+  const realUnits = carriers.filter(c => c.tipo_unidad !== "—");
   const totalProveedores = proveedores.length;
-  const totalUnidades = carriers.length;
-  const avgCosto = carriers.length > 0 ? (carriers.reduce((s, c) => s + parseFloat(c.costo_unidad), 0) / carriers.length).toFixed(0) : 0;
-  const costoTotal = carriers.reduce((s, c) => s + parseFloat(c.costo_unidad), 0);
+  const totalUnidades = realUnits.length;
+  const avgCosto = realUnits.length > 0 ? (realUnits.reduce((s, c) => s + parseFloat(c.costo_unidad), 0) / realUnits.length).toFixed(0) : 0;
+  const costoTotal = realUnits.reduce((s, c) => s + parseFloat(c.costo_unidad), 0);
 
   return (
     <div>
@@ -1238,8 +1256,8 @@ function ModuleCarriers() {
           <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Carriers / Proveedores</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Catálogo de proveedores, tipos de unidad y costos asociados</p>
         </div>
-        <button onClick={() => { setShowForm(!showForm); setEditId(null); setForm({ proveedor: "", tipo_unidad: "SEDAN", costo_unidad: "", operacion: "Última milla" }); }} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-          {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Agregar carrier</>}
+        <button onClick={() => setShowNewCarrier(!showNewCarrier)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showNewCarrier ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          {showNewCarrier ? <><IC.X /> Cancelar</> : <><IC.Plus /> Nuevo carrier</>}
         </button>
       </div>
 
@@ -1251,87 +1269,104 @@ function ModuleCarriers() {
         <StatCard label="Costo total/día" value={"$" + costoTotal.toLocaleString()} subvalue={totalUnidades + " unidades"} icon={<IC.Dollar />} color={C.purple} />
       </div>
 
-      {/* Form */}
-      {showForm && (
-        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>{editId ? "✏️ Editar carrier" : "🚛 Nuevo carrier / tipo de unidad"}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
-              <input value={form.proveedor} onChange={e => setForm({...form, proveedor: e.target.value})} placeholder="Ej: CARDO, KEKO" style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
-            </div>
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Tipo de unidad</label>
-              <select value={form.tipo_unidad} onChange={e => setForm({...form, tipo_unidad: e.target.value})} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
-                <option value="SEDAN">SEDAN</option>
-                <option value="VAN">VAN</option>
-                <option value="SPRINTER">SPRINTER</option>
-                <option value="3.5 TON">3.5 TON</option>
-                <option value="MOTO">MOTO</option>
-              </select>
-            </div>
-
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Costo / Unidad / Día ($)</label>
-              <input type="number" value={form.costo_unidad} onChange={e => setForm({...form, costo_unidad: e.target.value})} placeholder="995" style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
-            </div>
-            <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Operación</label>
-              <select value={form.operacion} onChange={e => setForm({...form, operacion: e.target.value})} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
-                <option value="Última milla">Última milla</option>
-                <option value="Half mile">Half mile</option>
-              </select>
-            </div>
+      {/* New carrier form */}
+      {showNewCarrier && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "2px solid " + C.accent, marginBottom: 20, display: "flex", alignItems: "flex-end", gap: 14 }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Nombre del proveedor / carrier</label>
+            <input value={newCarrierName} onChange={e => setNewCarrierName(e.target.value)} onKeyDown={e => e.key === "Enter" && createCarrier()} placeholder="Ej: CARDO, KEKO, FAST INTEGRAL" style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 14, boxSizing: "border-box" }} />
           </div>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
-            <button onClick={() => { setShowForm(false); setEditId(null); }} style={{ padding: "8px 20px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Cancelar</button>
-            <button onClick={saveCarrier} style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{editId ? "✓ Guardar cambios" : "✓ Agregar carrier"}</button>
-          </div>
+          <button onClick={createCarrier} style={{ padding: "10px 24px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>✓ Crear carrier</button>
         </div>
       )}
 
-      {/* Carrier cards grouped by proveedor */}
+      {/* Carrier cards */}
       {proveedores.map((prov, pi) => {
-        const units = grouped[prov];
+        const units = grouped[prov].filter(c => c.tipo_unidad !== "—");
+        const placeholder = grouped[prov].find(c => c.tipo_unidad === "—");
         const totalCosto = units.reduce((s, c) => s + parseFloat(c.costo_unidad), 0);
+        const isAdding = addingUnitTo === prov;
+
         return (
           <div key={pi} style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, marginBottom: 14, overflow: "hidden" }}>
+            {/* Carrier header */}
             <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "#FAFBFF" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: C.accent + "18", display: "flex", alignItems: "center", justifyContent: "center", color: C.accent }}><IC.Truck /></div>
                 <div>
                   <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{prov}</div>
-                  <div style={{ fontSize: 11, color: C.textMuted }}>{units.length} tipo{units.length > 1 ? "s" : ""} de unidad · Costo total: ${totalCosto.toLocaleString()}/día</div>
+                  <div style={{ fontSize: 11, color: C.textMuted }}>{units.length} tipo{units.length !== 1 ? "s" : ""} de unidad{units.length > 0 ? " · Costo total: $" + totalCosto.toLocaleString() + "/día" : ""}</div>
                 </div>
               </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => { setAddingUnitTo(isAdding ? null : prov); setEditId(null); setUnitForm({ tipo_unidad: "Sedan", operacion: "Última milla", costo_unidad: "" }); }} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid " + (isAdding ? C.textMuted : C.accent), backgroundColor: isAdding ? C.bg : C.accentLight, color: isAdding ? C.textMuted : C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                  {isAdding ? <><IC.X /> Cancelar</> : <><IC.Plus /> Agregar unidad</>}
+                </button>
+                <button onClick={() => deleteCarrier(prov)} style={{ padding: "6px 10px", borderRadius: 6, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}><IC.Trash /></button>
+              </div>
             </div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "2px solid " + C.border }}>
-                  {["Tipo unidad", "Operación", "Costo/Unidad/Día", "Acciones"].map(h => (
-                    <th key={h} style={{ padding: "8px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {units.map((c, ci) => (
-                  <tr key={ci} style={{ borderBottom: "1px solid " + C.border }}>
-                    <td style={{ padding: "12px 16px" }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: c.tipo_unidad === "SEDAN" ? C.blueBg : c.tipo_unidad === "VAN" ? C.purpleBg : C.yellowBg, color: c.tipo_unidad === "SEDAN" ? C.blue : c.tipo_unidad === "VAN" ? C.purple : C.yellow }}>{c.tipo_unidad}</span>
-                    </td>
 
-                    <td style={{ padding: "12px 16px" }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: c.operacion === "Última milla" ? C.greenBg : C.accentLight, color: c.operacion === "Última milla" ? C.green : C.accent }}>{c.operacion || "Última milla"}</span>
-                    </td>
-                    <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: C.text }}>${parseFloat(c.costo_unidad).toLocaleString()}</td>
-                    <td style={{ padding: "12px 16px", display: "flex", gap: 6 }}>
-                      <button onClick={() => editCarrier(c)} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid " + C.border, backgroundColor: C.white, cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 4 }}><IC.Edit /> Editar</button>
-                      <button onClick={() => deleteCarrier(c.id)} style={{ padding: "4px 10px", borderRadius: 4, border: "none", backgroundColor: C.redBg, cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.red, display: "flex", alignItems: "center", gap: 4 }}><IC.Trash /> Eliminar</button>
-                    </td>
+            {/* Add unit form */}
+            {isAdding && (
+              <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.border, backgroundColor: "#FFFBFA", display: "flex", alignItems: "flex-end", gap: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.text, marginBottom: 3 }}>Tipo de unidad</label>
+                  <select value={unitForm.tipo_unidad} onChange={e => setUnitForm({...unitForm, tipo_unidad: e.target.value})} style={{ width: "100%", padding: "7px 8px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
+                    {TIPOS_UNIDAD.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.text, marginBottom: 3 }}>Operación</label>
+                  <select value={unitForm.operacion} onChange={e => setUnitForm({...unitForm, operacion: e.target.value})} style={{ width: "100%", padding: "7px 8px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
+                    <option value="Última milla">Última milla</option>
+                    <option value="Half mile">Half mile</option>
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.text, marginBottom: 3 }}>Costo / Unidad / Día ($)</label>
+                  <input type="number" value={unitForm.costo_unidad} onChange={e => setUnitForm({...unitForm, costo_unidad: e.target.value})} placeholder="995" style={{ width: "100%", padding: "7px 8px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }} />
+                </div>
+                <button onClick={() => addUnit(prov)} style={{ padding: "7px 18px", borderRadius: 6, border: "none", backgroundColor: C.green, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>{editId ? "✓ Guardar" : "✓ Agregar"}</button>
+              </div>
+            )}
+
+            {/* Units table */}
+            {units.length > 0 ? (
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ borderBottom: "2px solid " + C.border }}>
+                    {["Tipo unidad", "Operación", "Costo/Unidad/Día", "Acciones"].map(h => (
+                      <th key={h} style={{ padding: "8px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {units.map((c, ci) => {
+                    const tipoColors = { Moto: { bg: "#FEF3C7", c: "#D97706" }, Sedan: { bg: C.blueBg, c: C.blue }, SmallVan: { bg: C.purpleBg, c: C.purple }, Van: { bg: C.purpleBg, c: C.purple }, LargeVan: { bg: "#EDE9FE", c: "#6D28D9" }, "5 Ton": { bg: C.yellowBg, c: C.yellow }, Rabon: { bg: "#FFEDD5", c: "#EA580C" }, Torton: { bg: C.redBg, c: C.red }, Tracto: { bg: "#F1F5F9", c: "#475569" } };
+                    const tc = tipoColors[c.tipo_unidad] || { bg: "#F3F4F6", c: C.textMuted };
+                    return (
+                      <tr key={ci} style={{ borderBottom: "1px solid " + C.border }}>
+                        <td style={{ padding: "12px 16px" }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: tc.bg, color: tc.c }}>{c.tipo_unidad}</span>
+                        </td>
+                        <td style={{ padding: "12px 16px" }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: c.operacion === "Última milla" ? C.greenBg : C.accentLight, color: c.operacion === "Última milla" ? C.green : C.accent }}>{c.operacion || "Última milla"}</span>
+                        </td>
+                        <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: C.text }}>${parseFloat(c.costo_unidad).toLocaleString()}</td>
+                        <td style={{ padding: "12px 16px", display: "flex", gap: 6 }}>
+                          <button onClick={() => editUnit(c)} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid " + C.border, backgroundColor: C.white, cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 4 }}><IC.Edit /> Editar</button>
+                          <button onClick={() => deleteUnit(c.id)} style={{ padding: "4px 10px", borderRadius: 4, border: "none", backgroundColor: C.redBg, cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.red, display: "flex", alignItems: "center", gap: 4 }}><IC.Trash /></button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <div style={{ padding: "20px 20px", textAlign: "center", color: C.textMuted, fontSize: 12 }}>
+                Sin tipos de unidad — usa "Agregar unidad" para registrar
+              </div>
+            )}
           </div>
         );
       })}
@@ -1340,7 +1375,7 @@ function ModuleCarriers() {
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 48, border: "1px solid " + C.border, textAlign: "center" }}>
           <div style={{ fontSize: 48, marginBottom: 16 }}>🚛</div>
           <div style={{ fontSize: 16, fontWeight: 600 }}>No hay carriers registrados</div>
-          <div style={{ fontSize: 13, color: C.textMuted, marginTop: 8 }}>Usa "Agregar carrier" para registrar proveedores y sus tipos de unidad con costos</div>
+          <div style={{ fontSize: 13, color: C.textMuted, marginTop: 8 }}>Usa "Nuevo carrier" para crear un proveedor y luego agregar tipos de unidad</div>
         </div>
       )}
     </div>
