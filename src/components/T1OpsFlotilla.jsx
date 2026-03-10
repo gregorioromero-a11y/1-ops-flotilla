@@ -1186,7 +1186,7 @@ function ModuleCostos() {
             {/* Tipo unidad */}
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Tipo de unidad</label>
-              <select value={form.tipo_unidad} onChange={e => { const sel = carriers.find(c => c.proveedor === form.proveedor && c.tipo_unidad === e.target.value); setForm({...form, tipo_unidad: e.target.value, operacion: sel ? sel.operacion || "Última milla" : form.operacion}); }} disabled={!form.proveedor} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", opacity: form.proveedor ? 1 : 0.5 }}>
+              <select value={form.tipo_unidad} onChange={e => setForm({...form, tipo_unidad: e.target.value})} disabled={!form.proveedor} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", opacity: form.proveedor ? 1 : 0.5 }}>
                 <option value="">{form.proveedor ? "Seleccionar tipo..." : "Primero selecciona proveedor"}</option>
                 {tiposDisponibles.map(c => <option key={c.id} value={c.tipo_unidad}>{c.tipo_unidad} — {c.operacion} — ${parseFloat(c.costo_unidad).toLocaleString()}/día</option>)}
               </select>
