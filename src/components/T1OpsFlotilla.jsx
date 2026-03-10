@@ -73,7 +73,7 @@ const navSections = [
     { id: "envios", label: "Registrar Envíos", icon: IC.Package, badge: "Nuevo" },
     { id: "unidades", label: "Unidades", icon: IC.Truck },
     { id: "operadores", label: "Operadores", icon: IC.Users },
-    { id: "costos", label: "Costos / Gastos", icon: IC.Dollar },
+    { id: "costos", label: "Registro Diario", icon: IC.Clock },
     { id: "carriers", label: "Carriers / Proveedores", icon: IC.Truck, badge: "Nuevo" },
   ]},
   { label: "OPERACIONES", items: [
@@ -1141,8 +1141,8 @@ function ModuleCostos() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Costos y Gastos</h1>
-          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Registro diario de unidades por proveedor · Costo automático desde catálogo</p>
+          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Registro Diario</h1>
+          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Registro de unidades operativas por día · Costos desde catálogo de carriers</p>
         </div>
         <button onClick={() => setShowForm(!showForm)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
           {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Registrar día</>}
