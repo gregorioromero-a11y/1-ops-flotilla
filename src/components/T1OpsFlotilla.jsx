@@ -553,19 +553,26 @@ function ModuleEnvios() {
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
-  const [selectedDate, setSelectedDate] = useState("2026-02-26");
+  const [fechaDesde, setFechaDesde] = useState("2026-02-26");
+  const [fechaHasta, setFechaHasta] = useState("2026-02-26");
   const [openMenu, setOpenMenu] = useState(null);
   const [selectedRows, setSelectedRows] = useState(new Set());
   const [loading, setLoading] = useState(true);
 
   // Load rutas from Supabase on mount and when date changes
-  useEffect(() => { loadRutas(); }, [selectedDate]);
+  useEffect(() => { loadRutas(); }, [fechaDesde, fechaHasta]);
 
   const loadRutas = async () => {
     setLoading(true);
-    const { data } = await supabase.from("rutas").select("*").eq("fecha_registro", selectedDate).order("created_at", { ascending: false });
+    const { data } = await supabase.from("rutas").select("*").order("created_at", { ascending: false });
     if (data && data.length > 0) {
-      setRutas(data.map(r => ({
+      const filtered_by_date = data.filter(r => {
+        const salida = r.fecha_salida || r.fecha_registro || "";
+        const fecha = salida.substring(0, 10);
+        return fecha >= fechaDesde && fecha <= fechaHasta;
+      });
+      const source = filtered_by_date.length > 0 ? filtered_by_date : [];
+      setRutas(source.map(r => ({
         id: r.id, idRuta: r.id_ruta, carrier: r.carrier || "—", operador: r.operador || "Sin nombre",
         correo: r.correo_operador || "", placa: r.placa || "", almacen: r.almacen || "T1 ENVIOS",
         economico: r.economico || "", status: r.status || "En curso", total: r.total || 0,
@@ -731,7 +738,7 @@ function ModuleEnvios() {
           intercambios: r.intercambios, tipo_ruta: r.tipoRuta,
           km_estimados: r.kmEstimados, km_recorridos: r.kmRecorridos,
           tiempo_estimado: r.tiempoEstimado, tiempo_real: r.tiempoReal,
-          fecha_registro: selectedDate,
+          fecha_registro: fechaDesde,
         }));
         const { error } = await supabase.from("rutas").insert(dbRows);
         if (error) {
@@ -765,7 +772,11 @@ function ModuleEnvios() {
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Vista de rutas operativas · Carga masiva desde Excel</p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600 }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <input type="date" value={fechaDesde} onChange={e => { setFechaDesde(e.target.value); if (e.target.value > fechaHasta) setFechaHasta(e.target.value); }} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
+            <span style={{ fontSize: 12, color: C.textMuted }}>al</span>
+            <input type="date" value={fechaHasta} onChange={e => { if (e.target.value >= fechaDesde) setFechaHasta(e.target.value); }} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
+          </div>
           <button onClick={() => setShowUpload(!showUpload)} style={{
             padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showUpload ? C.textMuted : C.accent,
             color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
@@ -807,7 +818,10 @@ function ModuleEnvios() {
       {/* Date + Filter bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
-          {new Date(selectedDate + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })}
+          {fechaDesde === fechaHasta
+            ? new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
+            : new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" }) + " — " + new Date(fechaHasta + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
+          }
           <span style={{ marginLeft: 8, fontSize: 12, color: C.textMuted }}>({filtered.length} rutas)</span>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
