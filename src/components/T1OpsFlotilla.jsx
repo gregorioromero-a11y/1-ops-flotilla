@@ -1300,6 +1300,8 @@ function ModuleCarriers() {
   const [addingUnitTo, setAddingUnitTo] = useState(null);
   const [unitForm, setUnitForm] = useState({ tipo_unidad: "Sedan", operacion: "Última milla", costo_unidad: "" });
   const [editId, setEditId] = useState(null);
+  const [filterOp, setFilterOp] = useState("Todas");
+  const [filterProv, setFilterProv] = useState("Todos");
 
   const TIPOS_UNIDAD = ["Moto", "Sedan", "SmallVan", "Van", "LargeVan", "5 Ton", "Rabon", "Torton", "Tracto"];
 
@@ -1359,10 +1361,16 @@ function ModuleCarriers() {
   const proveedores = Object.keys(grouped);
 
   const realUnits = carriers.filter(c => c.tipo_unidad !== "---");
-  const totalProveedores = proveedores.length;
-  const totalUnidades = realUnits.length;
-  const avgCosto = realUnits.length > 0 ? (realUnits.reduce((s, c) => s + parseFloat(c.costo_unidad), 0) / realUnits.length).toFixed(0) : 0;
-  const costoTotalDia = realUnits.reduce((s, c) => s + parseFloat(c.costo_unidad), 0);
+  const filteredUnits = realUnits.filter(c => {
+    if (filterOp !== "Todas" && c.operacion !== filterOp) return false;
+    if (filterProv !== "Todos" && c.proveedor !== filterProv) return false;
+    return true;
+  });
+  const filteredProvs = [...new Set(filteredUnits.map(c => c.proveedor))];
+  const totalProveedores = filteredProvs.length;
+  const totalUnidades = filteredUnits.length;
+  const avgCosto = filteredUnits.length > 0 ? (filteredUnits.reduce((s, c) => s + parseFloat(c.costo_unidad), 0) / filteredUnits.length).toFixed(0) : 0;
+  const costoTotalDia = filteredUnits.reduce((s, c) => s + parseFloat(c.costo_unidad), 0);
 
   return (
     <div>
@@ -1374,6 +1382,28 @@ function ModuleCarriers() {
         <button onClick={() => setShowNewCarrier(!showNewCarrier)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showNewCarrier ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
           {showNewCarrier ? <><IC.X /> Cancelar</> : <><IC.Plus /> Nuevo carrier</>}
         </button>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center" }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted }}>Filtrar:</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          {["Todas", "Última milla", "Half mile"].map(op => (
+            <button key={op} onClick={() => setFilterOp(op)} style={{
+              padding: "6px 14px", borderRadius: 6, border: "1px solid " + (filterOp === op ? C.accent : C.border),
+              backgroundColor: filterOp === op ? C.accentLight : C.white, color: filterOp === op ? C.accent : C.textMuted,
+              fontSize: 12, fontWeight: 600, cursor: "pointer",
+            }}>{op}</button>
+          ))}
+        </div>
+        <div style={{ width: 1, height: 20, backgroundColor: C.border }} />
+        <select value={filterProv} onChange={e => setFilterProv(e.target.value)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color: C.text, cursor: "pointer" }}>
+          <option value="Todos">Todos los proveedores</option>
+          {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        {(filterOp !== "Todas" || filterProv !== "Todos") && (
+          <button onClick={() => { setFilterOp("Todas"); setFilterProv("Todos"); }} style={{ padding: "6px 10px", borderRadius: 6, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Limpiar filtros</button>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
@@ -1393,8 +1423,8 @@ function ModuleCarriers() {
         </div>
       )}
 
-      {proveedores.map((prov, pi) => {
-        const units = grouped[prov].filter(c => c.tipo_unidad !== "---");
+      {proveedores.filter(prov => filterProv === "Todos" || prov === filterProv).map((prov, pi) => {
+        const units = grouped[prov].filter(c => c.tipo_unidad !== "---" && (filterOp === "Todas" || c.operacion === filterOp));
         const totalCosto = units.reduce((s, c) => s + parseFloat(c.costo_unidad), 0);
         const isAdding = addingUnitTo === prov;
         return (
