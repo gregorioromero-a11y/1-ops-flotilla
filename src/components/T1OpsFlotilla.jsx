@@ -1078,7 +1078,7 @@ function ModuleCostos() {
   const [carriers, setCarriers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ fecha: new Date().toISOString().split("T")[0], proveedor: "", tipo_unidad: "", cantidad: "1" });
+  const [form, setForm] = useState({ fecha: new Date().toISOString().split("T")[0], proveedor: "", tipo_unidad: "", cantidad: "1", operacion: "Última milla" });
 
   useEffect(() => {
     loadData();
@@ -1114,7 +1114,7 @@ function ModuleCostos() {
     const row = {
       fecha: form.fecha,
       unidad: form.proveedor + " - " + form.tipo_unidad,
-      tipo: selectedCarrier ? selectedCarrier.operacion || "Última milla" : "Última milla",
+      tipo: form.operacion,
       monto: costoTotal,
       litros: parseInt(form.cantidad),
       km: costoUnitario,
@@ -1128,7 +1128,7 @@ function ModuleCostos() {
       return;
     }
     setSaveMsg("✓ Registro guardado");
-    setForm({ fecha: form.fecha, proveedor: "", tipo_unidad: "", cantidad: "1" });
+    setForm({ fecha: form.fecha, proveedor: "", tipo_unidad: "", cantidad: "1", operacion: "Última milla" });
     loadData();
     setTimeout(() => setSaveMsg(""), 3000);
   };
@@ -1169,7 +1169,7 @@ function ModuleCostos() {
       {showForm && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
           <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>💰 Registro diario de unidades</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr 1.5fr 0.8fr", gap: 14, alignItems: "flex-end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 1.3fr 1fr 0.7fr", gap: 14, alignItems: "flex-end" }}>
             {/* Fecha */}
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Fecha</label>
@@ -1178,7 +1178,7 @@ function ModuleCostos() {
             {/* Proveedor */}
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
-              <select value={form.proveedor} onChange={e => setForm({...form, proveedor: e.target.value, tipo_unidad: ""})} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+              <select value={form.proveedor} onChange={e => setForm({...form, proveedor: e.target.value, tipo_unidad: "", operacion: "Última milla"})} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
                 <option value="">Seleccionar proveedor...</option>
                 {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
@@ -1186,9 +1186,17 @@ function ModuleCostos() {
             {/* Tipo unidad */}
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Tipo de unidad</label>
-              <select value={form.tipo_unidad} onChange={e => setForm({...form, tipo_unidad: e.target.value})} disabled={!form.proveedor} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", opacity: form.proveedor ? 1 : 0.5 }}>
+              <select value={form.tipo_unidad} onChange={e => { const sel = carriers.find(c => c.proveedor === form.proveedor && c.tipo_unidad === e.target.value); setForm({...form, tipo_unidad: e.target.value, operacion: sel ? sel.operacion || "Última milla" : form.operacion}); }} disabled={!form.proveedor} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", opacity: form.proveedor ? 1 : 0.5 }}>
                 <option value="">{form.proveedor ? "Seleccionar tipo..." : "Primero selecciona proveedor"}</option>
                 {tiposDisponibles.map(c => <option key={c.id} value={c.tipo_unidad}>{c.tipo_unidad} — {c.operacion} — ${parseFloat(c.costo_unidad).toLocaleString()}/día</option>)}
+              </select>
+            </div>
+            {/* Operacion */}
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Operación</label>
+              <select value={form.operacion} onChange={e => setForm({...form, operacion: e.target.value})} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                <option value="Última milla">Última milla</option>
+                <option value="Half mile">Half mile</option>
               </select>
             </div>
             {/* Cantidad */}
