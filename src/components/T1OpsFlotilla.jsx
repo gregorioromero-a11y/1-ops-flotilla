@@ -727,6 +727,13 @@ function ModuleEnvios() {
         setUploading(false);
         setShowUpload(false);
 
+        // Auto-adjust date range to cover all uploaded dates
+        const fechas = parsed.map(r => (r.salida || "").substring(0, 10)).filter(f => f.length === 10).sort();
+        if (fechas.length > 0) {
+          setFechaDesde(fechas[0]);
+          setFechaHasta(fechas[fechas.length - 1]);
+        }
+
         // Save to Supabase
         const dbRows = parsed.map(r => ({
           id_ruta: r.idRuta, carrier: r.carrier, operador: r.operador,
@@ -738,7 +745,7 @@ function ModuleEnvios() {
           intercambios: r.intercambios, tipo_ruta: r.tipoRuta,
           km_estimados: r.kmEstimados, km_recorridos: r.kmRecorridos,
           tiempo_estimado: r.tiempoEstimado, tiempo_real: r.tiempoReal,
-          fecha_registro: fechaDesde,
+          fecha_registro: (r.salida || "").substring(0, 10) || fechaDesde,
         }));
         const { error } = await supabase.from("rutas").insert(dbRows);
         if (error) {
