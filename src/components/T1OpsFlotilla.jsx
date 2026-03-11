@@ -1286,17 +1286,23 @@ function ModuleCostos() {
   // Get unique proveedores from registros
   const proveedoresRegistro = [...new Set(registros.map(r => (r.unidad || "").split(" - ")[0]).filter(p => p))];
 
-  // Summary: units per day per proveedor
+  // Summary: units per day per proveedor with tipo breakdown
   const resumenDiario = {};
   registrosFiltrados.forEach(r => {
     const fecha = (r.fecha || "").substring(0, 10);
     const prov = (r.unidad || "").split(" - ")[0];
+    const tipo = (r.unidad || "").split(" - ").slice(1).join(" - ") || "—";
+    const cant = parseInt(r.litros) || 0;
+    const monto = parseFloat(r.monto) || 0;
     const key = fecha + "|" + prov;
-    if (!resumenDiario[key]) resumenDiario[key] = { fecha, proveedor: prov, unidades: 0, costoUM: 0, costoHM: 0, costo: 0 };
-    resumenDiario[key].unidades += (parseInt(r.litros) || 0);
-    resumenDiario[key].costo += (parseFloat(r.monto) || 0);
-    if (r.tipo === "Última milla") resumenDiario[key].costoUM += (parseFloat(r.monto) || 0);
-    if (r.tipo === "Half mile") resumenDiario[key].costoHM += (parseFloat(r.monto) || 0);
+    if (!resumenDiario[key]) resumenDiario[key] = { fecha, proveedor: prov, unidades: 0, costoUM: 0, costoHM: 0, costo: 0, tipos: {} };
+    resumenDiario[key].unidades += cant;
+    resumenDiario[key].costo += monto;
+    if (r.tipo === "Última milla") resumenDiario[key].costoUM += monto;
+    if (r.tipo === "Half mile") resumenDiario[key].costoHM += monto;
+    if (!resumenDiario[key].tipos[tipo]) resumenDiario[key].tipos[tipo] = { cantidad: 0, costo: 0 };
+    resumenDiario[key].tipos[tipo].cantidad += cant;
+    resumenDiario[key].tipos[tipo].costo += monto;
   });
   const resumenList = Object.values(resumenDiario).sort((a, b) => a.fecha > b.fecha ? -1 : a.fecha < b.fecha ? 1 : a.proveedor.localeCompare(b.proveedor));
 
@@ -1436,7 +1442,7 @@ function ModuleCostos() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
-                {["Fecha", "Proveedor", "Unidades", "Costo ÚM", "Costo HM", "Costo Total"].map(h => (
+                {["Fecha", "Proveedor", "Tipos de unidad", "Unidades", "Costo ÚM", "Costo HM", "Costo Total"].map(h => (
                   <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                 ))}
               </tr>
@@ -1448,6 +1454,19 @@ function ModuleCostos() {
                   onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
                   <td style={{ padding: "10px 14px", fontSize: 12, color: C.textMuted }}>{r.fecha}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{r.proveedor}</td>
+                  <td style={{ padding: "10px 14px" }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {Object.entries(r.tipos).map(([tipo, info], ti) => {
+                        const tipoColors = { Moto: { bg: "#FEF3C7", c: "#D97706" }, Sedan: { bg: "#DBEAFE", c: "#2563EB" }, SmallVan: { bg: "#EDE9FE", c: "#7C3AED" }, Van: { bg: "#EDE9FE", c: "#7C3AED" }, LargeVan: { bg: "#EDE9FE", c: "#6D28D9" }, "5 Ton": { bg: "#FEF9C3", c: "#D97706" }, Rabon: { bg: "#FFEDD5", c: "#EA580C" }, Torton: { bg: "#FEE2E2", c: "#DC2626" }, Tracto: { bg: "#F1F5F9", c: "#475569" } };
+                        const tc = tipoColors[tipo] || { bg: "#F3F4F6", c: "#7C8495" };
+                        return (
+                          <span key={ti} style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: tc.bg, color: tc.c, whiteSpace: "nowrap" }}>
+                            {tipo} ×{info.cantidad}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </td>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{r.unidades}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, color: C.green, fontWeight: 600 }}>{r.costoUM > 0 ? "$" + r.costoUM.toLocaleString() : "—"}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, color: C.blue, fontWeight: 600 }}>{r.costoHM > 0 ? "$" + r.costoHM.toLocaleString() : "—"}</td>
@@ -1456,6 +1475,7 @@ function ModuleCostos() {
               ))}
               <tr style={{ backgroundColor: "#FAFBFF", borderTop: "2px solid " + C.border }}>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }} colSpan={2}>TOTAL</td>
+                <td style={{ padding: "10px 14px" }}></td>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>{resumenList.reduce((s, r) => s + r.unidades, 0)}</td>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.green }}>${resumenList.reduce((s, r) => s + r.costoUM, 0).toLocaleString()}</td>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.blue }}>${resumenList.reduce((s, r) => s + r.costoHM, 0).toLocaleString()}</td>
