@@ -1186,6 +1186,7 @@ function ModuleCostos() {
   const [lineas, setLineas] = useState([{ tipo_unidad: "", operacion: "Última milla", cantidad: "1" }]);
   const [filtroDesde, setFiltroDesde] = useState(new Date().toISOString().split("T")[0]);
   const [filtroHasta, setFiltroHasta] = useState(new Date().toISOString().split("T")[0]);
+  const [filtroProv, setFiltroProv] = useState("Todos");
 
   useEffect(() => {
     loadData();
@@ -1271,11 +1272,33 @@ function ModuleCostos() {
     loadData();
   };
 
-  // Filter by date range
+  // Filter by date range and proveedor
   const registrosFiltrados = registros.filter(r => {
     const fecha = (r.fecha || "").substring(0, 10);
-    return fecha >= filtroDesde && fecha <= filtroHasta;
+    if (fecha < filtroDesde || fecha > filtroHasta) return false;
+    if (filtroProv !== "Todos") {
+      const prov = (r.unidad || "").split(" - ")[0];
+      if (prov !== filtroProv) return false;
+    }
+    return true;
   });
+
+  // Get unique proveedores from registros
+  const proveedoresRegistro = [...new Set(registros.map(r => (r.unidad || "").split(" - ")[0]).filter(p => p))];
+
+  // Summary: units per day per proveedor
+  const resumenDiario = {};
+  registrosFiltrados.forEach(r => {
+    const fecha = (r.fecha || "").substring(0, 10);
+    const prov = (r.unidad || "").split(" - ")[0];
+    const key = fecha + "|" + prov;
+    if (!resumenDiario[key]) resumenDiario[key] = { fecha, proveedor: prov, unidades: 0, costoUM: 0, costoHM: 0, costo: 0 };
+    resumenDiario[key].unidades += (parseInt(r.litros) || 0);
+    resumenDiario[key].costo += (parseFloat(r.monto) || 0);
+    if (r.tipo === "Última milla") resumenDiario[key].costoUM += (parseFloat(r.monto) || 0);
+    if (r.tipo === "Half mile") resumenDiario[key].costoHM += (parseFloat(r.monto) || 0);
+  });
+  const resumenList = Object.values(resumenDiario).sort((a, b) => a.fecha > b.fecha ? -1 : a.fecha < b.fecha ? 1 : a.proveedor.localeCompare(b.proveedor));
 
   // Totals from filtered
   const totalGasto = registrosFiltrados.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
@@ -1307,6 +1330,14 @@ function ModuleCostos() {
             : new Date(filtroDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" }) + " — " + new Date(filtroHasta + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
           }
         </span>
+        <div style={{ width: 1, height: 20, backgroundColor: C.border, margin: "0 4px" }} />
+        <select value={filtroProv} onChange={e => setFiltroProv(e.target.value)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color: C.text, cursor: "pointer" }}>
+          <option value="Todos">Todos los proveedores</option>
+          {proveedoresRegistro.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        {filtroProv !== "Todos" && (
+          <button onClick={() => setFiltroProv("Todos")} style={{ padding: "5px 10px", borderRadius: 6, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Limpiar</button>
+        )}
       </div>
 
       {/* StatCards */}
@@ -1398,8 +1429,46 @@ function ModuleCostos() {
         </div>
       )}
 
-      {/* Table */}
+      {/* Summary table - units per day per proveedor */}
+      {resumenList.length > 0 && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>Resumen por día por proveedor</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid " + C.border }}>
+                {["Fecha", "Proveedor", "Unidades", "Costo ÚM", "Costo HM", "Costo Total"].map(h => (
+                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {resumenList.map((r, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid " + C.border }}
+                  onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
+                  onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
+                  <td style={{ padding: "10px 14px", fontSize: 12, color: C.textMuted }}>{r.fecha}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{r.proveedor}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{r.unidades}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, color: C.green, fontWeight: 600 }}>{r.costoUM > 0 ? "$" + r.costoUM.toLocaleString() : "—"}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, color: C.blue, fontWeight: 600 }}>{r.costoHM > 0 ? "$" + r.costoHM.toLocaleString() : "—"}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${r.costo.toLocaleString()}</td>
+                </tr>
+              ))}
+              <tr style={{ backgroundColor: "#FAFBFF", borderTop: "2px solid " + C.border }}>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }} colSpan={2}>TOTAL</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>{resumenList.reduce((s, r) => s + r.unidades, 0)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.green }}>${resumenList.reduce((s, r) => s + r.costoUM, 0).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.blue }}>${resumenList.reduce((s, r) => s + r.costoHM, 0).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${resumenList.reduce((s, r) => s + r.costo, 0).toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Detail table */}
       <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>Detalle de registros</div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: "2px solid " + C.border }}>
