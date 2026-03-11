@@ -558,9 +558,15 @@ function ModuleEnvios() {
   const [openMenu, setOpenMenu] = useState(null);
   const [selectedRows, setSelectedRows] = useState(new Set());
   const [loading, setLoading] = useState(true);
+  const [costosData, setCostosData] = useState([]);
 
-  // Load rutas from Supabase on mount and when date changes
-  useEffect(() => { loadRutas(); }, [fechaDesde, fechaHasta]);
+  // Load rutas and costos when date changes
+  useEffect(() => { loadRutas(); loadCostos(); }, [fechaDesde, fechaHasta]);
+
+  const loadCostos = async () => {
+    const { data } = await supabase.from("costos").select("*").gte("fecha", fechaDesde).lte("fecha", fechaHasta);
+    setCostosData(data || []);
+  };
 
   const loadRutas = async () => {
     setLoading(true);
@@ -670,6 +676,32 @@ function ModuleEnvios() {
   const enCurso = rutas.filter(r => r.status === "En curso").length;
   const completadas = rutas.filter(r => r.status === "Completada").length;
   const enRiesgo = rutas.filter(r => getRisk(r)).length;
+
+  // Cost calculations from costos table
+  const costoTotalPeriodo = costosData.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  const costoUM = costosData.filter(r => r.tipo === "Última milla").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  const costoHM = costosData.filter(r => r.tipo === "Half mile").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  const costoPorPaquete = totalEntregados > 0 ? (costoTotalPeriodo / totalEntregados).toFixed(2) : 0;
+
+  // Cost by carrier
+  const costosPorCarrier = {};
+  costosData.forEach(c => {
+    const prov = (c.unidad || "").split(" - ")[0] || "Sin carrier";
+    if (!costosPorCarrier[prov]) costosPorCarrier[prov] = { carrier: prov, costo: 0, unidades: 0, costoUM: 0, costoHM: 0 };
+    costosPorCarrier[prov].costo += (parseFloat(c.monto) || 0);
+    costosPorCarrier[prov].unidades += (parseInt(c.litros) || 0);
+    if (c.tipo === "Última milla") costosPorCarrier[prov].costoUM += (parseFloat(c.monto) || 0);
+    if (c.tipo === "Half mile") costosPorCarrier[prov].costoHM += (parseFloat(c.monto) || 0);
+  });
+  // Add paquetes from rutas
+  rutas.forEach(r => {
+    const prov = r.carrier || "Sin carrier";
+    if (costosPorCarrier[prov]) {
+      costosPorCarrier[prov].entregados = (costosPorCarrier[prov].entregados || 0) + r.entregados;
+      costosPorCarrier[prov].total = (costosPorCarrier[prov].total || 0) + r.total;
+    }
+  });
+  const carrierCostList = Object.values(costosPorCarrier).sort((a, b) => b.costo - a.costo);
 
   // ===== FIXED: Use XLSX directly from npm import instead of dynamic CDN import =====
   const handleFileUpload = (e) => {
@@ -800,6 +832,57 @@ function ModuleEnvios() {
         <StatCard label="Completadas" value={completadas.toString()} icon={<IC.Check />} color={C.green} />
         <StatCard label="% Entrega general" value={pctGeneral + "%"} subvalue={`${totalEntregados} / ${totalPaquetes} paquetes`} icon={<IC.BarChart />} color={C.accent} />
       </div>
+
+      {/* Cost StatCards */}
+      {costoTotalPeriodo > 0 && (
+        <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+          <StatCard label="Costo total periodo" value={"$" + (costoTotalPeriodo >= 1000000 ? (costoTotalPeriodo/1000000).toFixed(2) + "M" : costoTotalPeriodo >= 1000 ? (costoTotalPeriodo/1000).toFixed(0) + "K" : costoTotalPeriodo.toLocaleString())} icon={<IC.Dollar />} color={C.purple} />
+          <StatCard label="Costo / paquete" value={"$" + costoPorPaquete} subvalue={totalEntregados + " paquetes entregados"} icon={<IC.Package />} color={C.accent} />
+          <StatCard label="Última milla" value={"$" + (costoUM >= 1000 ? (costoUM/1000).toFixed(0) + "K" : costoUM.toLocaleString())} subvalue={costoTotalPeriodo > 0 ? ((costoUM/costoTotalPeriodo*100).toFixed(0) + "% del total") : ""} icon={<IC.Truck />} color={C.green} />
+          <StatCard label="Half mile" value={"$" + (costoHM >= 1000 ? (costoHM/1000).toFixed(0) + "K" : costoHM.toLocaleString())} subvalue={costoTotalPeriodo > 0 ? ((costoHM/costoTotalPeriodo*100).toFixed(0) + "% del total") : ""} icon={<IC.Map />} color={C.blue} />
+        </div>
+      )}
+
+      {/* Cost by carrier table */}
+      {carrierCostList.length > 0 && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>Costo por Carrier — Periodo seleccionado</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid " + C.border }}>
+                {["Carrier", "Unidades", "Costo ÚM", "Costo HM", "Costo Total", "Pqtes Entregados", "Costo/Paquete"].map(h => (
+                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {carrierCostList.map((cc, i) => {
+                const cppq = (cc.entregados || 0) > 0 ? (cc.costo / cc.entregados).toFixed(2) : "—";
+                return (
+                  <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
+                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{cc.carrier}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{cc.unidades}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, color: C.green, fontWeight: 600 }}>${cc.costoUM.toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, color: C.blue, fontWeight: 600 }}>${cc.costoHM.toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${cc.costo.toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{cc.entregados || 0}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.accent }}>{typeof cppq === "string" ? cppq : "$" + cppq}</td>
+                  </tr>
+                );
+              })}
+              <tr style={{ backgroundColor: "#FAFBFF", borderTop: "2px solid " + C.border }}>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{carrierCostList.reduce((s, c) => s + c.unidades, 0)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.green }}>${costoUM.toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.blue }}>${costoHM.toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${costoTotalPeriodo.toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{totalEntregados}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.accent }}>${costoPorPaquete}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Upload area */}
       {showUpload && (
