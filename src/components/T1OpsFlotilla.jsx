@@ -1989,6 +1989,7 @@ function ModuleRuteo() {
   const [selectedIndices, setSelectedIndices] = useState(new Set());
   const [mapMode, setMapMode] = useState("click");
   const [bulkCluster, setBulkCluster] = useState(0);
+  const [guiaKey, setGuiaKey] = useState("");
   const mapDivRef = useRef(null);
   const canvasRef = useRef(null);
   const leafletMapRef = useRef(null);
@@ -2131,18 +2132,18 @@ function ModuleRuteo() {
     L.marker([DEPOSITO_LAT, DEPOSITO_LNG], { icon: depotIcon }).addTo(map).bindPopup("<b>Depósito / Almacén T1</b>");
     leafletMapRef.current = map;
     setSelectedIndices(new Set());
-    drawMarkers(map, puntos, asignaciones, numClusters, new Set());
+    drawMarkers(map, puntos, asignaciones, numClusters, new Set(), guiaKey);
     map.fitBounds(puntos.map(p => [p.lat, p.lng]), { padding: [40, 40] });
     setupLasso(map);
   }, [leafletLoaded, puntos]);
 
-  // Redraw markers when assignments or selection changes
+  // Redraw markers when assignments, selection, or guía key changes
   useEffect(() => {
     if (!leafletMapRef.current || puntos.length === 0) return;
-    drawMarkers(leafletMapRef.current, puntos, asignaciones, numClusters, selectedIndices);
-  }, [asignaciones, selectedIndices]);
+    drawMarkers(leafletMapRef.current, puntos, asignaciones, numClusters, selectedIndices, guiaKey);
+  }, [asignaciones, selectedIndices, guiaKey]);
 
-  const drawMarkers = (map, pts, assigns, nk, selSet) => {
+  const drawMarkers = (map, pts, assigns, nk, selSet, gKey) => {
     const L = window.L;
     markersRef.current.forEach(m => map.removeLayer(m));
     markersRef.current = [];
@@ -2150,13 +2151,22 @@ function ModuleRuteo() {
       const cl = assigns[i] ?? 0;
       const color = RCOLORS[cl % RCOLORS.length];
       const isSel = selSet && selSet.has(i);
-      const size = isSel ? 26 : 18;
-      const anchor = isSel ? 13 : 9;
-      const icon = L.divIcon({
-        html: `<div style="background:${color};color:white;font-size:${isSel ? 11 : 9}px;font-weight:700;width:${size}px;height:${size}px;border-radius:50%;border:${isSel ? "3px solid #FACC15" : "2px solid white"};box-shadow:${isSel ? "0 0 0 3px #FACC1580,0 2px 8px rgba(0,0,0,0.5)" : "0 1px 5px rgba(0,0,0,0.4)"};display:flex;align-items:center;justify-content:center;cursor:pointer;">${cl + 1}</div>`,
-        className: "", iconSize: [size, size], iconAnchor: [anchor, anchor]
-      });
+      const w = isSel ? 28 : 22;
+      const h = isSel ? 38 : 30;
+      const pinHtml = `<div style="cursor:pointer;filter:${isSel ? "drop-shadow(0 0 6px #FACC15)" : "drop-shadow(0 2px 4px rgba(0,0,0,0.4))"}">
+        <svg width="${w}" height="${h}" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 1C6.477 1 2 5.477 2 11c0 8.5 10 19 10 19s10-10.5 10-19C24 5.477 19.523 1 12 1z" fill="${color}" stroke="${isSel ? "#FACC15" : "white"}" stroke-width="${isSel ? 2.5 : 1.5}"/>
+          <text x="12" y="12" text-anchor="middle" dominant-baseline="middle" fill="white" font-size="${isSel ? 9 : 8}" font-weight="700" font-family="sans-serif">${cl + 1}</text>
+        </svg>
+      </div>`;
+      const icon = L.divIcon({ html: pinHtml, className: "", iconSize: [w, h], iconAnchor: [w / 2, h] });
       const marker = L.marker([p.lat, p.lng], { icon }).addTo(map);
+      const guiaVal = gKey && p[gKey] ? String(p[gKey]) : "";
+      if (guiaVal) {
+        marker.bindTooltip(`<b style="font-family:monospace;font-size:13px;">${guiaVal}</b>`, {
+          permanent: false, direction: "top", offset: [0, -h + 4]
+        });
+      }
       marker.on("click", () => {
         if (mapModeRef.current !== "click") return;
         setSelectedIndices(prev => {
@@ -2221,6 +2231,8 @@ function ModuleRuteo() {
       const sample = rows[0] || {};
       const latK = Object.keys(sample).find(k => /latit/i.test(k)) || "Latitud";
       const lngK = Object.keys(sample).find(k => /longit|^lng$/i.test(k)) || "Longitud";
+      const guiaK = Object.keys(sample).find(k => /guia|guía|tracking|n[uú]m.*guia|no\.?\s*gu[ií]a|guide|folio|orden|pedido/i.test(k)) || "";
+      setGuiaKey(guiaK);
       const pts = rows.map((r, i) => ({ ...r, lat: parseFloat(r[latK]) || 0, lng: parseFloat(r[lngK]) || 0, _i: i })).filter(p => p.lat !== 0 && p.lng !== 0);
       if (!pts.length) { setMsg("Sin coordenadas válidas. Verifica que el archivo tenga columnas 'Latitud' y 'Longitud'."); setLoading(false); return; }
       const k = Math.min(numClusters, pts.length);
@@ -2374,7 +2386,7 @@ function ModuleRuteo() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead style={{ position: "sticky", top: 0, backgroundColor: C.bg, zIndex: 1 }}>
                   <tr>
-                    {["#", "Latitud", "Longitud", "Cluster / Ruta", ""].map(h => (
+                    {["#", ...(guiaKey ? ["Guía"] : []), "Latitud", "Longitud", "Cluster / Ruta", ""].map(h => (
                       <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                     ))}
                   </tr>
@@ -2394,6 +2406,11 @@ function ModuleRuteo() {
                             {i + 1}
                           </span>
                         </td>
+                        {guiaKey && (
+                          <td style={{ padding: "7px 14px", fontSize: 12, fontFamily: "monospace", fontWeight: 600, color: C.text, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {p[guiaKey] || "—"}
+                          </td>
+                        )}
                         <td style={{ padding: "7px 14px", fontSize: 12 }}>{p.lat.toFixed(6)}</td>
                         <td style={{ padding: "7px 14px", fontSize: 12 }}>{p.lng.toFixed(6)}</td>
                         <td style={{ padding: "7px 14px" }}>
