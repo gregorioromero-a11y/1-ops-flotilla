@@ -1122,8 +1122,13 @@ function ModuleOperadores() {
   const [proveedores, setProveedores] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [showBulk, setShowBulk] = useState(false);
   const [form, setForm] = useState({ nombre: "", proveedor: "", tipo_licencia: "A" });
   const [saveMsg, setSaveMsg] = useState("");
+  const [bulkProveedor, setBulkProveedor] = useState("");
+  const [bulkPreview, setBulkPreview] = useState([]);
+  const [bulkMsg, setBulkMsg] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const LICENCIAS = ["A", "B", "C", "D", "E"];
 
@@ -1166,6 +1171,70 @@ function ModuleOperadores() {
     loadData();
   };
 
+  const parseBulkFile = async (file) => {
+    setBulkPreview([]);
+    setBulkMsg("");
+    try {
+      const XLSX = (await import("xlsx")).default;
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      // Each operator = 5 rows: Name, Email, Type, Location, Status
+      const names = [];
+      for (let i = 0; i < rows.length; i += 5) {
+        const name = String(rows[i]?.[0] || "").trim();
+        if (name) names.push(name);
+      }
+      if (names.length === 0) { setBulkMsg("No se encontraron nombres en el archivo."); return; }
+      setBulkPreview(names);
+    } catch (e) {
+      setBulkMsg("Error al leer el archivo: " + e.message);
+    }
+  };
+
+  const parseBulkCSV = async (file) => {
+    setBulkPreview([]);
+    setBulkMsg("");
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).map(l => l.trim());
+      const names = [];
+      for (let i = 0; i < lines.length; i += 5) {
+        const name = lines[i]?.split(",")[0]?.trim().replace(/^"|"$/g, "") || "";
+        if (name) names.push(name);
+      }
+      if (names.length === 0) { setBulkMsg("No se encontraron nombres en el archivo."); return; }
+      setBulkPreview(names);
+    } catch (e) {
+      setBulkMsg("Error al leer el archivo: " + e.message);
+    }
+  };
+
+  const handleBulkFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.name.endsWith(".csv")) {
+      await parseBulkCSV(file);
+    } else {
+      await parseBulkFile(file);
+    }
+  };
+
+  const importarOperadores = async () => {
+    if (!bulkProveedor || bulkPreview.length === 0) return;
+    setImporting(true);
+    setBulkMsg("");
+    const rows = bulkPreview.map(nombre => ({ nombre, proveedor: bulkProveedor, tipo_licencia: "A", activo: true }));
+    const { error } = await supabase.from("operadores").insert(rows);
+    setImporting(false);
+    if (error) { setBulkMsg("Error: " + error.message); return; }
+    setBulkMsg(`✓ ${rows.length} operadores importados correctamente.`);
+    setBulkPreview([]);
+    setBulkProveedor("");
+    loadData();
+  };
+
   const activos = operadores.filter(o => o.activo).length;
 
   return (
@@ -1175,9 +1244,16 @@ function ModuleOperadores() {
           <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Operadores</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Base de datos de operadores por proveedor — usada en el check-in</p>
         </div>
-        <button onClick={() => setShowForm(!showForm)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-          {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Nuevo operador</>}
-        </button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => { setShowBulk(!showBulk); setShowForm(false); setBulkPreview([]); setBulkMsg(""); }}
+            style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showBulk ? C.textMuted : C.purple, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            {showBulk ? <><IC.X /> Cancelar</> : <><IC.Plus /> Carga masiva</>}
+          </button>
+          <button onClick={() => { setShowForm(!showForm); setShowBulk(false); }}
+            style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Nuevo operador</>}
+          </button>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
@@ -1186,6 +1262,74 @@ function ModuleOperadores() {
         <StatCard label="Inactivos" value={(operadores.length - activos).toString()} icon={<IC.X />} color={C.red} />
         <StatCard label="Proveedores" value={[...new Set(operadores.map(o => o.proveedor).filter(Boolean))].length.toString()} icon={<IC.Truck />} color={C.purple} />
       </div>
+
+      {showBulk && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.purple, marginBottom: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4, color: C.purple }}>Carga masiva de operadores</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 18 }}>Sube un archivo Excel o CSV. Formato: 5 filas por operador en columna A (Nombre, Correo, Tipo, Ubicación, Estatus), comenzando en fila 1.</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Etiqueta / Proveedor</label>
+              <select value={bulkProveedor} onChange={e => setBulkProveedor(e.target.value)}
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                <option value="">Seleccionar proveedor...</option>
+                {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>Todos los operadores del archivo se asignarán a este proveedor.</div>
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo (.xlsx, .xls, .csv)</label>
+              <input type="file" accept=".xlsx,.xls,.csv" onChange={handleBulkFile}
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: "#FAFBFF" }} />
+            </div>
+          </div>
+
+          {bulkPreview.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Vista previa — {bulkPreview.length} operadores detectados:</div>
+              <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid " + C.border, borderRadius: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid " + C.border, backgroundColor: "#FAFBFF" }}>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>#</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Nombre</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Proveedor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkPreview.map((nombre, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
+                        <td style={{ padding: "6px 12px", fontSize: 12, color: C.textMuted }}>{i + 1}</td>
+                        <td style={{ padding: "6px 12px", fontSize: 13, fontWeight: 600, color: C.text }}>{nombre}</td>
+                        <td style={{ padding: "6px 12px" }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, backgroundColor: "#F3EEFF", color: C.purple }}>{bulkProveedor || "—"}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {bulkMsg && (
+            <div style={{ marginBottom: 12, fontSize: 13, fontWeight: 600, color: bulkMsg.startsWith("✓") ? C.green : C.red, padding: "10px 14px", borderRadius: 8, backgroundColor: bulkMsg.startsWith("✓") ? C.greenBg : C.redBg }}>
+              {bulkMsg}
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <button onClick={() => { setShowBulk(false); setBulkPreview([]); setBulkMsg(""); setBulkProveedor(""); }}
+              style={{ padding: "8px 20px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 13, cursor: "pointer" }}>
+              Cancelar
+            </button>
+            <button onClick={importarOperadores} disabled={!bulkProveedor || bulkPreview.length === 0 || importing}
+              style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: bulkProveedor && bulkPreview.length > 0 && !importing ? C.purple : C.border, color: "white", fontSize: 13, fontWeight: 700, cursor: bulkProveedor && bulkPreview.length > 0 && !importing ? "pointer" : "default" }}>
+              {importing ? "Importando..." : `Importar ${bulkPreview.length} operadores`}
+            </button>
+          </div>
+        </div>
+      )}
 
       {showForm && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
