@@ -1269,12 +1269,11 @@ function ModuleOperadores() {
   );
 }
 
-// --- COSTOS ---
+
+// --- REGISTRO DIARIO (unificado con Asistencia) ---
 function ModuleCostos() {
-  const [tab, setTab] = useState("registro"); // "registro" | "asistencia"
-  const [registros, setRegistros] = useState([]);
-  const [carriers, setCarriers] = useState([]);
   const [asistencia, setAsistencia] = useState([]);
+  const [carriers, setCarriers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ fecha: new Date().toISOString().split("T")[0], proveedor: "" });
@@ -1282,479 +1281,303 @@ function ModuleCostos() {
   const [filtroDesde, setFiltroDesde] = useState(new Date().toISOString().split("T")[0]);
   const [filtroHasta, setFiltroHasta] = useState(new Date().toISOString().split("T")[0]);
   const [filtroProv, setFiltroProv] = useState("Todos");
-  const [filtroAsiDesde, setFiltroAsiDesde] = useState(new Date().toISOString().split("T")[0]);
-  const [filtroAsiHasta, setFiltroAsiHasta] = useState(new Date().toISOString().split("T")[0]);
-  const [filtroAsiProv, setFiltroAsiProv] = useState("Todos");
-
+  const [saveMsg, setSaveMsg] = useState("");
   const checkinUrl = typeof window !== "undefined" ? window.location.origin + "/checkin" : "/checkin";
 
   useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
     setLoading(true);
-    const [{ data: costosData }, { data: carriersData }, { data: asiData }] = await Promise.all([
-      supabase.from("costos").select("*").order("fecha", { ascending: false }),
-      supabase.from("carriers").select("*").order("proveedor"),
+    const [{ data: asiData }, { data: carsData }] = await Promise.all([
       supabase.from("asistencia").select("*").order("timestamp", { ascending: false }),
+      supabase.from("carriers").select("*").order("proveedor"),
     ]);
-    setRegistros(costosData || []);
-    setCarriers((carriersData || []).filter(c => c.tipo_unidad !== "—"));
     setAsistencia(asiData || []);
+    setCarriers((carsData || []).filter(c => c.tipo_unidad && c.tipo_unidad !== "—"));
     setLoading(false);
   };
 
-  // Get unique proveedores from carriers
+  const getCosto = r => parseFloat(carriers.find(c => c.proveedor === r.proveedor && c.tipo_unidad === r.tipo_unidad)?.costo_unidad) || 0;
   const proveedores = [...new Set(carriers.map(c => c.proveedor))];
-
-  // Get tipos for selected proveedor
   const tiposDisponibles = carriers.filter(c => c.proveedor === form.proveedor);
-
-  // Calculate totals for all lines
-  const getCarrierForLine = (line) => carriers.find(c => c.proveedor === form.proveedor && c.tipo_unidad === line.tipo_unidad);
-  const getCostoLine = (line) => {
-    const carr = getCarrierForLine(line);
-    return (carr ? parseFloat(carr.costo_unidad) : 0) * (parseInt(line.cantidad) || 0);
-  };
+  const getCarrierForLine = l => carriers.find(c => c.proveedor === form.proveedor && c.tipo_unidad === l.tipo_unidad);
+  const getCostoLine = l => (parseFloat(getCarrierForLine(l)?.costo_unidad) || 0) * (parseInt(l.cantidad) || 0);
   const costoTotalForm = lineas.reduce((s, l) => s + getCostoLine(l), 0);
   const allLinesValid = form.proveedor && lineas.every(l => l.tipo_unidad && l.cantidad);
+  const proveedoresRegistro = [...new Set(asistencia.map(r => r.proveedor).filter(Boolean))].sort();
 
-  const [saveMsg, setSaveMsg] = useState("");
+  const filtrados = asistencia.filter(r => {
+    const f = (r.fecha || "").substring(0, 10);
+    if (f < filtroDesde || f > filtroHasta) return false;
+    if (filtroProv !== "Todos" && r.proveedor !== filtroProv) return false;
+    return true;
+  });
 
-  const addLinea = () => {
-    setLineas([...lineas, { tipo_unidad: "", operacion: "Última Milla", cantidad: "1" }]);
-  };
+  const totalCosto = filtrados.reduce((s, r) => s + getCosto(r), 0);
+  const totalUM = filtrados.filter(r => r.tipo_operacion === "Última Milla").reduce((s, r) => s + getCosto(r), 0);
+  const totalCD = filtrados.filter(r => r.tipo_operacion === "CrossDock").reduce((s, r) => s + getCosto(r), 0);
+  const totalLI = filtrados.filter(r => r.tipo_operacion === "Logística Inversa").reduce((s, r) => s + getCosto(r), 0);
 
-  const removeLinea = (idx) => {
-    if (lineas.length <= 1) return;
-    setLineas(lineas.filter((_, i) => i !== idx));
-  };
+  const resumen = {};
+  filtrados.forEach(r => {
+    const key = r.fecha + "|" + r.proveedor;
+    if (!resumen[key]) resumen[key] = { fecha: r.fecha, proveedor: r.proveedor, ops: 0, costo: 0, tipos: {} };
+    resumen[key].ops += 1;
+    resumen[key].costo += getCosto(r);
+    resumen[key].tipos[r.tipo_unidad] = (resumen[key].tipos[r.tipo_unidad] || 0) + 1;
+  });
+  const resumenList = Object.values(resumen).sort((a, b) => b.fecha.localeCompare(a.fecha) || a.proveedor.localeCompare(b.proveedor));
 
-  const updateLinea = (idx, field, value) => {
-    const updated = [...lineas];
-    updated[idx] = { ...updated[idx], [field]: value };
-    setLineas(updated);
-  };
+  const opColors = { "Última Milla": C.accent, CrossDock: C.blue, "Logística Inversa": C.purple };
+  const opBgs   = { "Última Milla": C.accentLight, CrossDock: C.blueBg, "Logística Inversa": C.purpleBg };
+  const tipoColors = { Moto:{bg:"#FEF3C7",c:"#D97706"}, Sedan:{bg:"#DBEAFE",c:"#2563EB"}, SmallVan:{bg:"#EDE9FE",c:"#7C3AED"}, Van:{bg:"#EDE9FE",c:"#7C3AED"}, "1.5":{bg:"#FEF9C3",c:"#CA8A04"}, "3.5":{bg:"#FFEDD5",c:"#C2410C"}, Rabon:{bg:"#FFEDD5",c:"#EA580C"}, Torton:{bg:"#FEE2E2",c:"#DC2626"}, Tracto:{bg:"#F1F5F9",c:"#475569"} };
+  const fmt = ts => { if (!ts) return "—"; const d = new Date(ts); return d.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"}); };
 
-  const saveRegistro = async () => {
+  const saveRegistroManual = async () => {
     if (!allLinesValid) return;
     setSaveMsg("");
-    const rows = lineas.map(l => {
-      const carr = getCarrierForLine(l);
-      const costoUnit = carr ? parseFloat(carr.costo_unidad) : 0;
-      const cant = parseInt(l.cantidad) || 0;
-      return {
-        fecha: form.fecha,
-        unidad: form.proveedor + " - " + l.tipo_unidad,
-        tipo: l.operacion,
-        monto: costoUnit * cant,
-        litros: cant,
-        km: costoUnit,
-        factura: null,
-        notas: cant + " unidades x $" + costoUnit.toLocaleString() + "/unidad"
-      };
-    });
-    const { error } = await supabase.from("costos").insert(rows);
-    if (error) {
-      console.error("Supabase error:", error);
-      setSaveMsg("Error: " + error.message);
-      return;
-    }
-    setSaveMsg("✓ " + rows.length + " registros guardados");
+    const rows = lineas.map(l => ({
+      fecha: form.fecha, proveedor: form.proveedor, nombre_operador: "Registro manual",
+      tipo_unidad: l.tipo_unidad, tipo_operacion: l.operacion,
+      latitud: null, longitud: null, timestamp: new Date().toISOString(),
+    }));
+    const { error } = await supabase.from("asistencia").insert(rows);
+    if (error) { setSaveMsg("Error: " + error.message); return; }
+    setSaveMsg("✓ Registrado");
     setForm({ fecha: form.fecha, proveedor: "" });
     setLineas([{ tipo_unidad: "", operacion: "Última Milla", cantidad: "1" }]);
+    setShowForm(false);
     loadData();
     setTimeout(() => setSaveMsg(""), 3000);
   };
 
-  const deleteRegistro = async (id) => {
+  const deleteRegistro = async id => {
     if (!confirm("¿Eliminar este registro?")) return;
-    await supabase.from("costos").delete().eq("id", id);
+    await supabase.from("asistencia").delete().eq("id", id);
     loadData();
   };
 
-  // Filter by date range and proveedor
-  const registrosFiltrados = registros.filter(r => {
-    const fecha = (r.fecha || "").substring(0, 10);
-    if (fecha < filtroDesde || fecha > filtroHasta) return false;
-    if (filtroProv !== "Todos") {
-      const prov = (r.unidad || "").split(" - ")[0];
-      if (prov !== filtroProv) return false;
-    }
-    return true;
-  });
-
-  // Get unique proveedores from registros
-  const proveedoresRegistro = [...new Set(registros.map(r => (r.unidad || "").split(" - ")[0]).filter(p => p))];
-
-  // Summary: units per day per proveedor with tipo breakdown
-  const resumenDiario = {};
-  registrosFiltrados.forEach(r => {
-    const fecha = (r.fecha || "").substring(0, 10);
-    const prov = (r.unidad || "").split(" - ")[0];
-    const tipo = (r.unidad || "").split(" - ").slice(1).join(" - ") || "—";
-    const cant = parseInt(r.litros) || 0;
-    const monto = parseFloat(r.monto) || 0;
-    const key = fecha + "|" + prov;
-    if (!resumenDiario[key]) resumenDiario[key] = { fecha, proveedor: prov, unidades: 0, costoUM: 0, costoHM: 0, costo: 0, tipos: {} };
-    resumenDiario[key].unidades += cant;
-    resumenDiario[key].costo += monto;
-    if (r.tipo === "Última Milla" || r.tipo === "Última milla") resumenDiario[key].costoUM += monto;
-    if (r.tipo === "CrossDock") resumenDiario[key].costoHM += monto;
-    if (!resumenDiario[key].tipos[tipo]) resumenDiario[key].tipos[tipo] = { cantidad: 0, costo: 0 };
-    resumenDiario[key].tipos[tipo].cantidad += cant;
-    resumenDiario[key].tipos[tipo].costo += monto;
-  });
-  const resumenList = Object.values(resumenDiario).sort((a, b) => a.fecha > b.fecha ? -1 : a.fecha < b.fecha ? 1 : a.proveedor.localeCompare(b.proveedor));
-
-  // Totals from filtered
-  const totalGasto = registrosFiltrados.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const totalUM = registrosFiltrados.filter(r => r.tipo === "Última Milla" || r.tipo === "Última milla").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const totalCD = registrosFiltrados.filter(r => r.tipo === "CrossDock").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const totalUnidades = registrosFiltrados.reduce((s, r) => s + (parseInt(r.litros) || 0), 0);
+  const fmtMoney = n => "$" + (n >= 1000000 ? (n/1000000).toFixed(1)+"M" : n >= 1000 ? (n/1000).toFixed(0)+"K" : n.toLocaleString());
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+      {/* Header */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16, flexWrap:"wrap", gap:10 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Registro Diario</h1>
-          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Registro de unidades operativas por día · Asistencia de operadores</p>
+          <h1 style={{ fontSize:24, fontWeight:800, margin:0 }}>Registro Diario</h1>
+          <p style={{ color:C.textMuted, fontSize:13, marginTop:2 }}>Asistencia de operadores · Costos por operación</p>
         </div>
-        {tab === "registro" && (
-          <button onClick={() => setShowForm(!showForm)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-            {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Registrar día</>}
+        <div style={{ display:"flex", gap:8 }}>
+          <button onClick={() => setShowForm(!showForm)} style={{ padding:"9px 16px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:showForm?C.textMuted:C.white, color:showForm?"white":C.text, fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}>
+            {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Registro manual</>}
           </button>
-        )}
-        {tab === "asistencia" && (
-          <a href="/checkin" target="_blank" rel="noopener noreferrer"
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "10px 18px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", textDecoration: "none" }}>
-            <IC.MapPin /> Abrir Check-in <IC.ExternalLink />
+          <a href="/checkin" target="_blank" rel="noopener noreferrer" style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"9px 16px", borderRadius:8, border:"none", backgroundColor:C.accent, color:"white", fontSize:13, fontWeight:600, cursor:"pointer", textDecoration:"none" }}>
+            <IC.MapPin /> Check-in <IC.ExternalLink />
           </a>
-        )}
+        </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: "flex", gap: 2, marginBottom: 20, backgroundColor: C.bg, borderRadius: 8, padding: 4, border: "1px solid " + C.border, width: "fit-content" }}>
-        {[{ id: "registro", label: "📋 Registro Diario" }, { id: "asistencia", label: "📍 Asistencia" }].map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} style={{
-            padding: "7px 18px", borderRadius: 6, border: "none", fontSize: 13, fontWeight: tab === t.id ? 700 : 500,
-            backgroundColor: tab === t.id ? C.white : "transparent",
-            color: tab === t.id ? C.text : C.textMuted,
-            cursor: "pointer", boxShadow: tab === t.id ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
-            transition: "all 0.15s",
-          }}>{t.label}</button>
-        ))}
+      {/* Link bar */}
+      <div style={{ backgroundColor:C.blueBg, border:"1px solid "+C.blue+"33", borderRadius:10, padding:"10px 16px", marginBottom:20, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+        <span style={{ fontSize:12, color:C.textMuted, fontWeight:600 }}>Enlace check-in para operadores:</span>
+        <code style={{ fontSize:12, backgroundColor:C.white, padding:"3px 10px", borderRadius:6, border:"1px solid "+C.border, color:C.blue, userSelect:"all", flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{checkinUrl}</code>
+        <button onClick={() => navigator.clipboard?.writeText(checkinUrl)} style={{ padding:"4px 12px", borderRadius:6, border:"1px solid "+C.blue, backgroundColor:"transparent", color:C.blue, fontSize:12, fontWeight:600, cursor:"pointer", flexShrink:0 }}>Copiar</button>
       </div>
 
-      {tab === "registro" && (<>
-
-      {/* Date filter */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted }}>Periodo:</span>
-        <input type="date" value={filtroDesde} onChange={e => { setFiltroDesde(e.target.value); if (e.target.value > filtroHasta) setFiltroHasta(e.target.value); }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
-        <span style={{ fontSize: 12, color: C.textMuted }}>al</span>
-        <input type="date" value={filtroHasta} onChange={e => { if (e.target.value >= filtroDesde) setFiltroHasta(e.target.value); }} style={{ padding: "7px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
-        <span style={{ fontSize: 11, color: C.textMuted, marginLeft: 4 }}>
-          {filtroDesde === filtroHasta
-            ? new Date(filtroDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
-            : new Date(filtroDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" }) + " — " + new Date(filtroHasta + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
-          }
-        </span>
-        <div style={{ width: 1, height: 20, backgroundColor: C.border, margin: "0 4px" }} />
-        <select value={filtroProv} onChange={e => setFiltroProv(e.target.value)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color: C.text, cursor: "pointer" }}>
+      {/* Filtros */}
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:18, flexWrap:"wrap" }}>
+        <span style={{ fontSize:12, fontWeight:700, color:C.textMuted }}>Periodo:</span>
+        <input type="date" value={filtroDesde} onChange={e => { setFiltroDesde(e.target.value); if (e.target.value>filtroHasta) setFiltroHasta(e.target.value); }} style={{ padding:"7px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, fontWeight:600 }} />
+        <span style={{ fontSize:12, color:C.textMuted }}>al</span>
+        <input type="date" value={filtroHasta} onChange={e => { if (e.target.value>=filtroDesde) setFiltroHasta(e.target.value); }} style={{ padding:"7px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, fontWeight:600 }} />
+        <div style={{ width:1, height:20, backgroundColor:C.border }} />
+        <select value={filtroProv} onChange={e => setFiltroProv(e.target.value)} style={{ padding:"6px 12px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, fontWeight:600, color:C.text, cursor:"pointer" }}>
           <option value="Todos">Todos los proveedores</option>
           {proveedoresRegistro.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
-        {filtroProv !== "Todos" && (
-          <button onClick={() => setFiltroProv("Todos")} style={{ padding: "5px 10px", borderRadius: 6, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Limpiar</button>
-        )}
+        {filtroProv !== "Todos" && <button onClick={() => setFiltroProv("Todos")} style={{ padding:"5px 10px", borderRadius:6, border:"none", backgroundColor:C.redBg, color:C.red, fontSize:11, fontWeight:600, cursor:"pointer" }}>Limpiar</button>}
+        <button onClick={loadData} style={{ marginLeft:"auto", padding:"6px 12px", borderRadius:6, border:"1px solid "+C.border, backgroundColor:C.white, color:C.textMuted, fontSize:12, cursor:"pointer" }}>↻</button>
       </div>
 
-      {/* StatCards */}
-      <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
-        <StatCard label="Gasto total" value={"$" + (totalGasto >= 1000000 ? (totalGasto/1000000).toFixed(2) + "M" : totalGasto >= 1000 ? (totalGasto/1000).toFixed(0) + "K" : totalGasto.toLocaleString())} icon={<IC.Dollar />} color={C.purple} />
-        <StatCard label="Última Milla" value={"$" + (totalUM >= 1000 ? (totalUM/1000).toFixed(0) + "K" : totalUM.toLocaleString())} subvalue={((totalGasto > 0 ? (totalUM/totalGasto*100).toFixed(0) : 0)) + "% del total"} icon={<IC.Package />} color={C.green} />
-        <StatCard label="CrossDock" value={"$" + (totalCD >= 1000 ? (totalCD/1000).toFixed(0) + "K" : totalCD.toLocaleString())} subvalue={((totalGasto > 0 ? (totalCD/totalGasto*100).toFixed(0) : 0)) + "% del total"} icon={<IC.Map />} color={C.accent} />
-        <StatCard label="Unidades registradas" value={totalUnidades.toString()} subvalue={registros.length + " registros"} icon={<IC.Truck />} color={C.blue} />
+      {/* Stat cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(145px,1fr))", gap:14, marginBottom:20 }}>
+        {[
+          { label:"Operadores registrados", value:filtrados.length, color:C.blue },
+          { label:"Costo total", value:fmtMoney(totalCosto), color:C.purple },
+          { label:"Última Milla", value:fmtMoney(totalUM), color:C.accent },
+          { label:"CrossDock", value:fmtMoney(totalCD), color:C.blue },
+          { label:"Logística Inversa", value:fmtMoney(totalLI), color:C.purple },
+        ].map(s => (
+          <div key={s.label} style={{ backgroundColor:C.white, borderRadius:10, padding:"14px 16px", border:"1px solid "+C.border }}>
+            <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>{s.label}</div>
+            <div style={{ fontSize:22, fontWeight:800, color:s.color }}>{s.value}</div>
+          </div>
+        ))}
       </div>
 
-      {/* Form */}
+      {/* Formulario registro manual */}
       {showForm && (
-        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>💰 Registro diario de unidades</div>
-          {/* Fecha + Proveedor */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 14, marginBottom: 14 }}>
+        <div style={{ backgroundColor:C.white, borderRadius:12, padding:24, border:"2px solid "+C.border, marginBottom:20 }}>
+          <div style={{ fontSize:14, fontWeight:700, marginBottom:16, color:C.text }}>Registro manual de unidad</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 2fr", gap:14, marginBottom:14 }}>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Fecha</label>
-              <input type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
+              <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.text, marginBottom:4 }}>Fecha</label>
+              <input type="date" value={form.fecha} onChange={e => setForm({...form,fecha:e.target.value})} style={{ width:"100%", padding:"9px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:13, boxSizing:"border-box" }} />
             </div>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
-              <select value={form.proveedor} onChange={e => { setForm({...form, proveedor: e.target.value}); setLineas([{ tipo_unidad: "", operacion: "Última Milla", cantidad: "1" }]); }} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+              <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.text, marginBottom:4 }}>Proveedor</label>
+              <select value={form.proveedor} onChange={e => { setForm({...form,proveedor:e.target.value}); setLineas([{tipo_unidad:"",operacion:"Última Milla",cantidad:"1"}]); }} style={{ width:"100%", padding:"9px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:13, boxSizing:"border-box" }}>
                 <option value="">Seleccionar proveedor...</option>
                 {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
           </div>
-
-          {/* Lines */}
           {form.proveedor && (
             <div>
-              <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 0.7fr 40px", gap: 10, marginBottom: 6 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: C.textMuted }}>TIPO DE UNIDAD</span>
-                <span style={{ fontSize: 10, fontWeight: 700, color: C.textMuted }}>OPERACIÓN</span>
-                <span style={{ fontSize: 10, fontWeight: 700, color: C.textMuted }}>CANT.</span>
-                <span></span>
+              <div style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr 0.7fr 36px", gap:10, marginBottom:6 }}>
+                {["TIPO DE UNIDAD","OPERACIÓN","CANT.",""].map(h => <span key={h} style={{ fontSize:10, fontWeight:700, color:C.textMuted }}>{h}</span>)}
               </div>
-              {lineas.map((l, idx) => {
-                const carr = getCarrierForLine(l);
-                const costoLine = getCostoLine(l);
-                return (
-                  <div key={idx} style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 0.7fr 40px", gap: 10, marginBottom: 8, alignItems: "center" }}>
-                    <select value={l.tipo_unidad} onChange={e => updateLinea(idx, "tipo_unidad", e.target.value)} style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
-                      <option value="">Seleccionar tipo...</option>
-                      {tiposDisponibles.map(c => <option key={c.id} value={c.tipo_unidad}>{c.tipo_unidad} — ${parseFloat(c.costo_unidad).toLocaleString()}/día</option>)}
-                    </select>
-                    <select value={l.operacion} onChange={e => updateLinea(idx, "operacion", e.target.value)} style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
-                      <option value="Última Milla">Última Milla</option>
-                      <option value="CrossDock">CrossDock</option>
-                      <option value="Logística Inversa">Logística Inversa</option>
-                    </select>
-                    <input type="number" min="1" value={l.cantidad} onChange={e => updateLinea(idx, "cantidad", e.target.value)} style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }} />
-                    {lineas.length > 1 ? (
-                      <button onClick={() => removeLinea(idx)} style={{ padding: 4, border: "none", backgroundColor: C.redBg, borderRadius: 4, cursor: "pointer", color: C.red, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}><IC.X /></button>
-                    ) : <div />}
-                  </div>
-                );
-              })}
-              <button onClick={addLinea} style={{ padding: "6px 14px", borderRadius: 6, border: "1px dashed " + C.accent, backgroundColor: "transparent", color: C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}><IC.Plus /> Agregar otro tipo de unidad</button>
+              {lineas.map((l, idx) => (
+                <div key={idx} style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr 0.7fr 36px", gap:10, marginBottom:8, alignItems:"center" }}>
+                  <select value={l.tipo_unidad} onChange={e => { const u=[...lineas]; u[idx]={...u[idx],tipo_unidad:e.target.value}; setLineas(u); }} style={{ padding:"8px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, boxSizing:"border-box" }}>
+                    <option value="">Tipo...</option>
+                    {tiposDisponibles.map(c => <option key={c.id} value={c.tipo_unidad}>{c.tipo_unidad} — ${parseFloat(c.costo_unidad).toLocaleString()}/día</option>)}
+                  </select>
+                  <select value={l.operacion} onChange={e => { const u=[...lineas]; u[idx]={...u[idx],operacion:e.target.value}; setLineas(u); }} style={{ padding:"8px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, boxSizing:"border-box" }}>
+                    <option value="Última Milla">Última Milla</option>
+                    <option value="CrossDock">CrossDock</option>
+                    <option value="Logística Inversa">Logística Inversa</option>
+                  </select>
+                  <input type="number" min="1" value={l.cantidad} onChange={e => { const u=[...lineas]; u[idx]={...u[idx],cantidad:e.target.value}; setLineas(u); }} style={{ padding:"8px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, boxSizing:"border-box" }} />
+                  {lineas.length > 1 ? <button onClick={() => setLineas(lineas.filter((_,i)=>i!==idx))} style={{ padding:4, border:"none", backgroundColor:C.redBg, borderRadius:4, cursor:"pointer", color:C.red, display:"flex", alignItems:"center", justifyContent:"center" }}><IC.X /></button> : <div />}
+                </div>
+              ))}
+              <button onClick={() => setLineas([...lineas,{tipo_unidad:"",operacion:"Última Milla",cantidad:"1"}])} style={{ padding:"5px 12px", borderRadius:6, border:"1px dashed "+C.accent, backgroundColor:"transparent", color:C.accent, fontSize:12, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", gap:4, marginTop:4 }}><IC.Plus /> Agregar tipo</button>
             </div>
           )}
-
-          {/* Cost preview */}
           {costoTotalForm > 0 && (
-            <div style={{ marginTop: 16, padding: "14px 18px", borderRadius: 8, backgroundColor: "#F0FDF4", border: "1px solid " + C.green + "40" }}>
-              {lineas.filter(l => l.tipo_unidad).map((l, idx) => {
-                const carr = getCarrierForLine(l);
-                const costoUnit = carr ? parseFloat(carr.costo_unidad) : 0;
-                const cant = parseInt(l.cantidad) || 0;
-                return (
-                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.text, marginBottom: 4 }}>
-                    <span>{l.tipo_unidad} ({l.operacion}) — {cant} unid. × ${costoUnit.toLocaleString()}</span>
-                    <span style={{ fontWeight: 700 }}>${(costoUnit * cant).toLocaleString()}</span>
-                  </div>
-                );
+            <div style={{ marginTop:14, padding:"12px 16px", borderRadius:8, backgroundColor:"#F0FDF4", border:"1px solid "+C.green+"40" }}>
+              {lineas.filter(l=>l.tipo_unidad).map((l,i)=>{
+                const cu=parseFloat(getCarrierForLine(l)?.costo_unidad)||0, cant=parseInt(l.cantidad)||0;
+                return <div key={i} style={{ display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3 }}><span>{l.tipo_unidad} ({l.operacion}) × {cant}</span><span style={{fontWeight:700}}>${(cu*cant).toLocaleString()}</span></div>;
               })}
-              <div style={{ borderTop: "1px solid " + C.green + "30", marginTop: 8, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 12, color: C.textMuted }}>Costo total del día</span>
-                <span style={{ fontSize: 22, fontWeight: 800, color: C.green }}>${costoTotalForm.toLocaleString()}</span>
+              <div style={{ borderTop:"1px solid "+C.green+"30",marginTop:8,paddingTop:8,display:"flex",justifyContent:"space-between" }}>
+                <span style={{fontSize:12,color:C.textMuted}}>Total</span>
+                <span style={{fontSize:20,fontWeight:800,color:C.green}}>${costoTotalForm.toLocaleString()}</span>
               </div>
             </div>
           )}
-
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
-            <button onClick={() => setShowForm(false)} style={{ padding: "8px 20px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 13, cursor: "pointer", fontWeight: 600 }}>Cancelar</button>
-            <button onClick={saveRegistro} disabled={!allLinesValid} style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: allLinesValid ? C.green : C.border, color: "white", fontSize: 13, fontWeight: 700, cursor: allLinesValid ? "pointer" : "default" }}>✓ Registrar {lineas.filter(l => l.tipo_unidad).length > 1 ? "(" + lineas.filter(l => l.tipo_unidad).length + " líneas)" : ""}</button>
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:10, marginTop:14 }}>
+            <button onClick={() => setShowForm(false)} style={{ padding:"8px 20px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, fontSize:13, cursor:"pointer", fontWeight:600 }}>Cancelar</button>
+            <button onClick={saveRegistroManual} disabled={!allLinesValid} style={{ padding:"8px 24px", borderRadius:8, border:"none", backgroundColor:allLinesValid?C.green:C.border, color:"white", fontSize:13, fontWeight:700, cursor:allLinesValid?"pointer":"default" }}>✓ Guardar</button>
           </div>
-          {saveMsg && <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: saveMsg.startsWith("✓") ? C.green : C.red }}>{saveMsg}</div>}
+          {saveMsg && <div style={{ marginTop:8, fontSize:13, fontWeight:600, color:saveMsg.startsWith("✓")?C.green:C.red }}>{saveMsg}</div>}
         </div>
       )}
 
-      {/* Summary table - units per day per proveedor */}
+      {/* Resumen por día × proveedor */}
       {resumenList.length > 0 && (
-        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>Resumen por día por proveedor</div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden", marginBottom:16 }}>
+          <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, fontSize:13, fontWeight:700, color:C.text }}>Resumen por día y proveedor</div>
+          <table style={{ width:"100%", borderCollapse:"collapse" }}>
             <thead>
-              <tr style={{ borderBottom: "2px solid " + C.border }}>
-                {["Fecha", "Proveedor", "Tipos de unidad", "Unidades", "Última Milla", "CrossDock", "Costo Total"].map(h => (
-                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+              <tr style={{ backgroundColor:C.bg }}>
+                {["Fecha","Proveedor","Tipos de unidad","Operadores","Costo"].map(h => (
+                  <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {resumenList.map((r, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid " + C.border }}
-                  onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
-                  onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
-                  <td style={{ padding: "10px 14px", fontSize: 12, color: C.textMuted }}>{r.fecha}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{r.proveedor}</td>
-                  <td style={{ padding: "10px 14px" }}>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                      {Object.entries(r.tipos).map(([tipo, info], ti) => {
-                        const tipoColors = { Moto: { bg: "#FEF3C7", c: "#D97706" }, Sedan: { bg: "#DBEAFE", c: "#2563EB" }, SmallVan: { bg: "#EDE9FE", c: "#7C3AED" }, Van: { bg: "#EDE9FE", c: "#7C3AED" }, "1.5": { bg: "#FEF9C3", c: "#CA8A04" }, "3.5": { bg: "#FFEDD5", c: "#C2410C" }, Rabon: { bg: "#FFEDD5", c: "#EA580C" }, Torton: { bg: "#FEE2E2", c: "#DC2626" }, Tracto: { bg: "#F1F5F9", c: "#475569" } };
-                        const tc = tipoColors[tipo] || { bg: "#F3F4F6", c: "#7C8495" };
-                        return (
-                          <span key={ti} style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: tc.bg, color: tc.c, whiteSpace: "nowrap" }}>
-                            {tipo} ×{info.cantidad}
-                          </span>
-                        );
+                <tr key={i} style={{ borderTop:"1px solid "+C.border }}
+                  onMouseEnter={ev=>ev.currentTarget.style.backgroundColor="#FAFBFF"}
+                  onMouseLeave={ev=>ev.currentTarget.style.backgroundColor="transparent"}>
+                  <td style={{ padding:"10px 14px", fontSize:12, color:C.textMuted, whiteSpace:"nowrap" }}>{r.fecha}</td>
+                  <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{r.proveedor}</td>
+                  <td style={{ padding:"10px 14px" }}>
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
+                      {Object.entries(r.tipos).map(([tipo, cnt]) => {
+                        const tc = tipoColors[tipo] || {bg:"#F3F4F6",c:"#7C8495"};
+                        return <span key={tipo} style={{ fontSize:10, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c, whiteSpace:"nowrap" }}>{tipo} ×{cnt}</span>;
                       })}
                     </div>
                   </td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{r.unidades}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, color: C.green, fontWeight: 600 }}>{r.costoUM > 0 ? "$" + r.costoUM.toLocaleString() : "—"}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, color: C.blue, fontWeight: 600 }}>{r.costoHM > 0 ? "$" + r.costoHM.toLocaleString() : "—"}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${r.costo.toLocaleString()}</td>
+                  <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700 }}>{r.ops}</td>
+                  <td style={{ padding:"10px 14px", fontSize:14, fontWeight:700, color:C.green }}>${r.costo.toLocaleString()}</td>
                 </tr>
               ))}
-              <tr style={{ backgroundColor: "#FAFBFF", borderTop: "2px solid " + C.border }}>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }} colSpan={2}>TOTAL</td>
-                <td style={{ padding: "10px 14px" }}></td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>{resumenList.reduce((s, r) => s + r.unidades, 0)}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.green }}>${resumenList.reduce((s, r) => s + r.costoUM, 0).toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.blue }}>${resumenList.reduce((s, r) => s + r.costoHM, 0).toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${resumenList.reduce((s, r) => s + r.costo, 0).toLocaleString()}</td>
+              <tr style={{ backgroundColor:"#FAFBFF", borderTop:"2px solid "+C.border }}>
+                <td colSpan={2} style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>TOTAL</td>
+                <td style={{ padding:"10px 14px" }} />
+                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>{resumenList.reduce((s,r)=>s+r.ops,0)}</td>
+                <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:C.green }}>${resumenList.reduce((s,r)=>s+r.costo,0).toLocaleString()}</td>
               </tr>
             </tbody>
           </table>
         </div>
       )}
 
-      {/* Detail table */}
-      <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
-        <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>Detalle de registros</div>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ borderBottom: "2px solid " + C.border }}>
-              {["Fecha", "Proveedor / Tipo", "Operación", "Unidades", "Costo/Unidad", "Costo Total", ""].map(h => (
-                <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {registrosFiltrados.map((r, i) => (
-              <tr key={i} style={{ borderBottom: "1px solid " + C.border }}
-                onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
-                onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
-                <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{r.fecha}</td>
-                <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600 }}>{r.unidad}</td>
-                <td style={{ padding: "12px 14px" }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: (r.tipo === "Última Milla" || r.tipo === "Última milla") ? C.greenBg : r.tipo === "CrossDock" ? C.blueBg : r.tipo === "Logística Inversa" ? C.purpleBg : C.yellowBg, color: (r.tipo === "Última Milla" || r.tipo === "Última milla") ? C.green : r.tipo === "CrossDock" ? C.blue : r.tipo === "Logística Inversa" ? C.purple : C.yellow }}>{r.tipo}</span>
-                </td>
-                <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600 }}>{r.litros || "—"}</td>
-                <td style={{ padding: "12px 14px", fontSize: 13, color: C.textMuted }}>{r.km ? "$" + parseFloat(r.km).toLocaleString() : "—"}</td>
-                <td style={{ padding: "12px 14px", fontSize: 14, fontWeight: 700, color: C.text }}>${(parseFloat(r.monto) || 0).toLocaleString()}</td>
-                <td style={{ padding: "12px 14px" }}>
-                  <button onClick={() => deleteRegistro(r.id)} style={{ padding: "4px 8px", borderRadius: 4, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red, fontSize: 11 }}><IC.Trash /></button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {registrosFiltrados.length === 0 && (
-          <div style={{ padding: 48, textAlign: "center" }}>
-            <div style={{ fontSize: 36, marginBottom: 10 }}>📋</div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.textMuted }}>No hay registros de costos</div>
-            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 4 }}>Usa "Registrar día" para capturar unidades por proveedor</div>
+      {/* Tabla principal */}
+      <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden" }}>
+        <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <div style={{ fontSize:13, fontWeight:700, color:C.text }}>Operadores del periodo</div>
+          <div style={{ fontSize:12, color:C.textMuted }}>{filtrados.length} registros</div>
+        </div>
+        {loading ? (
+          <div style={{ padding:40, textAlign:"center", color:C.textMuted }}>Cargando...</div>
+        ) : filtrados.length === 0 ? (
+          <div style={{ padding:48, textAlign:"center", color:C.textMuted }}>
+            <div style={{ fontSize:36, marginBottom:12 }}>📋</div>
+            <div style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>Sin registros en este periodo</div>
+            <div style={{ fontSize:13 }}>Los operadores se registran usando el enlace de check-in</div>
+          </div>
+        ) : (
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead>
+                <tr style={{ backgroundColor:C.bg }}>
+                  {["Fecha","Hora","Operador","Proveedor","Unidad","Operación","Costo",""].map(h => (
+                    <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map((r, i) => {
+                  const costo = getCosto(r);
+                  const tc = tipoColors[r.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"};
+                  return (
+                    <tr key={r.id} style={{ borderTop:"1px solid "+C.border }}
+                      onMouseEnter={ev=>ev.currentTarget.style.backgroundColor="#FAFBFF"}
+                      onMouseLeave={ev=>ev.currentTarget.style.backgroundColor="transparent"}>
+                      <td style={{ padding:"10px 14px", color:C.textMuted, whiteSpace:"nowrap" }}>{r.fecha}</td>
+                      <td style={{ padding:"10px 14px", color:C.textMuted, whiteSpace:"nowrap" }}>{fmt(r.timestamp)}</td>
+                      <td style={{ padding:"10px 14px", fontWeight:600, color:C.text }}>
+                        {r.nombre_operador === "Registro manual"
+                          ? <span style={{color:C.textMuted,fontStyle:"italic"}}>Manual</span>
+                          : r.nombre_operador}
+                      </td>
+                      <td style={{ padding:"10px 14px", color:C.text }}>{r.proveedor}</td>
+                      <td style={{ padding:"10px 14px" }}>
+                        <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c }}>{r.tipo_unidad}</span>
+                      </td>
+                      <td style={{ padding:"10px 14px" }}>
+                        <span style={{ fontSize:11, fontWeight:700, padding:"3px 10px", borderRadius:20, backgroundColor:opBgs[r.tipo_operacion]||C.bg, color:opColors[r.tipo_operacion]||C.textMuted }}>{r.tipo_operacion}</span>
+                      </td>
+                      <td style={{ padding:"10px 14px", fontWeight:700, color:costo>0?C.green:C.textMuted }}>
+                        {costo > 0 ? "$"+costo.toLocaleString() : "—"}
+                      </td>
+                      <td style={{ padding:"10px 14px" }}>
+                        <button onClick={() => deleteRegistro(r.id)} style={{ padding:"3px 7px", borderRadius:4, border:"none", backgroundColor:C.redBg, cursor:"pointer", color:C.red }}><IC.Trash /></button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
-    </>)}
-
-    {tab === "asistencia" && (() => {
-      const opColors = { "Última Milla": C.accent, "CrossDock": C.blue, "Logística Inversa": C.purple };
-      const opBgs = { "Última Milla": C.accentLight, "CrossDock": C.blueBg, "Logística Inversa": C.purpleBg };
-      const proveedoresAsi = [...new Set(asistencia.map(r => r.proveedor).filter(Boolean))].sort();
-      const filtradosAsi = asistencia.filter(r => {
-        const fecha = (r.fecha || "").substring(0, 10);
-        if (fecha < filtroAsiDesde || fecha > filtroAsiHasta) return false;
-        if (filtroAsiProv !== "Todos" && r.proveedor !== filtroAsiProv) return false;
-        return true;
-      });
-      const totalAsi = filtradosAsi.length;
-      const porOp = filtradosAsi.reduce((acc, r) => { acc[r.tipo_operacion] = (acc[r.tipo_operacion] || 0) + 1; return acc; }, {});
-      const formatTime = ts => { if (!ts) return "—"; const d = new Date(ts); return d.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }); };
-      return (
-        <>
-          {/* Link compartir */}
-          <div style={{ backgroundColor: C.blueBg, border: "1px solid " + C.blue + "33", borderRadius: 10, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <IC.MapPin />
-            <span style={{ fontSize: 13, color: C.text, flex: 1 }}>Enlace para operadores:</span>
-            <code style={{ fontSize: 12, backgroundColor: C.white, padding: "4px 10px", borderRadius: 6, border: "1px solid " + C.border, color: C.blue, userSelect: "all" }}>{checkinUrl}</code>
-            <button onClick={() => navigator.clipboard?.writeText(checkinUrl)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.blue, backgroundColor: "transparent", color: C.blue, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Copiar</button>
-          </div>
-
-          {/* Filtros asistencia */}
-          <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, backgroundColor: C.white, border: "1px solid " + C.border, borderRadius: 8, padding: "6px 12px" }}>
-              <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 600 }}>Desde</span>
-              <input type="date" value={filtroAsiDesde} onChange={e => setFiltroAsiDesde(e.target.value)} style={{ border: "none", outline: "none", fontSize: 13, color: C.text, backgroundColor: "transparent" }} />
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, backgroundColor: C.white, border: "1px solid " + C.border, borderRadius: 8, padding: "6px 12px" }}>
-              <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 600 }}>Hasta</span>
-              <input type="date" value={filtroAsiHasta} onChange={e => setFiltroAsiHasta(e.target.value)} style={{ border: "none", outline: "none", fontSize: 13, color: C.text, backgroundColor: "transparent" }} />
-            </div>
-            <select value={filtroAsiProv} onChange={e => setFiltroAsiProv(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, color: C.text, backgroundColor: C.white, cursor: "pointer" }}>
-              <option value="Todos">Todos los proveedores</option>
-              {proveedoresAsi.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-            <button onClick={loadData} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, color: C.textMuted, fontSize: 13, cursor: "pointer" }}>↻ Actualizar</button>
-          </div>
-
-          {/* Stats */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", gap: 14, marginBottom: 24 }}>
-            {[
-              { label: "Total check-ins", value: totalAsi, color: C.accent },
-              { label: "Última Milla", value: porOp["Última Milla"] || 0, color: C.accent },
-              { label: "CrossDock", value: porOp["CrossDock"] || 0, color: C.blue },
-              { label: "Logística Inversa", value: porOp["Logística Inversa"] || 0, color: C.purple },
-            ].map(s => (
-              <div key={s.label} style={{ backgroundColor: C.white, borderRadius: 10, padding: "16px 18px", border: "1px solid " + C.border }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>{s.label}</div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Tabla */}
-          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
-            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Registros de asistencia</div>
-              <div style={{ fontSize: 12, color: C.textMuted }}>{filtradosAsi.length} registros</div>
-            </div>
-            {loading ? (
-              <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando...</div>
-            ) : filtradosAsi.length === 0 ? (
-              <div style={{ padding: 48, textAlign: "center", color: C.textMuted }}>
-                <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
-                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Sin registros en este periodo</div>
-                <div style={{ fontSize: 13 }}>Los operadores deben usar el enlace de check-in al llegar</div>
-              </div>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ backgroundColor: C.bg }}>
-                      {["Fecha", "Hora", "Operador", "Proveedor", "Unidad", "Operación"].map(h => (
-                        <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em", whiteSpace: "nowrap" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtradosAsi.map((r, i) => (
-                      <tr key={r.id} style={{ borderTop: "1px solid " + C.border, backgroundColor: i % 2 === 0 ? "transparent" : C.bg }}>
-                        <td style={{ padding: "11px 16px", color: C.textMuted, whiteSpace: "nowrap" }}>{r.fecha}</td>
-                        <td style={{ padding: "11px 16px", color: C.textMuted, whiteSpace: "nowrap" }}>{formatTime(r.timestamp)}</td>
-                        <td style={{ padding: "11px 16px", fontWeight: 600, color: C.text }}>{r.nombre_operador}</td>
-                        <td style={{ padding: "11px 16px", color: C.text }}>{r.proveedor}</td>
-                        <td style={{ padding: "11px 16px", color: C.text }}>{r.tipo_unidad}</td>
-                        <td style={{ padding: "11px 16px" }}>
-                          <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20, backgroundColor: opBgs[r.tipo_operacion] || C.bg, color: opColors[r.tipo_operacion] || C.textMuted }}>
-                            {r.tipo_operacion}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </>
-      );
-    })()}
-
-  </div>
+    </div>
   );
 }
 
