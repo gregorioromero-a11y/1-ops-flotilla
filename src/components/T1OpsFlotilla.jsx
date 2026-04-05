@@ -1181,14 +1181,17 @@ function ModuleOperadores() {
       const wb = XLSX.read(new Uint8Array(buffer), { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-      // Each operator = 5 rows: Name, Email, Type, Location, Status
-      const names = [];
+      // Each operator = 5 rows: 1=Nombre, 2=Correo, 3=Tipo, 4=Ignorar, 5=Estatus
+      const ops = [];
       for (let i = 0; i < rows.length; i += 5) {
-        const name = String(rows[i]?.[0] || "").trim();
-        if (name) names.push(name);
+        const nombre = String(rows[i]?.[0] || "").trim();
+        const correo = String(rows[i+1]?.[0] || "").trim();
+        const tipo = String(rows[i+2]?.[0] || "").trim();
+        const estatus = String(rows[i+4]?.[0] || "").trim();
+        if (nombre) ops.push({ nombre, correo, tipo, estatus });
       }
-      if (names.length === 0) { setBulkMsg("No se encontraron nombres en el archivo."); return; }
-      setBulkPreview(names);
+      if (ops.length === 0) { setBulkMsg("No se encontraron operadores en el archivo."); return; }
+      setBulkPreview(ops);
     } catch (e) {
       setBulkMsg("Error al leer el archivo: " + e.message);
     }
@@ -1200,13 +1203,16 @@ function ModuleOperadores() {
     try {
       const text = await file.text();
       const lines = text.split(/\r?\n/).map(l => l.trim());
-      const names = [];
+      const ops = [];
       for (let i = 0; i < lines.length; i += 5) {
-        const name = lines[i]?.split(",")[0]?.trim().replace(/^"|"$/g, "") || "";
-        if (name) names.push(name);
+        const nombre = (lines[i]?.split(",")[0] || "").trim().replace(/^"|"$/g, "");
+        const correo = (lines[i+1]?.split(",")[0] || "").trim().replace(/^"|"$/g, "");
+        const tipo = (lines[i+2]?.split(",")[0] || "").trim().replace(/^"|"$/g, "");
+        const estatus = (lines[i+4]?.split(",")[0] || "").trim().replace(/^"|"$/g, "");
+        if (nombre) ops.push({ nombre, correo, tipo, estatus });
       }
-      if (names.length === 0) { setBulkMsg("No se encontraron nombres en el archivo."); return; }
-      setBulkPreview(names);
+      if (ops.length === 0) { setBulkMsg("No se encontraron operadores en el archivo."); return; }
+      setBulkPreview(ops);
     } catch (e) {
       setBulkMsg("Error al leer el archivo: " + e.message);
     }
@@ -1226,11 +1232,19 @@ function ModuleOperadores() {
     if (!bulkProveedor || bulkPreview.length === 0) return;
     setImporting(true);
     setBulkMsg("");
-    const rows = bulkPreview.map(nombre => ({ nombre, proveedor: bulkProveedor, tipo_licencia: "A", activo: true }));
+    const rows = bulkPreview.map(op => ({
+      nombre: op.nombre,
+      proveedor: bulkProveedor,
+      correo: op.correo || null,
+      tipo: op.tipo || "Operador",
+      tipo_licencia: "A",
+      estatus: op.estatus || "ACTIVE",
+      activo: op.estatus !== "INACTIVE",
+    }));
     const { error } = await supabase.from("operadores").insert(rows);
     setImporting(false);
     if (error) { setBulkMsg("Error: " + error.message); return; }
-    setBulkMsg(`✓ ${rows.length} operadores importados correctamente.`);
+    setBulkMsg("✓ " + rows.length + " operadores importados correctamente.");
     setBulkPreview([]);
     setBulkProveedor("");
     loadData();
@@ -1294,14 +1308,22 @@ function ModuleOperadores() {
                     <tr style={{ borderBottom: "1px solid " + C.border, backgroundColor: "#FAFBFF" }}>
                       <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>#</th>
                       <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Nombre</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Correo</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Tipo</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Estatus</th>
                       <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Proveedor</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {bulkPreview.map((nombre, i) => (
+                    {bulkPreview.map((op, i) => (
                       <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
                         <td style={{ padding: "6px 12px", fontSize: 12, color: C.textMuted }}>{i + 1}</td>
-                        <td style={{ padding: "6px 12px", fontSize: 13, fontWeight: 600, color: C.text }}>{nombre}</td>
+                        <td style={{ padding: "6px 12px", fontSize: 13, fontWeight: 600, color: C.text }}>{op.nombre}</td>
+                        <td style={{ padding: "6px 12px", fontSize: 12, color: C.textMuted }}>{op.correo}</td>
+                        <td style={{ padding: "6px 12px", fontSize: 12, color: C.textMuted }}>{op.tipo}</td>
+                        <td style={{ padding: "6px 12px" }}>
+                          <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: op.estatus === "ACTIVE" ? C.greenBg : C.redBg, color: op.estatus === "ACTIVE" ? C.green : C.red }}>{op.estatus}</span>
+                        </td>
                         <td style={{ padding: "6px 12px" }}>
                           <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, backgroundColor: "#F3EEFF", color: C.purple }}>{bulkProveedor || "—"}</span>
                         </td>
