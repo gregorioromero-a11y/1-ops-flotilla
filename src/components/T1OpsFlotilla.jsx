@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ============================================================
@@ -84,6 +84,9 @@ const navSections = [
     { id: "warehouse", label: "Warehouse", icon: IC.Warehouse },
     { id: "halfmile", label: "HalfMile", icon: IC.Map },
     { id: "sameday", label: "Same Day", icon: IC.Zap },
+  ]},
+  { label: "HERRAMIENTAS", items: [
+    { id: "ruteo", label: "Ruteo / Clusters", icon: IC.Map, badge: "Nuevo" },
   ]},
   { label: "SISTEMA", items: [
     { id: "config", label: "Configuración", icon: IC.Settings },
@@ -1974,6 +1977,327 @@ function ModuleCarriers() {
   );
 }
 
+// --- RUTEO Y CLUSTERIZACIÓN ---
+function ModuleRuteo() {
+  const [puntos, setPuntos] = useState([]);
+  const [asignaciones, setAsignaciones] = useState([]);
+  const [numClusters, setNumClusters] = useState(5);
+  const [sesionId, setSesionId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [leafletLoaded, setLeafletLoaded] = useState(false);
+  const mapDivRef = useRef(null);
+  const leafletMapRef = useRef(null);
+  const markersRef = useRef([]);
+  const sesionIdRef = useRef("");
+
+  const DEPOSITO_LAT = 19.398892731487283;
+  const DEPOSITO_LNG = -99.11677448852873;
+  const RCOLORS = ['#E63B2E','#2563EB','#16A34A','#D97706','#7C3AED','#EC4899','#0891B2','#059669','#F97316','#4B5563','#DC2626','#1D4ED8','#15803D','#B45309','#6D28D9'];
+
+  // Keep sesionIdRef in sync
+  useEffect(() => { sesionIdRef.current = sesionId; }, [sesionId]);
+
+  // Load Leaflet from CDN once
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.L) { setLeafletLoaded(true); return; }
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(link);
+    const script = document.createElement("script");
+    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    script.onload = () => setLeafletLoaded(true);
+    document.body.appendChild(script);
+  }, []);
+
+  // Cleanup map on unmount
+  useEffect(() => {
+    return () => {
+      if (leafletMapRef.current) { leafletMapRef.current.remove(); leafletMapRef.current = null; }
+      delete window.__ruteoUpdate;
+    };
+  }, []);
+
+  // Global handler for popup cluster change (stable - setAsignaciones is stable)
+  useEffect(() => {
+    window.__ruteoUpdate = (idx, nc) => {
+      setAsignaciones(prev => {
+        const next = [...prev];
+        next[idx] = nc;
+        return next;
+      });
+      const sid = sesionIdRef.current;
+      if (sid) supabase.from("ruteo_puntos").update({ cluster: nc, ruta: "Ruta " + (nc + 1) }).eq("sesion", sid).eq("indice", idx);
+    };
+  }, []);
+
+  // Init/reinit map when points are loaded
+  useEffect(() => {
+    if (!leafletLoaded || puntos.length === 0 || !mapDivRef.current) return;
+    const L = window.L;
+    if (leafletMapRef.current) { leafletMapRef.current.remove(); leafletMapRef.current = null; }
+    const map = L.map(mapDivRef.current).setView([DEPOSITO_LAT, DEPOSITO_LNG], 12);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap contributors" }).addTo(map);
+    const depotIcon = L.divIcon({ html: '<div style="background:#0C1425;color:white;font-size:12px;width:22px;height:22px;border-radius:4px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;">★</div>', className: "", iconSize: [22, 22], iconAnchor: [11, 11] });
+    L.marker([DEPOSITO_LAT, DEPOSITO_LNG], { icon: depotIcon }).addTo(map).bindPopup("<b>Depósito / Almacén T1</b>");
+    leafletMapRef.current = map;
+    drawMarkers(map, puntos, asignaciones, numClusters);
+    map.fitBounds(puntos.map(p => [p.lat, p.lng]), { padding: [40, 40] });
+  }, [leafletLoaded, puntos]);
+
+  // Redraw markers when assignments change
+  useEffect(() => {
+    if (!leafletMapRef.current || puntos.length === 0) return;
+    drawMarkers(leafletMapRef.current, puntos, asignaciones, numClusters);
+  }, [asignaciones]);
+
+  const drawMarkers = (map, pts, assigns, nk) => {
+    const L = window.L;
+    markersRef.current.forEach(m => map.removeLayer(m));
+    markersRef.current = [];
+    pts.forEach((p, i) => {
+      const cl = assigns[i] ?? 0;
+      const color = RCOLORS[cl % RCOLORS.length];
+      const icon = L.divIcon({ html: `<div style="background:${color};color:white;font-size:9px;font-weight:700;width:18px;height:18px;border-radius:50%;border:2px solid white;box-shadow:0 1px 5px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;cursor:pointer;">${cl + 1}</div>`, className: "", iconSize: [18, 18], iconAnchor: [9, 9] });
+      const marker = L.marker([p.lat, p.lng], { icon }).addTo(map);
+      marker.on("click", () => {
+        const cont = document.createElement("div");
+        cont.style.cssText = "font-family:sans-serif;min-width:185px;";
+        cont.innerHTML = `<div style="font-size:13px;font-weight:700;margin-bottom:5px;">Punto ${i + 1}</div><div style="font-size:11px;color:#777;margin-bottom:10px;">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</div><label style="font-size:11px;font-weight:600;display:block;margin-bottom:4px;">Reasignar cluster:</label><select id="rs${i}" style="width:100%;padding:5px 6px;border-radius:5px;border:1px solid #ddd;font-size:12px;margin-bottom:8px;">${Array.from({ length: nk }, (_, ci) => `<option value="${ci}"${ci === cl ? " selected" : ""}>Ruta ${ci + 1}</option>`).join("")}</select><button onclick="const s=document.getElementById('rs${i}');window.__ruteoUpdate(${i},parseInt(s.value));this.closest('.leaflet-popup').querySelector('.leaflet-popup-close-button').click();" style="width:100%;padding:7px;border-radius:5px;border:none;background:#16A34A;color:white;font-size:12px;font-weight:700;cursor:pointer;">✓ Guardar cambio</button>`;
+        marker.bindPopup(L.popup({ maxWidth: 230 }).setContent(cont)).openPopup();
+      });
+      markersRef.current.push(marker);
+    });
+  };
+
+  // KMeans++ implementation
+  const kMeans = (pts, k) => {
+    if (!pts.length || k < 1) return [];
+    const C = [{ ...pts[Math.floor(Math.random() * pts.length)] }];
+    while (C.length < k) {
+      const dists = pts.map(p => Math.min(...C.map(c => (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2)));
+      const total = dists.reduce((s, d) => s + d, 0);
+      let r = Math.random() * total, chosen = pts[pts.length - 1];
+      for (let j = 0; j < pts.length; j++) { r -= dists[j]; if (r <= 0) { chosen = pts[j]; break; } }
+      C.push({ lat: chosen.lat, lng: chosen.lng });
+    }
+    let assigns = new Array(pts.length).fill(0);
+    for (let it = 0; it < 200; it++) {
+      const na = pts.map(p => { let md = Infinity, nr = 0; C.forEach((c, ci) => { const d = (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2; if (d < md) { md = d; nr = ci; } }); return nr; });
+      if (na.every((a, i) => a === assigns[i])) break;
+      assigns = na;
+      for (let ci = 0; ci < k; ci++) { const cp = pts.filter((_, i) => assigns[i] === ci); if (cp.length) C[ci] = { lat: cp.reduce((s, p) => s + p.lat, 0) / cp.length, lng: cp.reduce((s, p) => s + p.lng, 0) / cp.length }; }
+    }
+    return assigns;
+  };
+
+  const handleFile = async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoading(true); setMsg(""); setPuntos([]); setAsignaciones([]);
+    try {
+      let rows = [];
+      if (file.name.toLowerCase().endsWith(".csv")) {
+        const text = await file.text();
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+        rows = lines.slice(1).map(l => { const v = l.split(",").map(x => x.trim().replace(/^"|"$/g, "")); const o = {}; headers.forEach((h, i) => o[h] = v[i] || ""); return o; });
+      } else {
+        const XLSX = await import("xlsx");
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+        rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+      }
+      const sample = rows[0] || {};
+      const latK = Object.keys(sample).find(k => /latit/i.test(k)) || "Latitud";
+      const lngK = Object.keys(sample).find(k => /longit|^lng$/i.test(k)) || "Longitud";
+      const pts = rows.map((r, i) => ({ ...r, lat: parseFloat(r[latK]) || 0, lng: parseFloat(r[lngK]) || 0, _i: i })).filter(p => p.lat !== 0 && p.lng !== 0);
+      if (!pts.length) { setMsg("Sin coordenadas válidas. Verifica que el archivo tenga columnas 'Latitud' y 'Longitud'."); setLoading(false); return; }
+      const k = Math.min(numClusters, pts.length);
+      const assigns = kMeans(pts, k);
+      setPuntos(pts);
+      setAsignaciones(assigns);
+      const sid = "S" + Date.now();
+      setSesionId(sid);
+      const dbRows = pts.map((p, i) => ({ sesion: sid, indice: i, latitud: p.lat, longitud: p.lng, cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1), datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k)))) }));
+      await supabase.from("ruteo_puntos").insert(dbRows);
+      setMsg(`✓ ${pts.length} puntos clusterizados en ${k} rutas.`);
+    } catch (err) { setMsg("Error: " + err.message); }
+    setLoading(false);
+  };
+
+  const reCluster = () => {
+    if (!puntos.length) return;
+    const k = Math.min(numClusters, puntos.length);
+    const assigns = kMeans(puntos, k);
+    setAsignaciones(assigns);
+    setMsg(`✓ Re-clusterizado con ${k} rutas.`);
+  };
+
+  const exportCSV = () => {
+    if (!puntos.length) return;
+    const extraK = Object.keys(puntos[0]).filter(k => !["lat", "lng", "_i"].includes(k));
+    const hdr = ["Ruta", "Cluster", "Latitud", "Longitud", ...extraK];
+    const body = puntos.map((p, i) => {
+      const cl = asignaciones[i] ?? 0;
+      return [`"Ruta ${cl + 1}"`, cl + 1, p.lat, p.lng, ...extraK.map(k => `"${(p[k] || "").toString().replace(/"/g, '""')}"`).join(",")].join(",");
+    });
+    const csv = [hdr.join(","), ...body].join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }));
+    a.download = "ruteo_clusters.csv";
+    a.click();
+  };
+
+  const clusterCount = {};
+  asignaciones.forEach(c => { clusterCount[c] = (clusterCount[c] || 0) + 1; });
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Ruteo y Clusterización</h1>
+          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Carga coordenadas · K-Means++ automático · Reasignación manual en mapa · Exportar CSV</p>
+        </div>
+        {puntos.length > 0 && (
+          <button onClick={exportCSV} style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            <IC.Download /> Exportar CSV
+          </button>
+        )}
+      </div>
+
+      {/* Controls panel */}
+      <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 14, alignItems: "flex-end", marginBottom: 12 }}>
+          <div>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo de coordenadas (.csv o .xlsx)</label>
+            <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: "#FAFBFF" }} />
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>Columnas requeridas: <b>Latitud</b> y <b>Longitud</b>. El resto se conserva en la exportación.</div>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Número de rutas (k)</label>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input type="number" min="2" max="15" value={numClusters} onChange={e => setNumClusters(Math.max(2, Math.min(15, parseInt(e.target.value) || 2)))} style={{ width: 80, padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 16, fontWeight: 700, boxSizing: "border-box", textAlign: "center" }} />
+              {puntos.length > 0 && (
+                <button onClick={reCluster} style={{ padding: "9px 14px", borderRadius: 6, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>↻ Re-clusterizar</button>
+              )}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Depósito fijo</div>
+            <div style={{ fontSize: 12, color: C.textMuted, padding: "9px 12px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: "#FAFBFF", whiteSpace: "nowrap" }}>★ 19.3989, -99.1168</div>
+          </div>
+        </div>
+        {loading && <div style={{ fontSize: 13, color: C.blue, fontWeight: 600, padding: "8px 0" }}>⏳ Procesando archivo y generando clusters K-Means++...</div>}
+        {msg && <div style={{ fontSize: 13, fontWeight: 600, padding: "10px 14px", borderRadius: 8, backgroundColor: msg.startsWith("✓") ? C.greenBg : C.redBg, color: msg.startsWith("✓") ? C.green : C.red }}>{msg}</div>}
+      </div>
+
+      {puntos.length > 0 && (
+        <>
+          {/* Stats */}
+          <div style={{ display: "flex", gap: 14, marginBottom: 16 }}>
+            <StatCard label="Total puntos" value={puntos.length.toString()} icon={<IC.MapPin />} color={C.blue} />
+            <StatCard label="Rutas generadas" value={Object.keys(clusterCount).length.toString()} icon={<IC.BarChart />} color={C.accent} />
+            <StatCard label="Promedio por ruta" value={Object.keys(clusterCount).length > 0 ? Math.round(puntos.length / Object.keys(clusterCount).length).toString() : "0"} subvalue="puntos por cluster" icon={<IC.Package />} color={C.green} />
+            <StatCard label="Sesión ID" value={sesionId.substring(0, 10)} subvalue="guardado en BD" icon={<IC.Clock />} color={C.textMuted} />
+          </div>
+
+          {/* Cluster legend */}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, padding: "12px 18px", border: "1px solid " + C.border, marginBottom: 14, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: C.text, marginRight: 4 }}>Rutas:</span>
+            {Object.entries(clusterCount).sort((a, b) => +a[0] - +b[0]).map(([cl, cnt]) => (
+              <div key={cl} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 12px", borderRadius: 16, backgroundColor: RCOLORS[+cl % RCOLORS.length] + "18", border: "1px solid " + RCOLORS[+cl % RCOLORS.length] + "40" }}>
+                <div style={{ width: 9, height: 9, borderRadius: "50%", backgroundColor: RCOLORS[+cl % RCOLORS.length] }} />
+                <span style={{ fontSize: 12, fontWeight: 600, color: RCOLORS[+cl % RCOLORS.length] }}>Ruta {+cl + 1}</span>
+                <span style={{ fontSize: 11, color: C.textMuted }}>{cnt} pts</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Map */}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 14 }}>
+            <div style={{ padding: "11px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Mapa interactivo de clusters</div>
+              <div style={{ fontSize: 12, color: C.textMuted }}>Clic en marcador → seleccionar ruta → Guardar (se persiste en BD)</div>
+            </div>
+            <div ref={mapDivRef} style={{ height: 480, width: "100%" }} />
+          </div>
+
+          {/* Table */}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+            <div style={{ padding: "11px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Tabla de asignaciones</span>
+              <span style={{ fontSize: 12, color: C.textMuted }}>{puntos.length} puntos · cambios en dropdown se guardan en Supabase</span>
+            </div>
+            <div style={{ maxHeight: 340, overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead style={{ position: "sticky", top: 0, backgroundColor: C.bg, zIndex: 1 }}>
+                  <tr>
+                    {["#", "Latitud", "Longitud", "Cluster / Ruta", ""].map(h => (
+                      <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {puntos.map((p, i) => {
+                    const cl = asignaciones[i] ?? 0;
+                    const color = RCOLORS[cl % RCOLORS.length];
+                    return (
+                      <tr key={i} style={{ borderTop: "1px solid " + C.border }}
+                        onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
+                        onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
+                        <td style={{ padding: "7px 14px", fontSize: 12, color: C.textMuted }}>{i + 1}</td>
+                        <td style={{ padding: "7px 14px", fontSize: 12 }}>{p.lat.toFixed(6)}</td>
+                        <td style={{ padding: "7px 14px", fontSize: 12 }}>{p.lng.toFixed(6)}</td>
+                        <td style={{ padding: "7px 14px" }}>
+                          <select value={cl} onChange={e => {
+                            const nc = parseInt(e.target.value);
+                            setAsignaciones(prev => { const n = [...prev]; n[i] = nc; return n; });
+                            if (sesionId) supabase.from("ruteo_puntos").update({ cluster: nc, ruta: "Ruta " + (nc + 1) }).eq("sesion", sesionId).eq("indice", i);
+                          }} style={{ padding: "4px 8px", borderRadius: 5, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color, cursor: "pointer", backgroundColor: color + "12" }}>
+                            {Array.from({ length: numClusters }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
+                          </select>
+                        </td>
+                        <td style={{ padding: "7px 14px" }}>
+                          <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 10px", borderRadius: 4, backgroundColor: color + "18", color }}>Ruta {cl + 1}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {puntos.length === 0 && !loading && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 48, border: "1px solid " + C.border, textAlign: "center" }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>🗺️</div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 8 }}>Carga un archivo para generar rutas</div>
+          <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 20 }}>CSV o Excel con columnas <b>Latitud</b> y <b>Longitud</b>. El algoritmo K-Means++ asigna automáticamente cada punto a la ruta más cercana.</div>
+          <div style={{ fontSize: 11, color: C.textMuted, backgroundColor: C.bg, padding: "14px 20px", borderRadius: 8, display: "inline-block", textAlign: "left", maxWidth: 560 }}>
+            <b>SQL requerido en Supabase:</b>
+            <pre style={{ fontSize: 10, marginTop: 8, whiteSpace: "pre-wrap", color: C.text }}>{`CREATE TABLE ruteo_puntos (
+  id bigserial PRIMARY KEY,
+  sesion text,
+  indice int,
+  latitud float8,
+  longitud float8,
+  cluster int,
+  ruta text,
+  datos_extra jsonb,
+  created_at timestamptz DEFAULT now()
+);`}</pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- OPS Type Module (T1 Envíos, Warehouse, HalfMile, Same Day) ---
 function ModuleOpsType({ tipo, color }) {
   const data = opsBreakdown.find(o => o.tipo === tipo) || opsBreakdown[0];
@@ -2073,6 +2397,7 @@ export default function T1OpsFlotilla() {
       case "warehouse": return <ModuleOpsType tipo="Warehouse" color={C.blue} />;
       case "halfmile": return <ModuleOpsType tipo="HalfMile" color={C.purple} />;
       case "sameday": return <ModuleOpsType tipo="Same Day" color={C.yellow} />;
+      case "ruteo": return <ModuleRuteo />;
       case "config": return <ModulePlaceholder title="Configuración" desc="Ajustes del sistema" />;
       default: return <ModuleDashboard />;
     }
