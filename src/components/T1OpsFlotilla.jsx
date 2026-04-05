@@ -1175,9 +1175,10 @@ function ModuleOperadores() {
     setBulkPreview([]);
     setBulkMsg("");
     try {
-      const XLSX = await import("xlsx");
+      const xlsxMod = await import("xlsx");
+      const XLSX = xlsxMod.default || xlsxMod;
       const buffer = await file.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: "array" });
+      const wb = XLSX.read(new Uint8Array(buffer), { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
       // Each operator = 5 rows: Name, Email, Type, Location, Status
