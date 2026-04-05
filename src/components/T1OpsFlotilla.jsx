@@ -2179,7 +2179,7 @@ function ModuleRuteo() {
           <div>
             <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Número de rutas (k)</label>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input type="number" min="2" max="15" value={numClusters} onChange={e => setNumClusters(Math.max(2, Math.min(15, parseInt(e.target.value) || 2)))} style={{ width: 80, padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 16, fontWeight: 700, boxSizing: "border-box", textAlign: "center" }} />
+              <input type="number" min="2" value={numClusters} onChange={e => setNumClusters(Math.max(2, parseInt(e.target.value) || 2))} style={{ width: 80, padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 16, fontWeight: 700, boxSizing: "border-box", textAlign: "center" }} />
               {puntos.length > 0 && (
                 <button onClick={reCluster} style={{ padding: "9px 14px", borderRadius: 6, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>↻ Re-clusterizar</button>
               )}
