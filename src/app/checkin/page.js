@@ -77,6 +77,7 @@ const S = {
 
 export default function CheckinPage() {
   const [carriers, setCarriers] = useState([]);
+  const [operadores, setOperadores] = useState([]);
   const [form, setForm] = useState({
     proveedor: "",
     nombre: "",
@@ -91,19 +92,20 @@ export default function CheckinPage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
-    supabase
-      .from("carriers")
-      .select("*")
-      .order("proveedor")
-      .then(({ data }) => {
-        setCarriers((data || []).filter((c) => c.tipo_unidad && c.tipo_unidad !== "—"));
-      });
+    Promise.all([
+      supabase.from("carriers").select("*").order("proveedor"),
+      supabase.from("operadores").select("*").eq("activo", true).order("nombre"),
+    ]).then(([{ data: cData }, { data: oData }]) => {
+      setCarriers((cData || []).filter((c) => c.tipo_unidad && c.tipo_unidad !== "—"));
+      setOperadores(oData || []);
+    });
   }, []);
 
   const proveedores = [...new Set(carriers.map((c) => c.proveedor))].sort();
   const tiposUnidad = carriers
     .filter((c) => c.proveedor === form.proveedor)
     .map((c) => c.tipo_unidad);
+  const operadoresFiltrados = operadores.filter((o) => o.proveedor === form.proveedor);
 
   const requestLocation = () => {
     setLocationLoading(true);
@@ -138,7 +140,7 @@ export default function CheckinPage() {
   const isLocationValid = location !== null && distance !== null && distance <= MAX_DISTANCE_METERS;
   const isFormValid =
     form.proveedor &&
-    form.nombre.trim().length > 1 &&
+    form.nombre &&
     form.tipo_unidad &&
     form.tipo_operacion &&
     isLocationValid;
@@ -563,14 +565,32 @@ export default function CheckinPage() {
 
           {/* Nombre */}
           <label style={S.label}>Nombre del operador</label>
-          <input
-            type="text"
-            placeholder="Nombre completo"
-            value={form.nombre}
-            onChange={(e) => setForm({ ...form, nombre: e.target.value })}
-            style={S.input}
-            autoComplete="name"
-          />
+          <div style={{ position: "relative" }}>
+            <select
+              value={form.nombre}
+              onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+              disabled={!form.proveedor}
+              style={{
+                ...S.select,
+                opacity: form.proveedor ? 1 : 0.45,
+                cursor: form.proveedor ? "pointer" : "not-allowed",
+              }}
+            >
+              <option value="">
+                {form.proveedor
+                  ? operadoresFiltrados.length > 0
+                    ? "Seleccionar operador..."
+                    : "Sin operadores registrados para este proveedor"
+                  : "Primero elige un proveedor"}
+              </option>
+              {operadoresFiltrados.map((o) => (
+                <option key={o.id} value={o.nombre}>
+                  {o.nombre}
+                </option>
+              ))}
+            </select>
+            <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#7C8495" }}>▾</span>
+          </div>
 
           {/* Tipo de unidad */}
           <label style={S.label}>Tipo de unidad</label>

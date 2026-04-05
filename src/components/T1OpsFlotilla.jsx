@@ -78,7 +78,6 @@ const navSections = [
     { id: "operadores", label: "Operadores", icon: IC.Users },
     { id: "costos", label: "Registro Diario", icon: IC.Clock },
     { id: "carriers", label: "Carriers / Proveedores", icon: IC.Truck, badge: "Nuevo" },
-    { id: "asistencia", label: "Asistencia Operadores", icon: IC.ClipboardCheck },
   ]},
   { label: "OPERACIONES", items: [
     { id: "t1envios", label: "T1 Envíos", icon: IC.Package },
@@ -112,13 +111,6 @@ const mockUnidades = [
   { id: "T1-030", tipo: "3.5 Ton", placas: "PQR-678-F", modelo: "2022 Isuzu", km: 89400, status: "Baja temporal", proxMantenimiento: "—" },
 ];
 
-const mockOperadores = [
-  { id: "OP-001", nombre: "Miguel Ángel Reyes", licencia: "E", vencimiento: "2027-06-15", unidad: "T1-015", entregas: 1842, pctEntrega: 97.2, status: "Activo" },
-  { id: "OP-002", nombre: "Carlos Mendoza", licencia: "E", vencimiento: "2026-11-30", unidad: "T1-008", entregas: 1567, pctEntrega: 95.8, status: "Activo" },
-  { id: "OP-003", nombre: "Roberto Sánchez", licencia: "C", vencimiento: "2027-03-20", unidad: "T1-022", entregas: 1203, pctEntrega: 94.1, status: "Activo" },
-  { id: "OP-004", nombre: "Juan Pablo Torres", licencia: "E", vencimiento: "2026-08-10", unidad: "T1-003", entregas: 2105, pctEntrega: 96.5, status: "Activo" },
-  { id: "OP-005", nombre: "Fernando López", licencia: "C", vencimiento: "2026-05-25", unidad: "T1-011", entregas: 987, pctEntrega: 92.3, status: "Incapacidad" },
-];
 
 // Monthly data for charts
 const monthlyData = [
@@ -1126,55 +1118,152 @@ function ModuleUnidades() {
 
 // --- OPERADORES ---
 function ModuleOperadores() {
+  const [operadores, setOperadores] = useState([]);
+  const [proveedores, setProveedores] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ nombre: "", proveedor: "", tipo_licencia: "A" });
+  const [saveMsg, setSaveMsg] = useState("");
+
+  const LICENCIAS = ["A", "B", "C", "D", "E"];
+
+  useEffect(() => { loadData(); }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    const [{ data: ops }, { data: cars }] = await Promise.all([
+      supabase.from("operadores").select("*").order("nombre"),
+      supabase.from("carriers").select("proveedor").order("proveedor"),
+    ]);
+    setOperadores(ops || []);
+    setProveedores([...new Set((cars || []).map(c => c.proveedor))].sort());
+    setLoading(false);
+  };
+
+  const saveOperador = async () => {
+    if (!form.nombre.trim() || !form.proveedor) return;
+    setSaveMsg("");
+    const { error } = await supabase.from("operadores").insert({
+      nombre: form.nombre.trim(),
+      proveedor: form.proveedor,
+      tipo_licencia: form.tipo_licencia,
+      activo: true,
+    });
+    if (error) { setSaveMsg("Error: " + error.message); return; }
+    setForm({ nombre: "", proveedor: "", tipo_licencia: "A" });
+    setShowForm(false);
+    loadData();
+  };
+
+  const deleteOperador = async (id) => {
+    if (!confirm("¿Eliminar este operador?")) return;
+    await supabase.from("operadores").delete().eq("id", id);
+    loadData();
+  };
+
+  const toggleActivo = async (id, activo) => {
+    await supabase.from("operadores").update({ activo: !activo }).eq("id", id);
+    loadData();
+  };
+
+  const activos = operadores.filter(o => o.activo).length;
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Operadores</h1>
-          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Gestión de choferes, licencias y rendimiento</p>
+          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Base de datos de operadores por proveedor — usada en el check-in</p>
         </div>
-        <button style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-          <IC.Plus /> Nuevo operador
+        <button onClick={() => setShowForm(!showForm)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Nuevo operador</>}
         </button>
       </div>
 
       <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
-        <StatCard label="Total operadores" value="5" icon={<IC.Users />} color={C.blue} />
-        <StatCard label="Activos" value="4" icon={<IC.Check />} color={C.green} />
-        <StatCard label="Promedio % entrega" value="95.2%" icon={<IC.BarChart />} color={C.accent} />
-        <StatCard label="Licencias por vencer" value="1" subvalue="Fernando López — May 2026" icon={<IC.Clock />} color={C.yellow} />
+        <StatCard label="Total operadores" value={operadores.length.toString()} icon={<IC.Users />} color={C.blue} />
+        <StatCard label="Activos" value={activos.toString()} icon={<IC.Check />} color={C.green} />
+        <StatCard label="Inactivos" value={(operadores.length - activos).toString()} icon={<IC.X />} color={C.red} />
+        <StatCard label="Proveedores" value={[...new Set(operadores.map(o => o.proveedor).filter(Boolean))].length.toString()} icon={<IC.Truck />} color={C.purple} />
       </div>
 
-      <div style={{ backgroundColor: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ borderBottom: `2px solid ${C.border}` }}>
-              {["ID", "Nombre", "Licencia", "Vencimiento", "Unidad", "Entregas", "% Entrega", "Status"].map(h => (
-                <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {mockOperadores.map((o, i) => (
-              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}
-                onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
-                onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
-                <td style={{ padding: "12px", fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{o.id}</td>
-                <td style={{ padding: "12px", fontSize: 13, fontWeight: 600 }}>{o.nombre}</td>
-                <td style={{ padding: "12px" }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, backgroundColor: o.licencia === "E" ? C.blueBg : C.yellowBg, color: o.licencia === "E" ? C.blue : C.yellow }}>Tipo {o.licencia}</span>
-                </td>
-                <td style={{ padding: "12px", fontSize: 13, color: C.textMuted }}>{o.vencimiento}</td>
-                <td style={{ padding: "12px", fontSize: 13, fontWeight: 600 }}>{o.unidad}</td>
-                <td style={{ padding: "12px", fontSize: 13, fontWeight: 600 }}>{o.entregas.toLocaleString()}</td>
-                <td style={{ padding: "12px" }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: o.pctEntrega >= 96 ? C.green : o.pctEntrega >= 93 ? C.yellow : C.red }}>{o.pctEntrega}%</span>
-                </td>
-                <td style={{ padding: "12px" }}><StatusBadge status={o.status} /></td>
+      {showForm && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>Nuevo operador</div>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 2fr 1fr", gap: 14, marginBottom: 14 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Nombre completo</label>
+              <input type="text" placeholder="Nombre del operador" value={form.nombre} onChange={e => setForm({ ...form, nombre: e.target.value })}
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
+              <select value={form.proveedor} onChange={e => setForm({ ...form, proveedor: e.target.value })}
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                <option value="">Seleccionar proveedor...</option>
+                {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Tipo licencia</label>
+              <select value={form.tipo_licencia} onChange={e => setForm({ ...form, tipo_licencia: e.target.value })}
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                {LICENCIAS.map(l => <option key={l} value={l}>Tipo {l}</option>)}
+              </select>
+            </div>
+          </div>
+          {saveMsg && <div style={{ marginBottom: 10, fontSize: 13, color: C.red }}>{saveMsg}</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <button onClick={() => setShowForm(false)} style={{ padding: "8px 20px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 13, cursor: "pointer" }}>Cancelar</button>
+            <button onClick={saveOperador} disabled={!form.nombre.trim() || !form.proveedor}
+              style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: form.nombre.trim() && form.proveedor ? C.accent : C.border, color: "white", fontSize: 13, fontWeight: 700, cursor: form.nombre.trim() && form.proveedor ? "pointer" : "default" }}>
+              Guardar operador
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+        {loading ? (
+          <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando...</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid " + C.border }}>
+                {["Nombre", "Proveedor", "Licencia", "Status", ""].map(h => (
+                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {operadores.length === 0 ? (
+                <tr><td colSpan={5} style={{ padding: 48, textAlign: "center", color: C.textMuted }}>
+                  <div style={{ fontSize: 36, marginBottom: 10 }}>👤</div>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>Sin operadores registrados</div>
+                  <div style={{ fontSize: 12, marginTop: 4 }}>Agrega operadores para usarlos en el check-in</div>
+                </td></tr>
+              ) : operadores.map((o) => (
+                <tr key={o.id} style={{ borderBottom: "1px solid " + C.border }}
+                  onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
+                  onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
+                  <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: C.text }}>{o.nombre}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 13, color: C.textMuted }}>{o.proveedor}</td>
+                  <td style={{ padding: "12px 14px" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, backgroundColor: C.blueBg, color: C.blue }}>Tipo {o.tipo_licencia}</span>
+                  </td>
+                  <td style={{ padding: "12px 14px" }}>
+                    <button onClick={() => toggleActivo(o.id, o.activo)} style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20, border: "none", cursor: "pointer", backgroundColor: o.activo ? C.greenBg : C.redBg, color: o.activo ? C.green : C.red }}>
+                      {o.activo ? "Activo" : "Inactivo"}
+                    </button>
+                  </td>
+                  <td style={{ padding: "12px 14px" }}>
+                    <button onClick={() => deleteOperador(o.id)} style={{ padding: "4px 8px", borderRadius: 4, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red }}><IC.Trash /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
@@ -1182,28 +1271,35 @@ function ModuleOperadores() {
 
 // --- COSTOS ---
 function ModuleCostos() {
+  const [tab, setTab] = useState("registro"); // "registro" | "asistencia"
   const [registros, setRegistros] = useState([]);
   const [carriers, setCarriers] = useState([]);
+  const [asistencia, setAsistencia] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ fecha: new Date().toISOString().split("T")[0], proveedor: "" });
-  const [lineas, setLineas] = useState([{ tipo_unidad: "", operacion: "Última milla", cantidad: "1" }]);
+  const [lineas, setLineas] = useState([{ tipo_unidad: "", operacion: "Última Milla", cantidad: "1" }]);
   const [filtroDesde, setFiltroDesde] = useState(new Date().toISOString().split("T")[0]);
   const [filtroHasta, setFiltroHasta] = useState(new Date().toISOString().split("T")[0]);
   const [filtroProv, setFiltroProv] = useState("Todos");
+  const [filtroAsiDesde, setFiltroAsiDesde] = useState(new Date().toISOString().split("T")[0]);
+  const [filtroAsiHasta, setFiltroAsiHasta] = useState(new Date().toISOString().split("T")[0]);
+  const [filtroAsiProv, setFiltroAsiProv] = useState("Todos");
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  const checkinUrl = typeof window !== "undefined" ? window.location.origin + "/checkin" : "/checkin";
+
+  useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
     setLoading(true);
-    const [{ data: costosData }, { data: carriersData }] = await Promise.all([
+    const [{ data: costosData }, { data: carriersData }, { data: asiData }] = await Promise.all([
       supabase.from("costos").select("*").order("fecha", { ascending: false }),
-      supabase.from("carriers").select("*").order("proveedor")
+      supabase.from("carriers").select("*").order("proveedor"),
+      supabase.from("asistencia").select("*").order("timestamp", { ascending: false }),
     ]);
     setRegistros(costosData || []);
     setCarriers((carriersData || []).filter(c => c.tipo_unidad !== "—"));
+    setAsistencia(asiData || []);
     setLoading(false);
   };
 
@@ -1225,7 +1321,7 @@ function ModuleCostos() {
   const [saveMsg, setSaveMsg] = useState("");
 
   const addLinea = () => {
-    setLineas([...lineas, { tipo_unidad: "", operacion: "Última milla", cantidad: "1" }]);
+    setLineas([...lineas, { tipo_unidad: "", operacion: "Última Milla", cantidad: "1" }]);
   };
 
   const removeLinea = (idx) => {
@@ -1265,7 +1361,7 @@ function ModuleCostos() {
     }
     setSaveMsg("✓ " + rows.length + " registros guardados");
     setForm({ fecha: form.fecha, proveedor: "" });
-    setLineas([{ tipo_unidad: "", operacion: "Última milla", cantidad: "1" }]);
+    setLineas([{ tipo_unidad: "", operacion: "Última Milla", cantidad: "1" }]);
     loadData();
     setTimeout(() => setSaveMsg(""), 3000);
   };
@@ -1302,8 +1398,8 @@ function ModuleCostos() {
     if (!resumenDiario[key]) resumenDiario[key] = { fecha, proveedor: prov, unidades: 0, costoUM: 0, costoHM: 0, costo: 0, tipos: {} };
     resumenDiario[key].unidades += cant;
     resumenDiario[key].costo += monto;
-    if (r.tipo === "Última milla") resumenDiario[key].costoUM += monto;
-    if (r.tipo === "Half mile") resumenDiario[key].costoHM += monto;
+    if (r.tipo === "Última Milla" || r.tipo === "Última milla") resumenDiario[key].costoUM += monto;
+    if (r.tipo === "CrossDock") resumenDiario[key].costoHM += monto;
     if (!resumenDiario[key].tipos[tipo]) resumenDiario[key].tipos[tipo] = { cantidad: 0, costo: 0 };
     resumenDiario[key].tipos[tipo].cantidad += cant;
     resumenDiario[key].tipos[tipo].costo += monto;
@@ -1312,21 +1408,44 @@ function ModuleCostos() {
 
   // Totals from filtered
   const totalGasto = registrosFiltrados.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const totalUM = registrosFiltrados.filter(r => r.tipo === "Última milla").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const totalHM = registrosFiltrados.filter(r => r.tipo === "Half mile").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  const totalUM = registrosFiltrados.filter(r => r.tipo === "Última Milla" || r.tipo === "Última milla").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
+  const totalCD = registrosFiltrados.filter(r => r.tipo === "CrossDock").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
   const totalUnidades = registrosFiltrados.reduce((s, r) => s + (parseInt(r.litros) || 0), 0);
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Registro Diario</h1>
-          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Registro de unidades operativas por día · Costos desde catálogo de carriers</p>
+          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Registro de unidades operativas por día · Asistencia de operadores</p>
         </div>
-        <button onClick={() => setShowForm(!showForm)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-          {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Registrar día</>}
-        </button>
+        {tab === "registro" && (
+          <button onClick={() => setShowForm(!showForm)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Registrar día</>}
+          </button>
+        )}
+        {tab === "asistencia" && (
+          <a href="/checkin" target="_blank" rel="noopener noreferrer"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "10px 18px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", textDecoration: "none" }}>
+            <IC.MapPin /> Abrir Check-in <IC.ExternalLink />
+          </a>
+        )}
       </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: 2, marginBottom: 20, backgroundColor: C.bg, borderRadius: 8, padding: 4, border: "1px solid " + C.border, width: "fit-content" }}>
+        {[{ id: "registro", label: "📋 Registro Diario" }, { id: "asistencia", label: "📍 Asistencia" }].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            padding: "7px 18px", borderRadius: 6, border: "none", fontSize: 13, fontWeight: tab === t.id ? 700 : 500,
+            backgroundColor: tab === t.id ? C.white : "transparent",
+            color: tab === t.id ? C.text : C.textMuted,
+            cursor: "pointer", boxShadow: tab === t.id ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+            transition: "all 0.15s",
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {tab === "registro" && (<>
 
       {/* Date filter */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
@@ -1353,8 +1472,8 @@ function ModuleCostos() {
       {/* StatCards */}
       <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
         <StatCard label="Gasto total" value={"$" + (totalGasto >= 1000000 ? (totalGasto/1000000).toFixed(2) + "M" : totalGasto >= 1000 ? (totalGasto/1000).toFixed(0) + "K" : totalGasto.toLocaleString())} icon={<IC.Dollar />} color={C.purple} />
-        <StatCard label="Última milla" value={"$" + (totalUM >= 1000 ? (totalUM/1000).toFixed(0) + "K" : totalUM.toLocaleString())} subvalue={((totalGasto > 0 ? (totalUM/totalGasto*100).toFixed(0) : 0)) + "% del total"} icon={<IC.Package />} color={C.green} />
-        <StatCard label="Half mile" value={"$" + (totalHM >= 1000 ? (totalHM/1000).toFixed(0) + "K" : totalHM.toLocaleString())} subvalue={((totalGasto > 0 ? (totalHM/totalGasto*100).toFixed(0) : 0)) + "% del total"} icon={<IC.Map />} color={C.accent} />
+        <StatCard label="Última Milla" value={"$" + (totalUM >= 1000 ? (totalUM/1000).toFixed(0) + "K" : totalUM.toLocaleString())} subvalue={((totalGasto > 0 ? (totalUM/totalGasto*100).toFixed(0) : 0)) + "% del total"} icon={<IC.Package />} color={C.green} />
+        <StatCard label="CrossDock" value={"$" + (totalCD >= 1000 ? (totalCD/1000).toFixed(0) + "K" : totalCD.toLocaleString())} subvalue={((totalGasto > 0 ? (totalCD/totalGasto*100).toFixed(0) : 0)) + "% del total"} icon={<IC.Map />} color={C.accent} />
         <StatCard label="Unidades registradas" value={totalUnidades.toString()} subvalue={registros.length + " registros"} icon={<IC.Truck />} color={C.blue} />
       </div>
 
@@ -1370,7 +1489,7 @@ function ModuleCostos() {
             </div>
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
-              <select value={form.proveedor} onChange={e => { setForm({...form, proveedor: e.target.value}); setLineas([{ tipo_unidad: "", operacion: "Última milla", cantidad: "1" }]); }} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+              <select value={form.proveedor} onChange={e => { setForm({...form, proveedor: e.target.value}); setLineas([{ tipo_unidad: "", operacion: "Última Milla", cantidad: "1" }]); }} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
                 <option value="">Seleccionar proveedor...</option>
                 {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
@@ -1396,8 +1515,9 @@ function ModuleCostos() {
                       {tiposDisponibles.map(c => <option key={c.id} value={c.tipo_unidad}>{c.tipo_unidad} — ${parseFloat(c.costo_unidad).toLocaleString()}/día</option>)}
                     </select>
                     <select value={l.operacion} onChange={e => updateLinea(idx, "operacion", e.target.value)} style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
-                      <option value="Última milla">Última milla</option>
-                      <option value="Half mile">Half mile</option>
+                      <option value="Última Milla">Última Milla</option>
+                      <option value="CrossDock">CrossDock</option>
+                      <option value="Logística Inversa">Logística Inversa</option>
                     </select>
                     <input type="number" min="1" value={l.cantidad} onChange={e => updateLinea(idx, "cantidad", e.target.value)} style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }} />
                     {lineas.length > 1 ? (
@@ -1446,7 +1566,7 @@ function ModuleCostos() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
-                {["Fecha", "Proveedor", "Tipos de unidad", "Unidades", "Costo ÚM", "Costo HM", "Costo Total"].map(h => (
+                {["Fecha", "Proveedor", "Tipos de unidad", "Unidades", "Última Milla", "CrossDock", "Costo Total"].map(h => (
                   <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                 ))}
               </tr>
@@ -1461,7 +1581,7 @@ function ModuleCostos() {
                   <td style={{ padding: "10px 14px" }}>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                       {Object.entries(r.tipos).map(([tipo, info], ti) => {
-                        const tipoColors = { Moto: { bg: "#FEF3C7", c: "#D97706" }, Sedan: { bg: "#DBEAFE", c: "#2563EB" }, SmallVan: { bg: "#EDE9FE", c: "#7C3AED" }, Van: { bg: "#EDE9FE", c: "#7C3AED" }, LargeVan: { bg: "#EDE9FE", c: "#6D28D9" }, "5 Ton": { bg: "#FEF9C3", c: "#D97706" }, Rabon: { bg: "#FFEDD5", c: "#EA580C" }, Torton: { bg: "#FEE2E2", c: "#DC2626" }, Tracto: { bg: "#F1F5F9", c: "#475569" } };
+                        const tipoColors = { Moto: { bg: "#FEF3C7", c: "#D97706" }, Sedan: { bg: "#DBEAFE", c: "#2563EB" }, SmallVan: { bg: "#EDE9FE", c: "#7C3AED" }, Van: { bg: "#EDE9FE", c: "#7C3AED" }, "1.5": { bg: "#FEF9C3", c: "#CA8A04" }, "3.5": { bg: "#FFEDD5", c: "#C2410C" }, Rabon: { bg: "#FFEDD5", c: "#EA580C" }, Torton: { bg: "#FEE2E2", c: "#DC2626" }, Tracto: { bg: "#F1F5F9", c: "#475569" } };
                         const tc = tipoColors[tipo] || { bg: "#F3F4F6", c: "#7C8495" };
                         return (
                           <span key={ti} style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: tc.bg, color: tc.c, whiteSpace: "nowrap" }}>
@@ -1509,7 +1629,7 @@ function ModuleCostos() {
                 <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{r.fecha}</td>
                 <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600 }}>{r.unidad}</td>
                 <td style={{ padding: "12px 14px" }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: r.tipo === "Última milla" ? C.greenBg : r.tipo === "Half mile" ? C.accentLight : C.yellowBg, color: r.tipo === "Última milla" ? C.green : r.tipo === "Half mile" ? C.accent : C.yellow }}>{r.tipo}</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: (r.tipo === "Última Milla" || r.tipo === "Última milla") ? C.greenBg : r.tipo === "CrossDock" ? C.blueBg : r.tipo === "Logística Inversa" ? C.purpleBg : C.yellowBg, color: (r.tipo === "Última Milla" || r.tipo === "Última milla") ? C.green : r.tipo === "CrossDock" ? C.blue : r.tipo === "Logística Inversa" ? C.purple : C.yellow }}>{r.tipo}</span>
                 </td>
                 <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600 }}>{r.litros || "—"}</td>
                 <td style={{ padding: "12px 14px", fontSize: 13, color: C.textMuted }}>{r.km ? "$" + parseFloat(r.km).toLocaleString() : "—"}</td>
@@ -1523,13 +1643,118 @@ function ModuleCostos() {
         </table>
         {registrosFiltrados.length === 0 && (
           <div style={{ padding: 48, textAlign: "center" }}>
-            <div style={{ fontSize: 36, marginBottom: 10 }}>��</div>
+            <div style={{ fontSize: 36, marginBottom: 10 }}>📋</div>
             <div style={{ fontSize: 14, fontWeight: 600, color: C.textMuted }}>No hay registros de costos</div>
             <div style={{ fontSize: 12, color: C.textMuted, marginTop: 4 }}>Usa "Registrar día" para capturar unidades por proveedor</div>
           </div>
         )}
       </div>
-    </div>
+    </>)}
+
+    {tab === "asistencia" && (() => {
+      const opColors = { "Última Milla": C.accent, "CrossDock": C.blue, "Logística Inversa": C.purple };
+      const opBgs = { "Última Milla": C.accentLight, "CrossDock": C.blueBg, "Logística Inversa": C.purpleBg };
+      const proveedoresAsi = [...new Set(asistencia.map(r => r.proveedor).filter(Boolean))].sort();
+      const filtradosAsi = asistencia.filter(r => {
+        const fecha = (r.fecha || "").substring(0, 10);
+        if (fecha < filtroAsiDesde || fecha > filtroAsiHasta) return false;
+        if (filtroAsiProv !== "Todos" && r.proveedor !== filtroAsiProv) return false;
+        return true;
+      });
+      const totalAsi = filtradosAsi.length;
+      const porOp = filtradosAsi.reduce((acc, r) => { acc[r.tipo_operacion] = (acc[r.tipo_operacion] || 0) + 1; return acc; }, {});
+      const formatTime = ts => { if (!ts) return "—"; const d = new Date(ts); return d.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }); };
+      return (
+        <>
+          {/* Link compartir */}
+          <div style={{ backgroundColor: C.blueBg, border: "1px solid " + C.blue + "33", borderRadius: 10, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <IC.MapPin />
+            <span style={{ fontSize: 13, color: C.text, flex: 1 }}>Enlace para operadores:</span>
+            <code style={{ fontSize: 12, backgroundColor: C.white, padding: "4px 10px", borderRadius: 6, border: "1px solid " + C.border, color: C.blue, userSelect: "all" }}>{checkinUrl}</code>
+            <button onClick={() => navigator.clipboard?.writeText(checkinUrl)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.blue, backgroundColor: "transparent", color: C.blue, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Copiar</button>
+          </div>
+
+          {/* Filtros asistencia */}
+          <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, backgroundColor: C.white, border: "1px solid " + C.border, borderRadius: 8, padding: "6px 12px" }}>
+              <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 600 }}>Desde</span>
+              <input type="date" value={filtroAsiDesde} onChange={e => setFiltroAsiDesde(e.target.value)} style={{ border: "none", outline: "none", fontSize: 13, color: C.text, backgroundColor: "transparent" }} />
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, backgroundColor: C.white, border: "1px solid " + C.border, borderRadius: 8, padding: "6px 12px" }}>
+              <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 600 }}>Hasta</span>
+              <input type="date" value={filtroAsiHasta} onChange={e => setFiltroAsiHasta(e.target.value)} style={{ border: "none", outline: "none", fontSize: 13, color: C.text, backgroundColor: "transparent" }} />
+            </div>
+            <select value={filtroAsiProv} onChange={e => setFiltroAsiProv(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, color: C.text, backgroundColor: C.white, cursor: "pointer" }}>
+              <option value="Todos">Todos los proveedores</option>
+              {proveedoresAsi.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <button onClick={loadData} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, color: C.textMuted, fontSize: 13, cursor: "pointer" }}>↻ Actualizar</button>
+          </div>
+
+          {/* Stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", gap: 14, marginBottom: 24 }}>
+            {[
+              { label: "Total check-ins", value: totalAsi, color: C.accent },
+              { label: "Última Milla", value: porOp["Última Milla"] || 0, color: C.accent },
+              { label: "CrossDock", value: porOp["CrossDock"] || 0, color: C.blue },
+              { label: "Logística Inversa", value: porOp["Logística Inversa"] || 0, color: C.purple },
+            ].map(s => (
+              <div key={s.label} style={{ backgroundColor: C.white, borderRadius: 10, padding: "16px 18px", border: "1px solid " + C.border }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>{s.label}</div>
+                <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Tabla */}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Registros de asistencia</div>
+              <div style={{ fontSize: 12, color: C.textMuted }}>{filtradosAsi.length} registros</div>
+            </div>
+            {loading ? (
+              <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando...</div>
+            ) : filtradosAsi.length === 0 ? (
+              <div style={{ padding: 48, textAlign: "center", color: C.textMuted }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
+                <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Sin registros en este periodo</div>
+                <div style={{ fontSize: 13 }}>Los operadores deben usar el enlace de check-in al llegar</div>
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ backgroundColor: C.bg }}>
+                      {["Fecha", "Hora", "Operador", "Proveedor", "Unidad", "Operación"].map(h => (
+                        <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em", whiteSpace: "nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtradosAsi.map((r, i) => (
+                      <tr key={r.id} style={{ borderTop: "1px solid " + C.border, backgroundColor: i % 2 === 0 ? "transparent" : C.bg }}>
+                        <td style={{ padding: "11px 16px", color: C.textMuted, whiteSpace: "nowrap" }}>{r.fecha}</td>
+                        <td style={{ padding: "11px 16px", color: C.textMuted, whiteSpace: "nowrap" }}>{formatTime(r.timestamp)}</td>
+                        <td style={{ padding: "11px 16px", fontWeight: 600, color: C.text }}>{r.nombre_operador}</td>
+                        <td style={{ padding: "11px 16px", color: C.text }}>{r.proveedor}</td>
+                        <td style={{ padding: "11px 16px", color: C.text }}>{r.tipo_unidad}</td>
+                        <td style={{ padding: "11px 16px" }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20, backgroundColor: opBgs[r.tipo_operacion] || C.bg, color: opColors[r.tipo_operacion] || C.textMuted }}>
+                            {r.tipo_operacion}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      );
+    })()}
+
+  </div>
   );
 }
 
@@ -1545,7 +1770,7 @@ function ModuleCarriers() {
   const [filterOp, setFilterOp] = useState("Todas");
   const [filterProv, setFilterProv] = useState("Todos");
 
-  const TIPOS_UNIDAD = ["Moto", "Sedan", "SmallVan", "Van", "LargeVan", "5 Ton", "Rabon", "Torton", "Tracto"];
+  const TIPOS_UNIDAD = ["Moto", "Sedan", "SmallVan", "Van", "1.5", "3.5", "Rabon", "Torton", "Tracto"];
 
   useEffect(() => { loadCarriers(); }, []);
 
@@ -1839,176 +2064,6 @@ function ModulePlaceholder({ title, desc }) {
   );
 }
 
-// --- MÓDULO ASISTENCIA ---
-function ModuleAsistencia() {
-  const [registros, setRegistros] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [filtroDesde, setFiltroDesde] = useState(new Date().toISOString().split("T")[0]);
-  const [filtroHasta, setFiltroHasta] = useState(new Date().toISOString().split("T")[0]);
-  const [filtroProv, setFiltroProv] = useState("Todos");
-
-  const checkinUrl = typeof window !== "undefined" ? window.location.origin + "/checkin" : "/checkin";
-
-  useEffect(() => { loadData(); }, []);
-
-  const loadData = async () => {
-    setLoading(true);
-    const { data } = await supabase
-      .from("asistencia")
-      .select("*")
-      .order("timestamp", { ascending: false });
-    setRegistros(data || []);
-    setLoading(false);
-  };
-
-  const proveedores = [...new Set(registros.map(r => r.proveedor).filter(Boolean))].sort();
-
-  const filtrados = registros.filter(r => {
-    const fecha = (r.fecha || "").substring(0, 10);
-    if (fecha < filtroDesde || fecha > filtroHasta) return false;
-    if (filtroProv !== "Todos" && r.proveedor !== filtroProv) return false;
-    return true;
-  });
-
-  const totalHoy = filtrados.length;
-  const porOperacion = filtrados.reduce((acc, r) => {
-    acc[r.tipo_operacion] = (acc[r.tipo_operacion] || 0) + 1;
-    return acc;
-  }, {});
-  const opColors = { "Última Milla": C.accent, "CrossDock": C.blue, "Logística Inversa": C.purple };
-  const opBgs = { "Última Milla": C.accentLight, "CrossDock": C.blueBg, "Logística Inversa": C.purpleBg };
-
-  const formatTime = (ts) => {
-    if (!ts) return "—";
-    const d = new Date(ts);
-    return d.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
-  };
-
-  return (
-    <div>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 12 }}>
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Asistencia de Operadores</h1>
-          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Check-ins automáticos con verificación de ubicación</p>
-        </div>
-        <a
-          href="/checkin"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            display: "inline-flex", alignItems: "center", gap: 8,
-            padding: "9px 18px", borderRadius: 8, border: "none",
-            backgroundColor: C.accent, color: "white",
-            fontSize: 13, fontWeight: 600, cursor: "pointer",
-            textDecoration: "none",
-          }}
-        >
-          <IC.MapPin /> Abrir página de check-in <IC.ExternalLink />
-        </a>
-      </div>
-
-      {/* Link para compartir */}
-      <div style={{ backgroundColor: C.blueBg, border: `1px solid ${C.blue}22`, borderRadius: 10, padding: "12px 16px", marginBottom: 24, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <IC.MapPin />
-        <span style={{ fontSize: 13, color: C.text, flex: 1 }}>
-          Comparte este enlace con los operadores:
-        </span>
-        <code style={{ fontSize: 12, backgroundColor: "white", padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.border}`, color: C.blue, userSelect: "all" }}>
-          {checkinUrl}
-        </code>
-        <button
-          onClick={() => navigator.clipboard?.writeText(checkinUrl)}
-          style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.blue}`, backgroundColor: "transparent", color: C.blue, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
-        >
-          Copiar
-        </button>
-      </div>
-
-      {/* Filtros */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, backgroundColor: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px" }}>
-          <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 600 }}>Desde</span>
-          <input type="date" value={filtroDesde} onChange={e => setFiltroDesde(e.target.value)} style={{ border: "none", outline: "none", fontSize: 13, color: C.text, backgroundColor: "transparent" }} />
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, backgroundColor: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px" }}>
-          <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 600 }}>Hasta</span>
-          <input type="date" value={filtroHasta} onChange={e => setFiltroHasta(e.target.value)} style={{ border: "none", outline: "none", fontSize: 13, color: C.text, backgroundColor: "transparent" }} />
-        </div>
-        <select value={filtroProv} onChange={e => setFiltroProv(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, backgroundColor: C.white, cursor: "pointer" }}>
-          <option value="Todos">Todos los proveedores</option>
-          {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <button onClick={loadData} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, backgroundColor: C.white, color: C.textMuted, fontSize: 13, cursor: "pointer" }}>↻ Actualizar</button>
-      </div>
-
-      {/* Stat cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14, marginBottom: 24 }}>
-        {[
-          { label: "Total check-ins", value: totalHoy, color: C.accent, bg: C.accentLight },
-          { label: "Última Milla", value: porOperacion["Última Milla"] || 0, color: C.accent, bg: C.accentLight },
-          { label: "CrossDock", value: porOperacion["CrossDock"] || 0, color: C.blue, bg: C.blueBg },
-          { label: "Logística Inversa", value: porOperacion["Logística Inversa"] || 0, color: C.purple, bg: C.purpleBg },
-        ].map(s => (
-          <div key={s.label} style={{ backgroundColor: C.white, borderRadius: 10, padding: "16px 18px", border: `1px solid ${C.border}` }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>{s.label}</div>
-            <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Tabla */}
-      <div style={{ backgroundColor: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Registros</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>{filtrados.length} registros</div>
-        </div>
-
-        {loading ? (
-          <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando...</div>
-        ) : filtrados.length === 0 ? (
-          <div style={{ padding: 48, textAlign: "center", color: C.textMuted }}>
-            <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Sin registros en este periodo</div>
-            <div style={{ fontSize: 13 }}>Los operadores deben usar el enlace de check-in al llegar</div>
-          </div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ backgroundColor: C.bg }}>
-                  {["Fecha", "Hora", "Operador", "Proveedor", "Unidad", "Operación"].map(h => (
-                    <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em", whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtrados.map((r, i) => (
-                  <tr key={r.id} style={{ borderTop: `1px solid ${C.border}`, backgroundColor: i % 2 === 0 ? "transparent" : C.bg }}>
-                    <td style={{ padding: "11px 16px", color: C.textMuted, whiteSpace: "nowrap" }}>{r.fecha}</td>
-                    <td style={{ padding: "11px 16px", color: C.textMuted, whiteSpace: "nowrap" }}>{formatTime(r.timestamp)}</td>
-                    <td style={{ padding: "11px 16px", fontWeight: 600, color: C.text }}>{r.nombre_operador}</td>
-                    <td style={{ padding: "11px 16px", color: C.text }}>{r.proveedor}</td>
-                    <td style={{ padding: "11px 16px", color: C.text }}>{r.tipo_unidad}</td>
-                    <td style={{ padding: "11px 16px" }}>
-                      <span style={{
-                        fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20,
-                        backgroundColor: opBgs[r.tipo_operacion] || C.bg,
-                        color: opColors[r.tipo_operacion] || C.textMuted,
-                      }}>
-                        {r.tipo_operacion}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ============ MAIN APP ============
 
@@ -2024,7 +2079,6 @@ export default function T1OpsFlotilla() {
       case "operadores": return <ModuleOperadores />;
       case "costos": return <ModuleCostos />;
       case "carriers": return <ModuleCarriers />;
-      case "asistencia": return <ModuleAsistencia />;
       case "t1envios": return <ModuleOpsType tipo="T1 Envíos" color={C.accent} />;
       case "warehouse": return <ModuleOpsType tipo="Warehouse" color={C.blue} />;
       case "halfmile": return <ModuleOpsType tipo="HalfMile" color={C.purple} />;
