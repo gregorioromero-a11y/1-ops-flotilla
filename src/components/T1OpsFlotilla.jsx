@@ -1986,17 +1986,26 @@ function ModuleRuteo() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [leafletLoaded, setLeafletLoaded] = useState(false);
+  const [selectedIndices, setSelectedIndices] = useState(new Set());
+  const [mapMode, setMapMode] = useState("click");
+  const [bulkCluster, setBulkCluster] = useState(0);
   const mapDivRef = useRef(null);
+  const canvasRef = useRef(null);
   const leafletMapRef = useRef(null);
   const markersRef = useRef([]);
   const sesionIdRef = useRef("");
+  const selectedRef = useRef(new Set());
+  const puntosRef = useRef([]);
+  const mapModeRef = useRef("click");
 
   const DEPOSITO_LAT = 19.398892731487283;
   const DEPOSITO_LNG = -99.11677448852873;
   const RCOLORS = ['#E63B2E','#2563EB','#16A34A','#D97706','#7C3AED','#EC4899','#0891B2','#059669','#F97316','#4B5563','#DC2626','#1D4ED8','#15803D','#B45309','#6D28D9'];
 
-  // Keep sesionIdRef in sync
   useEffect(() => { sesionIdRef.current = sesionId; }, [sesionId]);
+  useEffect(() => { selectedRef.current = selectedIndices; }, [selectedIndices]);
+  useEffect(() => { puntosRef.current = puntos; }, [puntos]);
+  useEffect(() => { mapModeRef.current = mapMode; }, [mapMode]);
 
   // Load Leaflet from CDN once
   useEffect(() => {
@@ -2016,22 +2025,100 @@ function ModuleRuteo() {
   useEffect(() => {
     return () => {
       if (leafletMapRef.current) { leafletMapRef.current.remove(); leafletMapRef.current = null; }
-      delete window.__ruteoUpdate;
     };
   }, []);
 
-  // Global handler for popup cluster change (stable - setAsignaciones is stable)
+  // Toggle map dragging when switching modes
   useEffect(() => {
-    window.__ruteoUpdate = (idx, nc) => {
-      setAsignaciones(prev => {
-        const next = [...prev];
-        next[idx] = nc;
-        return next;
-      });
-      const sid = sesionIdRef.current;
-      if (sid) supabase.from("ruteo_puntos").update({ cluster: nc, ruta: "Ruta " + (nc + 1) }).eq("sesion", sid).eq("indice", idx);
-    };
-  }, []);
+    if (!leafletMapRef.current) return;
+    if (mapMode === "lasso") {
+      leafletMapRef.current.dragging.disable();
+      leafletMapRef.current.scrollWheelZoom.disable();
+    } else {
+      leafletMapRef.current.dragging.enable();
+      leafletMapRef.current.scrollWheelZoom.enable();
+    }
+  }, [mapMode]);
+
+  // Ray-casting point-in-polygon
+  const pip = (x, y, poly) => {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  };
+
+  const setupLasso = (map) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = map.getContainer().offsetWidth;
+    canvas.height = map.getContainer().offsetHeight;
+    const ctx = canvas.getContext("2d");
+    let drawing = false;
+    let path = [];
+
+    canvas.addEventListener("mousedown", e => {
+      if (mapModeRef.current !== "lasso") return;
+      e.preventDefault();
+      drawing = true;
+      path = [];
+      const r = canvas.getBoundingClientRect();
+      path.push({ x: e.clientX - r.left, y: e.clientY - r.top });
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
+
+    canvas.addEventListener("mousemove", e => {
+      if (!drawing || mapModeRef.current !== "lasso") return;
+      e.preventDefault();
+      const r = canvas.getBoundingClientRect();
+      path.push({ x: e.clientX - r.left, y: e.clientY - r.top });
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      path.forEach(p => ctx.lineTo(p.x, p.y));
+      ctx.strokeStyle = "#7C3AED";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 3]);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(124,58,237,0.08)";
+      ctx.fill();
+    });
+
+    canvas.addEventListener("mouseup", () => {
+      if (!drawing || mapModeRef.current !== "lasso") return;
+      drawing = false;
+      if (path.length > 2) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.beginPath();
+        ctx.moveTo(path[0].x, path[0].y);
+        path.forEach(p => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.strokeStyle = "#7C3AED";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 3]);
+        ctx.fillStyle = "rgba(124,58,237,0.15)";
+        ctx.fill();
+        ctx.stroke();
+        const pts = puntosRef.current;
+        const L = window.L;
+        const inside = new Set();
+        pts.forEach((p, i) => {
+          const cp = map.latLngToContainerPoint(L.latLng(p.lat, p.lng));
+          if (pip(cp.x, cp.y, path)) inside.add(i);
+        });
+        if (inside.size > 0) {
+          setSelectedIndices(prev => { const next = new Set(prev); inside.forEach(i => next.add(i)); return next; });
+        }
+      }
+      setTimeout(() => ctx.clearRect(0, 0, canvas.width, canvas.height), 1200);
+    });
+
+    canvas.addEventListener("mouseleave", () => {
+      if (drawing) { drawing = false; ctx.clearRect(0, 0, canvas.width, canvas.height); }
+    });
+  };
 
   // Init/reinit map when points are loaded
   useEffect(() => {
@@ -2043,33 +2130,54 @@ function ModuleRuteo() {
     const depotIcon = L.divIcon({ html: '<div style="background:#0C1425;color:white;font-size:12px;width:22px;height:22px;border-radius:4px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;">★</div>', className: "", iconSize: [22, 22], iconAnchor: [11, 11] });
     L.marker([DEPOSITO_LAT, DEPOSITO_LNG], { icon: depotIcon }).addTo(map).bindPopup("<b>Depósito / Almacén T1</b>");
     leafletMapRef.current = map;
-    drawMarkers(map, puntos, asignaciones, numClusters);
+    setSelectedIndices(new Set());
+    drawMarkers(map, puntos, asignaciones, numClusters, new Set());
     map.fitBounds(puntos.map(p => [p.lat, p.lng]), { padding: [40, 40] });
+    setupLasso(map);
   }, [leafletLoaded, puntos]);
 
-  // Redraw markers when assignments change
+  // Redraw markers when assignments or selection changes
   useEffect(() => {
     if (!leafletMapRef.current || puntos.length === 0) return;
-    drawMarkers(leafletMapRef.current, puntos, asignaciones, numClusters);
-  }, [asignaciones]);
+    drawMarkers(leafletMapRef.current, puntos, asignaciones, numClusters, selectedIndices);
+  }, [asignaciones, selectedIndices]);
 
-  const drawMarkers = (map, pts, assigns, nk) => {
+  const drawMarkers = (map, pts, assigns, nk, selSet) => {
     const L = window.L;
     markersRef.current.forEach(m => map.removeLayer(m));
     markersRef.current = [];
     pts.forEach((p, i) => {
       const cl = assigns[i] ?? 0;
       const color = RCOLORS[cl % RCOLORS.length];
-      const icon = L.divIcon({ html: `<div style="background:${color};color:white;font-size:9px;font-weight:700;width:18px;height:18px;border-radius:50%;border:2px solid white;box-shadow:0 1px 5px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;cursor:pointer;">${cl + 1}</div>`, className: "", iconSize: [18, 18], iconAnchor: [9, 9] });
+      const isSel = selSet && selSet.has(i);
+      const size = isSel ? 26 : 18;
+      const anchor = isSel ? 13 : 9;
+      const icon = L.divIcon({
+        html: `<div style="background:${color};color:white;font-size:${isSel ? 11 : 9}px;font-weight:700;width:${size}px;height:${size}px;border-radius:50%;border:${isSel ? "3px solid #FACC15" : "2px solid white"};box-shadow:${isSel ? "0 0 0 3px #FACC1580,0 2px 8px rgba(0,0,0,0.5)" : "0 1px 5px rgba(0,0,0,0.4)"};display:flex;align-items:center;justify-content:center;cursor:pointer;">${cl + 1}</div>`,
+        className: "", iconSize: [size, size], iconAnchor: [anchor, anchor]
+      });
       const marker = L.marker([p.lat, p.lng], { icon }).addTo(map);
       marker.on("click", () => {
-        const cont = document.createElement("div");
-        cont.style.cssText = "font-family:sans-serif;min-width:185px;";
-        cont.innerHTML = `<div style="font-size:13px;font-weight:700;margin-bottom:5px;">Punto ${i + 1}</div><div style="font-size:11px;color:#777;margin-bottom:10px;">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</div><label style="font-size:11px;font-weight:600;display:block;margin-bottom:4px;">Reasignar cluster:</label><select id="rs${i}" style="width:100%;padding:5px 6px;border-radius:5px;border:1px solid #ddd;font-size:12px;margin-bottom:8px;">${Array.from({ length: nk }, (_, ci) => `<option value="${ci}"${ci === cl ? " selected" : ""}>Ruta ${ci + 1}</option>`).join("")}</select><button onclick="const s=document.getElementById('rs${i}');window.__ruteoUpdate(${i},parseInt(s.value));this.closest('.leaflet-popup').querySelector('.leaflet-popup-close-button').click();" style="width:100%;padding:7px;border-radius:5px;border:none;background:#16A34A;color:white;font-size:12px;font-weight:700;cursor:pointer;">✓ Guardar cambio</button>`;
-        marker.bindPopup(L.popup({ maxWidth: 230 }).setContent(cont)).openPopup();
+        if (mapModeRef.current !== "click") return;
+        setSelectedIndices(prev => {
+          const next = new Set(prev);
+          if (next.has(i)) next.delete(i); else next.add(i);
+          return next;
+        });
       });
       markersRef.current.push(marker);
     });
+  };
+
+  const applyBulk = () => {
+    const indices = Array.from(selectedIndices);
+    if (!indices.length) return;
+    const nc = bulkCluster;
+    setAsignaciones(prev => { const next = [...prev]; indices.forEach(i => next[i] = nc); return next; });
+    const sid = sesionIdRef.current;
+    if (sid) indices.forEach(i => supabase.from("ruteo_puntos").update({ cluster: nc, ruta: "Ruta " + (nc + 1) }).eq("sesion", sid).eq("indice", i));
+    setSelectedIndices(new Set());
+    setMsg(`✓ ${indices.length} punto(s) reasignados a Ruta ${nc + 1}.`);
   };
 
   // KMeans++ implementation
@@ -2218,11 +2326,42 @@ function ModuleRuteo() {
 
           {/* Map */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 14 }}>
-            <div style={{ padding: "11px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Mapa interactivo de clusters</div>
-              <div style={{ fontSize: 12, color: C.textMuted }}>Clic en marcador → seleccionar ruta → Guardar (se persiste en BD)</div>
+            {/* Toolbar */}
+            <div style={{ padding: "10px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Mapa interactivo</div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button onClick={() => setMapMode("click")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + (mapMode === "click" ? C.accent : C.border), backgroundColor: mapMode === "click" ? C.accentLight : "transparent", color: mapMode === "click" ? C.accent : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  👆 Selección individual
+                </button>
+                <button onClick={() => setMapMode("lasso")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + (mapMode === "lasso" ? "#7C3AED" : C.border), backgroundColor: mapMode === "lasso" ? "#F5F3FF" : "transparent", color: mapMode === "lasso" ? "#7C3AED" : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  ✏️ Lasso (área)
+                </button>
+                {selectedIndices.size > 0 && (
+                  <button onClick={() => setSelectedIndices(new Set())} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: "transparent", color: C.textMuted, fontSize: 11, cursor: "pointer" }}>
+                    ✕ Limpiar ({selectedIndices.size})
+                  </button>
+                )}
+              </div>
             </div>
-            <div ref={mapDivRef} style={{ height: 480, width: "100%" }} />
+            {/* Bulk assignment bar */}
+            {selectedIndices.size > 0 && (
+              <div style={{ padding: "10px 18px", borderBottom: "1px solid " + C.border, backgroundColor: "#FFFBEB", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#B45309" }}>{selectedIndices.size} punto(s) seleccionado(s)</span>
+                <span style={{ fontSize: 12, color: C.textMuted }}>Reasignar a:</span>
+                <select value={bulkCluster} onChange={e => setBulkCluster(parseInt(e.target.value))} style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                  {Array.from({ length: numClusters }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
+                </select>
+                <button onClick={applyBulk} style={{ padding: "5px 16px", borderRadius: 6, border: "none", backgroundColor: C.green, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✓ Aplicar</button>
+                <span style={{ fontSize: 11, color: C.textMuted, marginLeft: "auto" }}>
+                  {mapMode === "lasso" ? "Dibuja una curva sobre el mapa para seleccionar puntos" : "Clic en marcador para seleccionar/deseleccionar · acumulable"}
+                </span>
+              </div>
+            )}
+            {/* Map + canvas overlay */}
+            <div style={{ position: "relative" }}>
+              <div ref={mapDivRef} style={{ height: 480, width: "100%" }} />
+              <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, zIndex: 1000, pointerEvents: mapMode === "lasso" ? "all" : "none", cursor: mapMode === "lasso" ? "crosshair" : "default" }} />
+            </div>
           </div>
 
           {/* Table */}
@@ -2244,11 +2383,17 @@ function ModuleRuteo() {
                   {puntos.map((p, i) => {
                     const cl = asignaciones[i] ?? 0;
                     const color = RCOLORS[cl % RCOLORS.length];
+                    const isSel = selectedIndices.has(i);
                     return (
-                      <tr key={i} style={{ borderTop: "1px solid " + C.border }}
-                        onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
-                        onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
-                        <td style={{ padding: "7px 14px", fontSize: 12, color: C.textMuted }}>{i + 1}</td>
+                      <tr key={i} style={{ borderTop: "1px solid " + C.border, backgroundColor: isSel ? "#FFFBEB" : "transparent" }}
+                        onMouseEnter={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = "#FAFBFF"; }}
+                        onMouseLeave={ev => { ev.currentTarget.style.backgroundColor = isSel ? "#FFFBEB" : "transparent"; }}>
+                        <td style={{ padding: "7px 14px", fontSize: 12, color: C.textMuted }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            {isSel && <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: "#FACC15", display: "inline-block", flexShrink: 0 }} />}
+                            {i + 1}
+                          </span>
+                        </td>
                         <td style={{ padding: "7px 14px", fontSize: 12 }}>{p.lat.toFixed(6)}</td>
                         <td style={{ padding: "7px 14px", fontSize: 12 }}>{p.lng.toFixed(6)}</td>
                         <td style={{ padding: "7px 14px" }}>
