@@ -62,6 +62,9 @@ const IC = {
   Trash: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3,6 5,6 21,6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>,
   Download: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
   Map: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="1,6 1,22 8,18 16,22 23,18 23,2 16,6 8,2"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>,
+  MapPin: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>,
+  ClipboardCheck: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><polyline points="9,12 11,14 15,10"/></svg>,
+  ExternalLink: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15,3 21,3 21,9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>,
 };
 
 // ---- NAV ITEMS ----
@@ -75,6 +78,7 @@ const navSections = [
     { id: "operadores", label: "Operadores", icon: IC.Users },
     { id: "costos", label: "Registro Diario", icon: IC.Clock },
     { id: "carriers", label: "Carriers / Proveedores", icon: IC.Truck, badge: "Nuevo" },
+    { id: "asistencia", label: "Asistencia Operadores", icon: IC.ClipboardCheck },
   ]},
   { label: "OPERACIONES", items: [
     { id: "t1envios", label: "T1 Envíos", icon: IC.Package },
@@ -1835,6 +1839,177 @@ function ModulePlaceholder({ title, desc }) {
   );
 }
 
+// --- MÓDULO ASISTENCIA ---
+function ModuleAsistencia() {
+  const [registros, setRegistros] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filtroDesde, setFiltroDesde] = useState(new Date().toISOString().split("T")[0]);
+  const [filtroHasta, setFiltroHasta] = useState(new Date().toISOString().split("T")[0]);
+  const [filtroProv, setFiltroProv] = useState("Todos");
+
+  const checkinUrl = typeof window !== "undefined" ? window.location.origin + "/checkin" : "/checkin";
+
+  useEffect(() => { loadData(); }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from("asistencia")
+      .select("*")
+      .order("timestamp", { ascending: false });
+    setRegistros(data || []);
+    setLoading(false);
+  };
+
+  const proveedores = [...new Set(registros.map(r => r.proveedor).filter(Boolean))].sort();
+
+  const filtrados = registros.filter(r => {
+    const fecha = (r.fecha || "").substring(0, 10);
+    if (fecha < filtroDesde || fecha > filtroHasta) return false;
+    if (filtroProv !== "Todos" && r.proveedor !== filtroProv) return false;
+    return true;
+  });
+
+  const totalHoy = filtrados.length;
+  const porOperacion = filtrados.reduce((acc, r) => {
+    acc[r.tipo_operacion] = (acc[r.tipo_operacion] || 0) + 1;
+    return acc;
+  }, {});
+  const opColors = { "Última Milla": C.accent, "CrossDock": C.blue, "Logística Inversa": C.purple };
+  const opBgs = { "Última Milla": C.accentLight, "CrossDock": C.blueBg, "Logística Inversa": C.purpleBg };
+
+  const formatTime = (ts) => {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    return d.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Asistencia de Operadores</h1>
+          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Check-ins automáticos con verificación de ubicación</p>
+        </div>
+        <a
+          href="/checkin"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 8,
+            padding: "9px 18px", borderRadius: 8, border: "none",
+            backgroundColor: C.accent, color: "white",
+            fontSize: 13, fontWeight: 600, cursor: "pointer",
+            textDecoration: "none",
+          }}
+        >
+          <IC.MapPin /> Abrir página de check-in <IC.ExternalLink />
+        </a>
+      </div>
+
+      {/* Link para compartir */}
+      <div style={{ backgroundColor: C.blueBg, border: `1px solid ${C.blue}22`, borderRadius: 10, padding: "12px 16px", marginBottom: 24, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <IC.MapPin />
+        <span style={{ fontSize: 13, color: C.text, flex: 1 }}>
+          Comparte este enlace con los operadores:
+        </span>
+        <code style={{ fontSize: 12, backgroundColor: "white", padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.border}`, color: C.blue, userSelect: "all" }}>
+          {checkinUrl}
+        </code>
+        <button
+          onClick={() => navigator.clipboard?.writeText(checkinUrl)}
+          style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.blue}`, backgroundColor: "transparent", color: C.blue, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+        >
+          Copiar
+        </button>
+      </div>
+
+      {/* Filtros */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, backgroundColor: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px" }}>
+          <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 600 }}>Desde</span>
+          <input type="date" value={filtroDesde} onChange={e => setFiltroDesde(e.target.value)} style={{ border: "none", outline: "none", fontSize: 13, color: C.text, backgroundColor: "transparent" }} />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, backgroundColor: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px" }}>
+          <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 600 }}>Hasta</span>
+          <input type="date" value={filtroHasta} onChange={e => setFiltroHasta(e.target.value)} style={{ border: "none", outline: "none", fontSize: 13, color: C.text, backgroundColor: "transparent" }} />
+        </div>
+        <select value={filtroProv} onChange={e => setFiltroProv(e.target.value)} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, backgroundColor: C.white, cursor: "pointer" }}>
+          <option value="Todos">Todos los proveedores</option>
+          {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <button onClick={loadData} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, backgroundColor: C.white, color: C.textMuted, fontSize: 13, cursor: "pointer" }}>↻ Actualizar</button>
+      </div>
+
+      {/* Stat cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14, marginBottom: 24 }}>
+        {[
+          { label: "Total check-ins", value: totalHoy, color: C.accent, bg: C.accentLight },
+          { label: "Última Milla", value: porOperacion["Última Milla"] || 0, color: C.accent, bg: C.accentLight },
+          { label: "CrossDock", value: porOperacion["CrossDock"] || 0, color: C.blue, bg: C.blueBg },
+          { label: "Logística Inversa", value: porOperacion["Logística Inversa"] || 0, color: C.purple, bg: C.purpleBg },
+        ].map(s => (
+          <div key={s.label} style={{ backgroundColor: C.white, borderRadius: 10, padding: "16px 18px", border: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>{s.label}</div>
+            <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabla */}
+      <div style={{ backgroundColor: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Registros</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>{filtrados.length} registros</div>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando...</div>
+        ) : filtrados.length === 0 ? (
+          <div style={{ padding: 48, textAlign: "center", color: C.textMuted }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Sin registros en este periodo</div>
+            <div style={{ fontSize: 13 }}>Los operadores deben usar el enlace de check-in al llegar</div>
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ backgroundColor: C.bg }}>
+                  {["Fecha", "Hora", "Operador", "Proveedor", "Unidad", "Operación"].map(h => (
+                    <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.07em", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map((r, i) => (
+                  <tr key={r.id} style={{ borderTop: `1px solid ${C.border}`, backgroundColor: i % 2 === 0 ? "transparent" : C.bg }}>
+                    <td style={{ padding: "11px 16px", color: C.textMuted, whiteSpace: "nowrap" }}>{r.fecha}</td>
+                    <td style={{ padding: "11px 16px", color: C.textMuted, whiteSpace: "nowrap" }}>{formatTime(r.timestamp)}</td>
+                    <td style={{ padding: "11px 16px", fontWeight: 600, color: C.text }}>{r.nombre_operador}</td>
+                    <td style={{ padding: "11px 16px", color: C.text }}>{r.proveedor}</td>
+                    <td style={{ padding: "11px 16px", color: C.text }}>{r.tipo_unidad}</td>
+                    <td style={{ padding: "11px 16px" }}>
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20,
+                        backgroundColor: opBgs[r.tipo_operacion] || C.bg,
+                        color: opColors[r.tipo_operacion] || C.textMuted,
+                      }}>
+                        {r.tipo_operacion}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ============ MAIN APP ============
 
 export default function T1OpsFlotilla() {
@@ -1849,6 +2024,7 @@ export default function T1OpsFlotilla() {
       case "operadores": return <ModuleOperadores />;
       case "costos": return <ModuleCostos />;
       case "carriers": return <ModuleCarriers />;
+      case "asistencia": return <ModuleAsistencia />;
       case "t1envios": return <ModuleOpsType tipo="T1 Envíos" color={C.accent} />;
       case "warehouse": return <ModuleOpsType tipo="Warehouse" color={C.blue} />;
       case "halfmile": return <ModuleOpsType tipo="HalfMile" color={C.purple} />;
