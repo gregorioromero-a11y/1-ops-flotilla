@@ -2687,63 +2687,75 @@ function ModuleManifiesto() {
     const fecha = new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
     const hora = new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
     const totalPqtes = guiasList.reduce((s, g) => s + (parseInt(g.paquetes) || 1), 0);
+    const guiaRows = guiasList.map((g, i) => `<tr><td style="border:1px solid #000;padding:4px 8px;text-align:center;font-size:11px;">${i + 1}</td><td style="border:1px solid #000;padding:4px 8px;font-family:Courier New,monospace;font-size:11px;font-weight:700;">${g.numero}</td><td style="border:1px solid #000;padding:4px 8px;font-size:10px;">${g.destino || ""}</td></tr>`).join("");
+    const emptyRows = Math.max(0, 40 - guiasList.length);
+    const emptyRowsHtml = Array.from({length: emptyRows}, (_, i) => `<tr><td style="border:1px solid #000;padding:4px 8px;text-align:center;font-size:11px;color:#999;">${guiasList.length + i + 1}</td><td style="border:1px solid #000;padding:4px 8px;"></td><td style="border:1px solid #000;padding:4px 8px;"></td></tr>`).join("");
 
     const html = `
       <html><head><title>Manifiesto ${manId}</title>
       <style>
-        @page { size: letter; margin: 18mm 15mm; }
+        @page { size: letter; margin: 12mm 15mm; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #1a1a2e; font-size: 11px; }
-        .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #E63B2E; padding-bottom: 14px; margin-bottom: 16px; }
-        .logo { font-size: 28px; font-weight: 900; color: #E63B2E; letter-spacing: -1px; }
-        .logo span { color: #0C1425; font-size: 14px; font-weight: 600; letter-spacing: 2px; }
-        .man-id { font-size: 18px; font-weight: 800; color: #0C1425; text-align: right; }
-        .man-id small { display: block; font-size: 11px; color: #7C8495; font-weight: 500; }
-        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; margin-bottom: 16px; padding: 12px 16px; background: #F8F9FC; border-radius: 8px; border: 1px solid #E2E6EE; }
-        .info-grid .label { font-size: 9px; font-weight: 700; color: #7C8495; text-transform: uppercase; letter-spacing: 0.8px; }
-        .info-grid .value { font-size: 13px; font-weight: 600; color: #0C1425; margin-bottom: 6px; }
-        .section-title { font-size: 12px; font-weight: 700; color: #0C1425; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #E2E6EE; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-        th { background: #0C1425; color: white; padding: 8px 10px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; text-align: left; }
-        td { padding: 7px 10px; border-bottom: 1px solid #E2E6EE; font-size: 11px; }
-        tr:nth-child(even) { background: #FAFBFF; }
-        .guia-num { font-family: 'Courier New', monospace; font-weight: 700; font-size: 11px; }
-        .totals { display: flex; justify-content: flex-end; gap: 24px; padding: 12px 16px; background: #F0FDF4; border-radius: 8px; border: 1px solid #16A34A40; margin-bottom: 20px; }
-        .totals .item { text-align: center; }
-        .totals .num { font-size: 20px; font-weight: 800; color: #16A34A; }
-        .totals .lbl { font-size: 9px; color: #7C8495; font-weight: 600; text-transform: uppercase; }
-        .obs { padding: 10px 14px; background: #FEF9C3; border-radius: 6px; border: 1px solid #D9770640; font-size: 11px; margin-bottom: 20px; }
-        .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 40px; }
-        .sig-box { border-top: 2px solid #0C1425; padding-top: 8px; text-align: center; }
-        .sig-box .name { font-size: 12px; font-weight: 700; }
-        .sig-box .role { font-size: 9px; color: #7C8495; }
-        .footer { margin-top: 30px; text-align: center; font-size: 9px; color: #7C8495; border-top: 1px solid #E2E6EE; padding-top: 10px; }
+        body { font-family: Arial, Helvetica, sans-serif; color: #000; font-size: 12px; }
       </style></head><body>
-        <div class="header">
-          <div><div class="logo">T1 <span>ENVÍOS</span></div><div style="font-size:10px;color:#7C8495;margin-top:2px;">OPS Flotilla — Manifiesto de carga</div></div>
-          <div class="man-id">${manId}<small>Fecha: ${fecha} · ${hora}</small></div>
+        <div style="text-align:center;margin-bottom:16px;">
+          <div style="font-size:24px;font-weight:900;color:#E63B2E;letter-spacing:-0.5px;">T1 <span style="color:#0C1425;font-size:16px;font-weight:700;letter-spacing:2px;">ENVÍOS</span></div>
+          <div style="font-size:16px;font-weight:800;margin-top:6px;padding:6px 0;border-top:2px solid #000;border-bottom:2px solid #000;">MANIFIESTO DE SALIDA</div>
+          <div style="font-size:10px;color:#666;margin-top:3px;">${manId}</div>
         </div>
-        <div class="info-grid">
-          <div><div class="label">Operador</div><div class="value">${op.nombre}</div></div>
-          <div><div class="label">Proveedor / Carrier</div><div class="value">${op.proveedor || "—"}</div></div>
-          <div><div class="label">Tipo de unidad</div><div class="value">${op.tipo_unidad || "—"}</div></div>
-          <div><div class="label">Fecha de asistencia</div><div class="value">${op.fecha || "—"}</div></div>
-        </div>
-        <div class="totals">
-          <div class="item"><div class="num">${guiasList.length}</div><div class="lbl">Guías</div></div>
-          <div class="item"><div class="num">${totalPqtes}</div><div class="lbl">Paquetes</div></div>
-        </div>
-        ${obs ? `<div class="obs"><strong>Observaciones:</strong> ${obs}</div>` : ""}
-        <div class="section-title">Detalle de guías</div>
-        <table>
-          <thead><tr><th>#</th><th>No. Guía</th><th>Destino</th><th>Peso</th><th>Paquetes</th><th>Firma recibido</th></tr></thead>
-          <tbody>${guiasList.map((g, i) => `<tr><td>${i + 1}</td><td class="guia-num">${g.numero}</td><td>${g.destino || "—"}</td><td>${g.peso || "—"}</td><td>${g.paquetes || 1}</td><td></td></tr>`).join("")}</tbody>
+
+        <table style="width:100%;border-collapse:collapse;margin-bottom:10px;">
+          <tr>
+            <td style="padding:6px 0;font-size:12px;width:33%;"><b>Fecha:</b> ${fecha}</td>
+            <td style="padding:6px 0;font-size:12px;width:33%;"><b>Operador:</b> ${op.nombre}</td>
+            <td style="padding:6px 0;font-size:12px;width:33%;"><b>Compañía:</b> ${op.proveedor || "—"}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;font-size:12px;"><b>Ruta:</b> ${guiasList.length} guías</td>
+            <td style="padding:6px 0;font-size:12px;"><b>Unidad:</b> ${op.tipo_unidad || "—"}</td>
+            <td style="padding:6px 0;font-size:12px;"><b>Hora:</b> ${hora}</td>
+          </tr>
         </table>
-        <div class="signatures">
-          <div class="sig-box"><div class="name">${op.nombre}</div><div class="role">Operador — Recibe mercancía</div></div>
-          <div class="sig-box"><div class="name">Almacén T1 Envíos</div><div class="role">Responsable — Entrega mercancía</div></div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f0f0f0;border:1px solid #000;margin-bottom:10px;">
+          <span style="font-size:13px;font-weight:700;">Paquetes Recibidos: ${totalPqtes}</span>
+          <span style="font-size:13px;font-weight:700;">Total Guías: ${guiasList.length}</span>
         </div>
-        <div class="footer">Documento generado automáticamente por T1 Envíos OPS Flotilla · ${manId} · ${fecha}</div>
+
+        ${obs ? '<div style="padding:6px 12px;background:#FEF9C3;border:1px solid #D97706;margin-bottom:10px;font-size:11px;"><b>Obs:</b> ' + obs + '</div>' : ''}
+
+        <table style="width:100%;border-collapse:collapse;">
+          <thead>
+            <tr style="background:#0C1425;">
+              <th style="border:1px solid #000;padding:6px 8px;color:white;font-size:10px;text-transform:uppercase;width:40px;text-align:center;">N°</th>
+              <th style="border:1px solid #000;padding:6px 8px;color:white;font-size:10px;text-transform:uppercase;">GUÍAS</th>
+              <th style="border:1px solid #000;padding:6px 8px;color:white;font-size:10px;text-transform:uppercase;width:180px;">OBSERVACIONES</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${guiaRows}
+            ${emptyRowsHtml}
+          </tbody>
+        </table>
+
+        <div style="margin-top:30px;display:flex;justify-content:space-around;">
+          <div style="text-align:center;width:40%;">
+            <div style="border-top:2px solid #000;padding-top:8px;margin-top:40px;">
+              <div style="font-size:12px;font-weight:700;">${op.nombre}</div>
+              <div style="font-size:10px;color:#666;">Operador — Recibe mercancía</div>
+            </div>
+          </div>
+          <div style="text-align:center;width:40%;">
+            <div style="border-top:2px solid #000;padding-top:8px;margin-top:40px;">
+              <div style="font-size:12px;font-weight:700;">Almacén T1 Envíos</div>
+              <div style="font-size:10px;color:#666;">Responsable — Entrega mercancía</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:20px;text-align:center;font-size:8px;color:#999;border-top:1px solid #ddd;padding-top:8px;">
+          Documento generado por T1 Envíos OPS Flotilla · ${manId} · ${fecha}
+        </div>
       </body></html>
     `;
     const w = window.open("", "_blank", "width=800,height=1000");
