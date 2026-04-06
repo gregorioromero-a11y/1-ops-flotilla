@@ -87,6 +87,7 @@ const navSections = [
   ]},
   { label: "HERRAMIENTAS", items: [
     { id: "ruteo", label: "Ruteo / Clusters", icon: IC.Map, badge: "Nuevo" },
+    { id: "manifiesto", label: "Manifiesto", icon: IC.ClipboardCheck, badge: "Nuevo" },
   ]},
   { label: "SISTEMA", items: [
     { id: "config", label: "Configuración", icon: IC.Settings },
@@ -2574,6 +2575,401 @@ function ModuleOpsType({ tipo, color }) {
   );
 }
 
+// --- MANIFIESTO ---
+function ModuleManifiesto() {
+  const [operadores, setOperadores] = useState([]);
+  const [manifiestos, setManifiestos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedOp, setSelectedOp] = useState(null);
+  const [guias, setGuias] = useState([]);
+  const [showCreate, setShowCreate] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [observaciones, setObservaciones] = useState("");
+  const [searchMan, setSearchMan] = useState("");
+  const printRef = useRef(null);
+
+  useEffect(() => { loadData(); }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    const [{ data: asiData }, { data: manData }] = await Promise.all([
+      supabase.from("asistencia").select("*").order("timestamp", { ascending: false }),
+      supabase.from("manifiestos").select("*").order("created_at", { ascending: false }),
+    ]);
+    // Unique operators from asistencia
+    const unique = {};
+    (asiData || []).forEach(a => {
+      const key = (a.nombre_operador || "").trim().toLowerCase();
+      if (key && key !== "registro manual" && !unique[key]) {
+        unique[key] = { nombre: a.nombre_operador, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, fecha: a.fecha, id: a.id };
+      }
+    });
+    setOperadores(Object.values(unique).sort((a, b) => a.nombre.localeCompare(b.nombre)));
+    setManifiestos(manData || []);
+    setLoading(false);
+  };
+
+  const generateId = () => {
+    const digits = Math.floor(Math.random() * 9000000000 + 1000000000);
+    return "MAN-" + digits;
+  };
+
+  const handleGuiasFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setMsg("");
+    try {
+      let rows = [];
+      if (file.name.toLowerCase().endsWith(".csv")) {
+        const text = await file.text();
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+        rows = lines.slice(1).map(l => {
+          const v = l.split(",").map(x => x.trim().replace(/^"|"$/g, ""));
+          const o = {};
+          headers.forEach((h, i) => o[h] = v[i] || "");
+          return o;
+        });
+      } else {
+        const XLSX = await import("xlsx");
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+        rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+      }
+      if (rows.length === 0) { setMsg("El archivo está vacío."); setUploading(false); return; }
+      // Detect guia column
+      const sample = rows[0];
+      const guiaCol = Object.keys(sample).find(k => /guia|guía|tracking|no\.?\s*gu[ií]a|n[uú]m/i.test(k)) || Object.keys(sample)[0];
+      const parsed = rows.map((r, i) => ({
+        numero: String(r[guiaCol] || "").trim(),
+        destino: r["Destino"] || r["destino"] || r["Dirección"] || r["direccion"] || "",
+        peso: r["Peso"] || r["peso"] || "",
+        paquetes: r["Paquetes"] || r["paquetes"] || r["Cantidad"] || r["cantidad"] || "1",
+      })).filter(g => g.numero);
+      setGuias(parsed);
+      setMsg(`${parsed.length} guías cargadas desde columna "${guiaCol}"`);
+    } catch (err) {
+      setMsg("Error: " + err.message);
+    }
+    setUploading(false);
+  };
+
+  const removeGuia = (idx) => setGuias(guias.filter((_, i) => i !== idx));
+
+  const saveManifiesto = async () => {
+    if (!selectedOp || guias.length === 0) return;
+    const manId = generateId();
+    const now = new Date().toISOString();
+    const { error } = await supabase.from("manifiestos").insert({
+      id_manifiesto: manId,
+      operador: selectedOp.nombre,
+      proveedor: selectedOp.proveedor,
+      tipo_unidad: selectedOp.tipo_unidad,
+      fecha: now.substring(0, 10),
+      total_guias: guias.length,
+      guias: JSON.stringify(guias),
+      observaciones,
+      created_at: now,
+    });
+    if (error) { setMsg("Error al guardar: " + error.message); return; }
+    setMsg("Manifiesto " + manId + " guardado correctamente.");
+    generatePDF(manId, selectedOp, guias, observaciones);
+    setGuias([]);
+    setSelectedOp(null);
+    setObservaciones("");
+    setShowCreate(false);
+    loadData();
+  };
+
+  const generatePDF = (manId, op, guiasList, obs) => {
+    const fecha = new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
+    const hora = new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+    const totalPqtes = guiasList.reduce((s, g) => s + (parseInt(g.paquetes) || 1), 0);
+
+    const html = `
+      <html><head><title>Manifiesto ${manId}</title>
+      <style>
+        @page { size: letter; margin: 18mm 15mm; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #1a1a2e; font-size: 11px; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #E63B2E; padding-bottom: 14px; margin-bottom: 16px; }
+        .logo { font-size: 28px; font-weight: 900; color: #E63B2E; letter-spacing: -1px; }
+        .logo span { color: #0C1425; font-size: 14px; font-weight: 600; letter-spacing: 2px; }
+        .man-id { font-size: 18px; font-weight: 800; color: #0C1425; text-align: right; }
+        .man-id small { display: block; font-size: 11px; color: #7C8495; font-weight: 500; }
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; margin-bottom: 16px; padding: 12px 16px; background: #F8F9FC; border-radius: 8px; border: 1px solid #E2E6EE; }
+        .info-grid .label { font-size: 9px; font-weight: 700; color: #7C8495; text-transform: uppercase; letter-spacing: 0.8px; }
+        .info-grid .value { font-size: 13px; font-weight: 600; color: #0C1425; margin-bottom: 6px; }
+        .section-title { font-size: 12px; font-weight: 700; color: #0C1425; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #E2E6EE; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+        th { background: #0C1425; color: white; padding: 8px 10px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; text-align: left; }
+        td { padding: 7px 10px; border-bottom: 1px solid #E2E6EE; font-size: 11px; }
+        tr:nth-child(even) { background: #FAFBFF; }
+        .guia-num { font-family: 'Courier New', monospace; font-weight: 700; font-size: 11px; }
+        .totals { display: flex; justify-content: flex-end; gap: 24px; padding: 12px 16px; background: #F0FDF4; border-radius: 8px; border: 1px solid #16A34A40; margin-bottom: 20px; }
+        .totals .item { text-align: center; }
+        .totals .num { font-size: 20px; font-weight: 800; color: #16A34A; }
+        .totals .lbl { font-size: 9px; color: #7C8495; font-weight: 600; text-transform: uppercase; }
+        .obs { padding: 10px 14px; background: #FEF9C3; border-radius: 6px; border: 1px solid #D9770640; font-size: 11px; margin-bottom: 20px; }
+        .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 40px; }
+        .sig-box { border-top: 2px solid #0C1425; padding-top: 8px; text-align: center; }
+        .sig-box .name { font-size: 12px; font-weight: 700; }
+        .sig-box .role { font-size: 9px; color: #7C8495; }
+        .footer { margin-top: 30px; text-align: center; font-size: 9px; color: #7C8495; border-top: 1px solid #E2E6EE; padding-top: 10px; }
+      </style></head><body>
+        <div class="header">
+          <div><div class="logo">T1 <span>ENVÍOS</span></div><div style="font-size:10px;color:#7C8495;margin-top:2px;">OPS Flotilla — Manifiesto de carga</div></div>
+          <div class="man-id">${manId}<small>Fecha: ${fecha} · ${hora}</small></div>
+        </div>
+        <div class="info-grid">
+          <div><div class="label">Operador</div><div class="value">${op.nombre}</div></div>
+          <div><div class="label">Proveedor / Carrier</div><div class="value">${op.proveedor || "—"}</div></div>
+          <div><div class="label">Tipo de unidad</div><div class="value">${op.tipo_unidad || "—"}</div></div>
+          <div><div class="label">Fecha de asistencia</div><div class="value">${op.fecha || "—"}</div></div>
+        </div>
+        <div class="totals">
+          <div class="item"><div class="num">${guiasList.length}</div><div class="lbl">Guías</div></div>
+          <div class="item"><div class="num">${totalPqtes}</div><div class="lbl">Paquetes</div></div>
+        </div>
+        ${obs ? `<div class="obs"><strong>Observaciones:</strong> ${obs}</div>` : ""}
+        <div class="section-title">Detalle de guías</div>
+        <table>
+          <thead><tr><th>#</th><th>No. Guía</th><th>Destino</th><th>Peso</th><th>Paquetes</th><th>Firma recibido</th></tr></thead>
+          <tbody>${guiasList.map((g, i) => `<tr><td>${i + 1}</td><td class="guia-num">${g.numero}</td><td>${g.destino || "—"}</td><td>${g.peso || "—"}</td><td>${g.paquetes || 1}</td><td></td></tr>`).join("")}</tbody>
+        </table>
+        <div class="signatures">
+          <div class="sig-box"><div class="name">${op.nombre}</div><div class="role">Operador — Recibe mercancía</div></div>
+          <div class="sig-box"><div class="name">Almacén T1 Envíos</div><div class="role">Responsable — Entrega mercancía</div></div>
+        </div>
+        <div class="footer">Documento generado automáticamente por T1 Envíos OPS Flotilla · ${manId} · ${fecha}</div>
+      </body></html>
+    `;
+    const w = window.open("", "_blank", "width=800,height=1000");
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => { w.print(); }, 400);
+  };
+
+  const redownload = (m) => {
+    const guiasList = JSON.parse(m.guias || "[]");
+    generatePDF(m.id_manifiesto, { nombre: m.operador, proveedor: m.proveedor, tipo_unidad: m.tipo_unidad, fecha: m.fecha }, guiasList, m.observaciones || "");
+  };
+
+  const deleteManifiesto = async (id) => {
+    if (!confirm("¿Eliminar este manifiesto?")) return;
+    await supabase.from("manifiestos").delete().eq("id", id);
+    loadData();
+  };
+
+  const filteredMan = manifiestos.filter(m => {
+    if (!searchMan) return true;
+    const s = searchMan.toLowerCase();
+    return (m.id_manifiesto || "").toLowerCase().includes(s) || (m.operador || "").toLowerCase().includes(s) || (m.proveedor || "").toLowerCase().includes(s);
+  });
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Manifiesto</h1>
+          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Genera manifiestos de carga para operadores registrados en asistencia</p>
+        </div>
+        <button onClick={() => { setShowCreate(!showCreate); setGuias([]); setSelectedOp(null); setMsg(""); setObservaciones(""); }} style={{
+          padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showCreate ? C.textMuted : C.accent,
+          color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+        }}>
+          {showCreate ? <><IC.X /> Cancelar</> : <><IC.Plus /> Nuevo manifiesto</>}
+        </button>
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+        <StatCard label="Manifiestos generados" value={manifiestos.length.toString()} icon={<IC.ClipboardCheck />} color={C.blue} />
+        <StatCard label="Operadores en asistencia" value={operadores.length.toString()} icon={<IC.Users />} color={C.green} />
+        <StatCard label="Total guías despachadas" value={manifiestos.reduce((s, m) => s + (m.total_guias || 0), 0).toLocaleString()} icon={<IC.Package />} color={C.accent} />
+        <StatCard label="Hoy" value={manifiestos.filter(m => (m.fecha || "").substring(0, 10) === new Date().toISOString().substring(0, 10)).length.toString()} subvalue="manifiestos hoy" icon={<IC.Clock />} color={C.purple} />
+      </div>
+
+      {/* Create form */}
+      {showCreate && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>Nuevo manifiesto de carga</div>
+
+          {/* Step 1: Select operator */}
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 1 — Seleccionar operador (registrado en asistencia)</div>
+            {operadores.length === 0 ? (
+              <div style={{ padding: "16px", backgroundColor: C.yellowBg, borderRadius: 8, fontSize: 13, color: C.yellow, fontWeight: 600 }}>
+                No hay operadores registrados en asistencia. Primero registra operadores en el módulo "Registro Diario".
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10 }}>
+                {operadores.map((op, i) => {
+                  const isSel = selectedOp && selectedOp.nombre === op.nombre;
+                  return (
+                    <button key={i} onClick={() => setSelectedOp(op)} style={{
+                      padding: "12px 16px", borderRadius: 10, border: isSel ? "2px solid " + C.accent : "1px solid " + C.border,
+                      backgroundColor: isSel ? C.accentLight : C.white, cursor: "pointer", textAlign: "left",
+                      transition: "all 0.15s",
+                    }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{op.nombre}</div>
+                      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{op.proveedor} · {op.tipo_unidad}</div>
+                      <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>Asistencia: {op.fecha}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Step 2: Upload guías */}
+          {selectedOp && (
+            <div style={{ marginBottom: 18, borderTop: "1px solid " + C.border, paddingTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 2 — Cargar archivo de guías</div>
+              <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 300px" }}>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo Excel o CSV con guías</label>
+                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleGuiasFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: "#FAFBFF" }} />
+                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>Columna de guía detectada automáticamente. Columnas opcionales: Destino, Peso, Paquetes.</div>
+                </div>
+              </div>
+              {uploading && <div style={{ marginTop: 8, fontSize: 13, color: C.blue, fontWeight: 600 }}>Procesando...</div>}
+              {msg && <div style={{ marginTop: 8, fontSize: 13, fontWeight: 600, color: msg.startsWith("Error") ? C.red : C.green }}>{msg}</div>}
+            </div>
+          )}
+
+          {/* Guías preview table */}
+          {guias.length > 0 && (
+            <div style={{ marginBottom: 18, borderTop: "1px solid " + C.border, paddingTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 3 — Revisar guías ({guias.length})</div>
+              <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid " + C.border, borderRadius: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid " + C.border, backgroundColor: "#FAFBFF" }}>
+                      {["#", "No. Guía", "Destino", "Peso", "Paquetes", ""].map(h => (
+                        <th key={h} style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {guias.map((g, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
+                        <td style={{ padding: "6px 12px", fontSize: 12, color: C.textMuted }}>{i + 1}</td>
+                        <td style={{ padding: "6px 12px", fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: C.text }}>{g.numero}</td>
+                        <td style={{ padding: "6px 12px", fontSize: 12, color: C.textMuted }}>{g.destino || "—"}</td>
+                        <td style={{ padding: "6px 12px", fontSize: 12, color: C.textMuted }}>{g.peso || "—"}</td>
+                        <td style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600 }}>{g.paquetes || 1}</td>
+                        <td style={{ padding: "6px 12px" }}>
+                          <button onClick={() => removeGuia(i)} style={{ padding: "2px 6px", borderRadius: 4, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red, fontSize: 10 }}><IC.X /></button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Observaciones */}
+              <div style={{ marginTop: 14 }}>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Observaciones (opcional)</label>
+                <textarea value={observaciones} onChange={e => setObservaciones(e.target.value)} placeholder="Notas adicionales para el manifiesto..." rows={2} style={{ width: "100%", padding: "9px 12px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", resize: "vertical" }} />
+              </div>
+
+              {/* Summary + save */}
+              <div style={{ marginTop: 14, padding: "14px 18px", borderRadius: 8, backgroundColor: "#F0FDF4", border: "1px solid " + C.green + "40", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Operador: <strong>{selectedOp.nombre}</strong> · {selectedOp.proveedor}</div>
+                  <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{guias.length} guías · {guias.reduce((s, g) => s + (parseInt(g.paquetes) || 1), 0)} paquetes totales</div>
+                </div>
+                <button onClick={saveManifiesto} style={{
+                  padding: "10px 28px", borderRadius: 8, border: "none", backgroundColor: C.green,
+                  color: "white", fontSize: 14, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
+                }}>
+                  <IC.Download /> Generar manifiesto y PDF
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Search */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 14px", borderRadius: 8, backgroundColor: C.white, border: "1px solid " + C.border, flex: "0 1 340px" }}>
+          <IC.Search />
+          <input placeholder="Buscar por ID, operador o proveedor..." value={searchMan} onChange={e => setSearchMan(e.target.value)} style={{ border: "none", outline: "none", backgroundColor: "transparent", fontSize: 13, width: "100%", color: C.text }} />
+        </div>
+        <span style={{ fontSize: 12, color: C.textMuted }}>{filteredMan.length} manifiesto{filteredMan.length !== 1 ? "s" : ""}</span>
+      </div>
+
+      {/* Manifiestos table */}
+      <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+        {loading ? (
+          <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando...</div>
+        ) : filteredMan.length === 0 ? (
+          <div style={{ padding: 48, textAlign: "center" }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>📋</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: C.textMuted }}>Sin manifiestos registrados</div>
+            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 4 }}>Usa "Nuevo manifiesto" para crear uno</div>
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid " + C.border }}>
+                {["ID Manifiesto", "Fecha", "Operador", "Proveedor", "Unidad", "Guías", "Acciones"].map(h => (
+                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredMan.map((m) => (
+                <tr key={m.id} style={{ borderBottom: "1px solid " + C.border }}
+                  onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
+                  onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
+                  <td style={{ padding: "12px 14px", fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{m.id_manifiesto}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{m.fecha}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: C.text }}>{m.operador}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{m.proveedor}</td>
+                  <td style={{ padding: "12px 14px" }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: C.blueBg, color: C.blue }}>{m.tipo_unidad}</span>
+                  </td>
+                  <td style={{ padding: "12px 14px", fontSize: 14, fontWeight: 700, color: C.text }}>{m.total_guias}</td>
+                  <td style={{ padding: "12px 14px", display: "flex", gap: 6 }}>
+                    <button onClick={() => redownload(m)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                      <IC.Download /> PDF
+                    </button>
+                    <button onClick={() => deleteManifiesto(m.id)} style={{ padding: "5px 8px", borderRadius: 6, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red }}><IC.Trash /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* SQL hint */}
+      {manifiestos.length === 0 && !loading && (
+        <div style={{ marginTop: 20, fontSize: 11, color: C.textMuted, backgroundColor: C.bg, padding: "14px 20px", borderRadius: 8, border: "1px solid " + C.border }}>
+          <b>SQL requerido en Supabase:</b>
+          <pre style={{ fontSize: 10, marginTop: 8, whiteSpace: "pre-wrap", color: C.text }}>{`CREATE TABLE manifiestos (
+  id bigserial PRIMARY KEY,
+  id_manifiesto text UNIQUE NOT NULL,
+  operador text,
+  proveedor text,
+  tipo_unidad text,
+  fecha text,
+  total_guias int,
+  guias jsonb,
+  observaciones text,
+  created_at timestamptz DEFAULT now()
+);`}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- PLACEHOLDER ---
 function ModulePlaceholder({ title, desc }) {
   return (
@@ -2609,6 +3005,7 @@ export default function T1OpsFlotilla() {
       case "halfmile": return <ModuleOpsType tipo="HalfMile" color={C.purple} />;
       case "sameday": return <ModuleOpsType tipo="Same Day" color={C.yellow} />;
       case "ruteo": return <ModuleRuteo />;
+      case "manifiesto": return <ModuleManifiesto />;
       case "config": return <ModulePlaceholder title="Configuración" desc="Ajustes del sistema" />;
       default: return <ModuleDashboard />;
     }
