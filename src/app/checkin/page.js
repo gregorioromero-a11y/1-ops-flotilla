@@ -25,7 +25,7 @@ const supabase = createClient(
 
 const WAREHOUSE_LAT = 19.398892731487283;
 const WAREHOUSE_LON = -99.11677448852873;
-const MAX_DISTANCE_METERS = 10;
+const MAX_DISTANCE_METERS = 500;
 
 const TIPOS_OPERACION = ["Última Milla", "CrossDock", "Logística Inversa"];
 
