@@ -2231,25 +2231,25 @@ function ModuleRuteo() {
     setLoading(true); setMsg(""); setPuntos([]); setAsignaciones([]); setRawRows([]); setFileInfo(null);
     try {
       let rows = [];
-      if (file.name.toLowerCase().endsWith(".csv")) {
-        const text = await file.text();
-        const lines = text.split(/\r?\n/).filter(l => l.trim());
-        const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
-        rows = lines.slice(1).map(l => { const v = l.split(",").map(x => x.trim().replace(/^"|"$/g, "")); const o = {}; headers.forEach((h, i) => o[h] = v[i] || ""); return o; });
-      } else {
-        const XLSX = await import("xlsx");
-        const buf = await file.arrayBuffer();
-        const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
-        rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
-      }
+      // Use XLSX for both CSV and Excel for robust parsing
+      const XLSX = await import("xlsx");
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+      rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
       const sample = rows[0] || {};
-      const latK = Object.keys(sample).find(k => /latit/i.test(k)) || "Latitud";
-      const lngK = Object.keys(sample).find(k => /longit|^lng$/i.test(k)) || "Longitud";
-      const guiaK = Object.keys(sample).find(k => /^tracking/i.test(k))
-        || Object.keys(sample).find(k => /guia|guía|n[uú]m.*guia|no\.?\s*gu[ií]a|guide/i.test(k)) || "";
+      const keys = Object.keys(sample);
+      const latK = keys.find(k => /^lat$/i.test(k.trim())) || keys.find(k => /latit/i.test(k)) || "Latitud";
+      const lngK = keys.find(k => /^(lng|lon)$/i.test(k.trim())) || keys.find(k => /longit|^lng$|^lon$/i.test(k)) || "Longitud";
+      const guiaK = keys.find(k => /tracking/i.test(k))
+        || keys.find(k => /guia|guía|n[uú]m.*guia|no\.?\s*gu[ií]a|guide/i.test(k)) || "";
       setGuiaKey(guiaK);
-      const pts = rows.map((r, i) => ({ ...r, lat: parseFloat(r[latK]) || 0, lng: parseFloat(r[lngK]) || 0, _i: i })).filter(p => p.lat !== 0 && p.lng !== 0);
-      if (!pts.length) { setMsg("Sin coordenadas válidas. Verifica que el archivo tenga columnas 'Latitud' y 'Longitud'."); setLoading(false); return; }
+      const pts = rows.map((r, i) => {
+        const rawLat = r[latK]; const rawLng = r[lngK];
+        const lat = parseFloat(String(rawLat).replace(",", ".")) || 0;
+        const lng = parseFloat(String(rawLng).replace(",", ".")) || 0;
+        return { ...r, lat, lng, _i: i };
+      }).filter(p => p.lat !== 0 && p.lng !== 0);
+      if (!pts.length) { setMsg("Sin coordenadas válidas. Asegúrate de que el archivo tenga columnas de Latitud y Longitud (ej: lat, Latitud, latitude, lng, Longitud, lon)."); setLoading(false); return; }
       setRawRows(pts);
       setFileInfo({ count: pts.length, name: file.name });
       setMsg("");
