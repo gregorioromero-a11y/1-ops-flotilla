@@ -2929,7 +2929,7 @@ function ModuleManifiesto() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
-                {["ID Manifiesto", "Fecha", "Operador", "Proveedor", "Unidad", "Guías", "Acciones"].map(h => (
+                {["ID Manifiesto", "Fecha", "Operador", "Proveedor", "Unidad", "Guías", "Notas", "Acciones"].map(h => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                 ))}
               </tr>
@@ -2939,12 +2939,7 @@ function ModuleManifiesto() {
                 <tr key={m.id} style={{ borderBottom: "1px solid " + C.border }}
                   onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
                   onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
-                  <td style={{ padding: "12px 14px", fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>
-                    {m.id_manifiesto}
-                    {m.observaciones && m.observaciones.trim() !== "" && (
-                      <span title={m.observaciones} style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4, backgroundColor: "#FFF3E0", color: "#E65100", verticalAlign: "middle" }}>Con Notas</span>
-                    )}
-                  </td>
+                  <td style={{ padding: "12px 14px", fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{m.id_manifiesto}</td>
                   <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{m.fecha}</td>
                   <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: C.text }}>{m.operador}</td>
                   <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{m.proveedor}</td>
@@ -2952,6 +2947,13 @@ function ModuleManifiesto() {
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: C.blueBg, color: C.blue }}>{m.tipo_unidad}</span>
                   </td>
                   <td style={{ padding: "12px 14px", fontSize: 14, fontWeight: 700, color: C.text }}>{m.total_guias}</td>
+                  <td style={{ padding: "12px 14px", textAlign: "center" }}>
+                    {m.observaciones && m.observaciones.trim() !== "" ? (
+                      <span title={m.observaciones} style={{ color: "#2E7D32", fontSize: 18, cursor: "help" }}>✓</span>
+                    ) : (
+                      <span style={{ color: C.textMuted, fontSize: 13 }}>—</span>
+                    )}
+                  </td>
                   <td style={{ padding: "12px 14px", display: "flex", gap: 6 }}>
                     <button onClick={() => redownload(m)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                       <IC.Download /> PDF
