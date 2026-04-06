@@ -2699,7 +2699,7 @@ function ModuleManifiesto() {
         body { font-family: Arial, Helvetica, sans-serif; color: #000; font-size: 12px; }
       </style></head><body>
         <div style="text-align:center;margin-bottom:16px;">
-          <div style="font-size:24px;font-weight:900;color:#E63B2E;letter-spacing:-0.5px;">T1 <span style="color:#0C1425;font-size:16px;font-weight:700;letter-spacing:2px;">ENVÍOS</span></div>
+          <img src="https://t1envios.com/assets/images/logos/T1Paginas.svg" alt="T1 Envíos" style="height:36px;" />
           <div style="font-size:16px;font-weight:800;margin-top:6px;padding:6px 0;border-top:2px solid #000;border-bottom:2px solid #000;">MANIFIESTO DE SALIDA</div>
           <div style="font-size:10px;color:#666;margin-top:3px;">${manId}</div>
         </div>
@@ -3038,14 +3038,8 @@ export default function T1OpsFlotilla() {
         transition: "width 0.2s", flexShrink: 0, overflow: "hidden",
       }}>
         {/* Logo */}
-        <div style={{ padding: sidebarCollapsed ? "16px 12px" : "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", gap: 10, minHeight: 58 }}>
-          {!sidebarCollapsed && (
-            <>
-              <span style={{ fontSize: 22, fontWeight: 900, color: C.accent, letterSpacing: "-0.03em" }}>T1</span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.8)", letterSpacing: "0.04em" }}>ENVÍOS</span>
-            </>
-          )}
-          {sidebarCollapsed && <span style={{ fontSize: 18, fontWeight: 900, color: C.accent, margin: "0 auto" }}>T1</span>}
+        <div style={{ padding: sidebarCollapsed ? "16px 12px" : "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center", minHeight: 58 }}>
+          <img src="https://t1envios.com/assets/images/logos/T1Paginas.svg" alt="T1 Envíos" style={{ height: sidebarCollapsed ? 24 : 32, objectFit: "contain" }} />
         </div>
 
         {/* Navigation */}

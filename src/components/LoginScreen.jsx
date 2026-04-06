@@ -30,8 +30,8 @@ export default function LoginScreen({ onLogin }) {
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: C.bg, fontFamily: "'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <form onSubmit={handleSubmit} style={{ width: 360, backgroundColor: C.white, borderRadius: 16, padding: 40, boxShadow: "0 8px 32px rgba(0,0,0,0.10)", textAlign: "center" }}>
-        <div style={{ fontSize: 36, fontWeight: 900, marginBottom: 4 }}>
-          <span style={{ color: C.accent }}>T1</span> <span style={{ color: C.text }}> ENVÍOS</span>
+        <div style={{ marginBottom: 4 }}>
+          <img src="https://t1envios.com/assets/images/logos/T1Paginas.svg" alt="T1 Envíos" style={{ height: 44, objectFit: "contain" }} />
         </div>
         <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 32 }}>OPS Flotilla — Iniciar sesión</div>
         {error && <div style={{ fontSize: 13, color: C.red, backgroundColor: C.redBg, padding: "8px 12px", borderRadius: 8, marginBottom: 16 }}>{error}</div>}
