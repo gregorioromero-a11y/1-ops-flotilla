@@ -2286,11 +2286,12 @@ function ModuleRuteo() {
 
   const exportCSV = () => {
     if (!puntos.length) return;
-    const extraK = Object.keys(puntos[0]).filter(k => !["lat", "lng", "_i"].includes(k));
-    const hdr = ["Ruta", "Cluster", "Latitud", "Longitud", ...extraK];
+    const extraK = Object.keys(puntos[0]).filter(k => !["lat", "lng", "_i"].includes(k) && k !== guiaKey);
+    const hdr = ["Tracking Number", "Cluster", "Latitud", "Longitud", ...extraK];
     const body = puntos.map((p, i) => {
       const cl = asignaciones[i] ?? 0;
-      return [`"Ruta ${cl + 1}"`, cl + 1, p.lat, p.lng, ...extraK.map(k => `"${(p[k] || "").toString().replace(/"/g, '""')}"`).join(",")].join(",");
+      const tracking = guiaKey ? `"${(p[guiaKey] || "").toString().replace(/"/g, '""')}"` : "";
+      return [tracking, cl + 1, p.lat, p.lng, ...extraK.map(k => `"${(p[k] || "").toString().replace(/"/g, '""')}"`)].join(",");
     });
     const csv = [hdr.join(","), ...body].join("\n");
     const a = document.createElement("a");
