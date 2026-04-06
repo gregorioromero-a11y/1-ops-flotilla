@@ -1990,6 +1990,9 @@ function ModuleRuteo() {
   const [mapMode, setMapMode] = useState("click");
   const [bulkCluster, setBulkCluster] = useState(0);
   const [guiaKey, setGuiaKey] = useState("");
+  const [rawRows, setRawRows] = useState([]);
+  const [fileInfo, setFileInfo] = useState(null);
+  const [mapMaximized, setMapMaximized] = useState(false);
   const mapDivRef = useRef(null);
   const canvasRef = useRef(null);
   const leafletMapRef = useRef(null);
@@ -1998,6 +2001,7 @@ function ModuleRuteo() {
   const selectedRef = useRef(new Set());
   const puntosRef = useRef([]);
   const mapModeRef = useRef("click");
+  const redrawTimerRef = useRef(null);
 
   const DEPOSITO_LAT = 19.398892731487283;
   const DEPOSITO_LNG = -99.11677448852873;
@@ -2137,11 +2141,21 @@ function ModuleRuteo() {
     setupLasso(map);
   }, [leafletLoaded, puntos]);
 
-  // Redraw markers when assignments, selection, or guía key changes
+  // Redraw markers when assignments, selection, or guía key changes (debounced for performance)
   useEffect(() => {
     if (!leafletMapRef.current || puntos.length === 0) return;
-    drawMarkers(leafletMapRef.current, puntos, asignaciones, numClusters, selectedIndices, guiaKey);
+    if (redrawTimerRef.current) clearTimeout(redrawTimerRef.current);
+    redrawTimerRef.current = setTimeout(() => {
+      if (leafletMapRef.current) drawMarkers(leafletMapRef.current, puntos, asignaciones, numClusters, selectedIndices, guiaKey);
+    }, 40);
   }, [asignaciones, selectedIndices, guiaKey]);
+
+  // Invalidate map size when maximized state changes
+  useEffect(() => {
+    if (leafletMapRef.current) {
+      setTimeout(() => leafletMapRef.current && leafletMapRef.current.invalidateSize(), 80);
+    }
+  }, [mapMaximized]);
 
   const drawMarkers = (map, pts, assigns, nk, selSet, gKey) => {
     const L = window.L;
@@ -2214,7 +2228,7 @@ function ModuleRuteo() {
   const handleFile = async e => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setLoading(true); setMsg(""); setPuntos([]); setAsignaciones([]);
+    setLoading(true); setMsg(""); setPuntos([]); setAsignaciones([]); setRawRows([]); setFileInfo(null);
     try {
       let rows = [];
       if (file.name.toLowerCase().endsWith(".csv")) {
@@ -2231,10 +2245,23 @@ function ModuleRuteo() {
       const sample = rows[0] || {};
       const latK = Object.keys(sample).find(k => /latit/i.test(k)) || "Latitud";
       const lngK = Object.keys(sample).find(k => /longit|^lng$/i.test(k)) || "Longitud";
-      const guiaK = Object.keys(sample).find(k => /guia|guía|tracking|n[uú]m.*guia|no\.?\s*gu[ií]a|guide|folio|orden|pedido/i.test(k)) || "";
+      const guiaK = Object.keys(sample).find(k => /^tracking/i.test(k))
+        || Object.keys(sample).find(k => /guia|guía|n[uú]m.*guia|no\.?\s*gu[ií]a|guide/i.test(k)) || "";
       setGuiaKey(guiaK);
       const pts = rows.map((r, i) => ({ ...r, lat: parseFloat(r[latK]) || 0, lng: parseFloat(r[lngK]) || 0, _i: i })).filter(p => p.lat !== 0 && p.lng !== 0);
       if (!pts.length) { setMsg("Sin coordenadas válidas. Verifica que el archivo tenga columnas 'Latitud' y 'Longitud'."); setLoading(false); return; }
+      setRawRows(pts);
+      setFileInfo({ count: pts.length, name: file.name });
+      setMsg("");
+    } catch (err) { setMsg("Error: " + err.message); }
+    setLoading(false);
+  };
+
+  const generateRoutes = async () => {
+    if (!rawRows.length) return;
+    setLoading(true); setMsg("");
+    try {
+      const pts = rawRows;
       const k = Math.min(numClusters, pts.length);
       const assigns = kMeans(pts, k);
       setPuntos(pts);
@@ -2290,28 +2317,47 @@ function ModuleRuteo() {
 
       {/* Controls panel */}
       <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 14, alignItems: "flex-end", marginBottom: 12 }}>
-          <div>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo de coordenadas (.csv o .xlsx)</label>
-            <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: "#FAFBFF" }} />
-            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>Columnas requeridas: <b>Latitud</b> y <b>Longitud</b>. El resto se conserva en la exportación.</div>
+        {/* Step 1: Upload */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 1 — Cargar archivo</div>
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 260px" }}>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo de coordenadas (.csv o .xlsx)</label>
+              <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: "#FAFBFF" }} />
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>Columnas requeridas: <b>Latitud</b> y <b>Longitud</b>. El resto se conserva.</div>
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.text, flexShrink: 0 }}>
+              <div style={{ marginBottom: 4 }}>Depósito fijo</div>
+              <div style={{ fontSize: 12, color: C.textMuted, padding: "9px 12px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: "#FAFBFF", whiteSpace: "nowrap" }}>★ 19.3989, -99.1168</div>
+            </div>
           </div>
-          <div>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Número de rutas (k)</label>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input type="number" min="2" value={numClusters} onChange={e => setNumClusters(Math.max(2, parseInt(e.target.value) || 2))} style={{ width: 80, padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 16, fontWeight: 700, boxSizing: "border-box", textAlign: "center" }} />
+          {fileInfo && (
+            <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 8, backgroundColor: C.blueBg, color: C.blue, fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+              <IC.Package />
+              <span><b>{fileInfo.count.toLocaleString()}</b> líneas con coordenadas válidas detectadas en <b>{fileInfo.name}</b>{guiaKey ? ` · Guía: columna "${guiaKey}"` : ""}</span>
+            </div>
+          )}
+        </div>
+        {/* Step 2: Set clusters + generate */}
+        {fileInfo && (
+          <div style={{ borderTop: "1px solid " + C.border, paddingTop: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 2 — Configurar y generar rutas</div>
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Número de rutas (k)</label>
+                <input type="number" min="2" value={numClusters} onChange={e => setNumClusters(Math.max(2, parseInt(e.target.value) || 2))} style={{ width: 90, padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 16, fontWeight: 700, boxSizing: "border-box", textAlign: "center" }} />
+              </div>
+              <button onClick={generateRoutes} disabled={loading} style={{ padding: "10px 24px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 14, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, whiteSpace: "nowrap" }}>
+                🗺️ Generar rutas
+              </button>
               {puntos.length > 0 && (
-                <button onClick={reCluster} style={{ padding: "9px 14px", borderRadius: 6, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>↻ Re-clusterizar</button>
+                <button onClick={reCluster} style={{ padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>↻ Re-clusterizar</button>
               )}
             </div>
           </div>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Depósito fijo</div>
-            <div style={{ fontSize: 12, color: C.textMuted, padding: "9px 12px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: "#FAFBFF", whiteSpace: "nowrap" }}>★ 19.3989, -99.1168</div>
-          </div>
-        </div>
-        {loading && <div style={{ fontSize: 13, color: C.blue, fontWeight: 600, padding: "8px 0" }}>⏳ Procesando archivo y generando clusters K-Means++...</div>}
-        {msg && <div style={{ fontSize: 13, fontWeight: 600, padding: "10px 14px", borderRadius: 8, backgroundColor: msg.startsWith("✓") ? C.greenBg : C.redBg, color: msg.startsWith("✓") ? C.green : C.red }}>{msg}</div>}
+        )}
+        {loading && <div style={{ fontSize: 13, color: C.blue, fontWeight: 600, padding: "10px 0 4px" }}>⏳ Procesando...</div>}
+        {msg && <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, padding: "10px 14px", borderRadius: 8, backgroundColor: msg.startsWith("✓") ? C.greenBg : C.redBg, color: msg.startsWith("✓") ? C.green : C.red }}>{msg}</div>}
       </div>
 
       {puntos.length > 0 && (
@@ -2337,9 +2383,9 @@ function ModuleRuteo() {
           </div>
 
           {/* Map */}
-          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 14 }}>
+          <div style={{ backgroundColor: C.white, borderRadius: mapMaximized ? 0 : 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: mapMaximized ? 0 : 14, ...(mapMaximized ? { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999 } : {}) }}>
             {/* Toolbar */}
-            <div style={{ padding: "10px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ padding: "10px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", backgroundColor: C.white }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Mapa interactivo</div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <button onClick={() => setMapMode("click")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + (mapMode === "click" ? C.accent : C.border), backgroundColor: mapMode === "click" ? C.accentLight : "transparent", color: mapMode === "click" ? C.accent : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
@@ -2353,6 +2399,9 @@ function ModuleRuteo() {
                     ✕ Limpiar ({selectedIndices.size})
                   </button>
                 )}
+                <button onClick={() => setMapMaximized(m => !m)} title={mapMaximized ? "Restaurar mapa" : "Maximizar mapa"} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: mapMaximized ? C.sidebar : "transparent", color: mapMaximized ? "white" : C.textMuted, fontSize: 16, cursor: "pointer", lineHeight: 1 }}>
+                  {mapMaximized ? "⊡" : "⛶"}
+                </button>
               </div>
             </div>
             {/* Bulk assignment bar */}
@@ -2370,8 +2419,8 @@ function ModuleRuteo() {
               </div>
             )}
             {/* Map + canvas overlay */}
-            <div style={{ position: "relative" }}>
-              <div ref={mapDivRef} style={{ height: 480, width: "100%" }} />
+            <div style={{ position: "relative", height: mapMaximized ? "calc(100vh - 90px)" : 480 }}>
+              <div ref={mapDivRef} style={{ height: "100%", width: "100%" }} />
               <canvas ref={canvasRef} style={{ position: "absolute", top: 0, left: 0, zIndex: 1000, pointerEvents: mapMode === "lasso" ? "all" : "none", cursor: mapMode === "lasso" ? "crosshair" : "default" }} />
             </div>
           </div>
@@ -2435,11 +2484,11 @@ function ModuleRuteo() {
         </>
       )}
 
-      {puntos.length === 0 && !loading && (
+      {puntos.length === 0 && !loading && !fileInfo && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 48, border: "1px solid " + C.border, textAlign: "center" }}>
           <div style={{ fontSize: 48, marginBottom: 16 }}>🗺️</div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 8 }}>Carga un archivo para generar rutas</div>
-          <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 20 }}>CSV o Excel con columnas <b>Latitud</b> y <b>Longitud</b>. El algoritmo K-Means++ asigna automáticamente cada punto a la ruta más cercana.</div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 8 }}>Carga un archivo para comenzar</div>
+          <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 20 }}>CSV o Excel con columnas <b>Latitud</b> y <b>Longitud</b>. Después de cargar el archivo, define el número de rutas y haz clic en <b>Generar rutas</b>.</div>
           <div style={{ fontSize: 11, color: C.textMuted, backgroundColor: C.bg, padding: "14px 20px", borderRadius: 8, display: "inline-block", textAlign: "left", maxWidth: 560 }}>
             <b>SQL requerido en Supabase:</b>
             <pre style={{ fontSize: 10, marginTop: 8, whiteSpace: "pre-wrap", color: C.text }}>{`CREATE TABLE ruteo_puntos (
