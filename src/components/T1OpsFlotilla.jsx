@@ -2939,7 +2939,12 @@ function ModuleManifiesto() {
                 <tr key={m.id} style={{ borderBottom: "1px solid " + C.border }}
                   onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
                   onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
-                  <td style={{ padding: "12px 14px", fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{m.id_manifiesto}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>
+                    {m.id_manifiesto}
+                    {m.observaciones && m.observaciones.trim() !== "" && (
+                      <span title={m.observaciones} style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4, backgroundColor: "#FFF3E0", color: "#E65100", verticalAlign: "middle" }}>Con Notas</span>
+                    )}
+                  </td>
                   <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{m.fecha}</td>
                   <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: C.text }}>{m.operador}</td>
                   <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{m.proveedor}</td>
