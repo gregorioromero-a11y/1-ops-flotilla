@@ -1185,14 +1185,13 @@ function ModuleOperadores() {
       const wb = XLSX.read(new Uint8Array(buffer), { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-      // Each operator = 5 rows: 1=Nombre, 2=Correo, 3=Tipo, 4=Ignorar, 5=Estatus
+      // Each row = 1 operator: Col A=Nombre, Col B=Correo, Col C=Estatus
       const ops = [];
-      for (let i = 0; i < rows.length; i += 5) {
+      for (let i = 0; i < rows.length; i++) {
         const nombre = String(rows[i]?.[0] || "").trim();
-        const correo = String(rows[i+1]?.[0] || "").trim();
-        const tipo = String(rows[i+2]?.[0] || "").trim();
-        const estatus = String(rows[i+4]?.[0] || "").trim();
-        if (nombre) ops.push({ nombre, correo, tipo, estatus });
+        const correo = String(rows[i]?.[1] || "").trim();
+        const estatus = String(rows[i]?.[2] || "").trim() || "ACTIVE";
+        if (nombre && !/^nombre/i.test(nombre)) ops.push({ nombre, correo, tipo: "Operador", estatus });
       }
       if (ops.length === 0) { setBulkMsg("No se encontraron operadores en el archivo."); return; }
       setBulkPreview(ops);
@@ -1206,14 +1205,14 @@ function ModuleOperadores() {
     setBulkMsg("");
     try {
       const text = await file.text();
-      const lines = text.split(/\r?\n/).map(l => l.trim());
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
       const ops = [];
-      for (let i = 0; i < lines.length; i += 5) {
-        const nombre = (lines[i]?.split(",")[0] || "").trim().replace(/^"|"$/g, "");
-        const correo = (lines[i+1]?.split(",")[0] || "").trim().replace(/^"|"$/g, "");
-        const tipo = (lines[i+2]?.split(",")[0] || "").trim().replace(/^"|"$/g, "");
-        const estatus = (lines[i+4]?.split(",")[0] || "").trim().replace(/^"|"$/g, "");
-        if (nombre) ops.push({ nombre, correo, tipo, estatus });
+      for (let i = 0; i < lines.length; i++) {
+        const cols = lines[i].split(",").map(x => x.trim().replace(/^"|"$/g, ""));
+        const nombre = cols[0] || "";
+        const correo = cols[1] || "";
+        const estatus = cols[2] || "ACTIVE";
+        if (nombre && !/^nombre/i.test(nombre)) ops.push({ nombre, correo, tipo: "Operador", estatus });
       }
       if (ops.length === 0) { setBulkMsg("No se encontraron operadores en el archivo."); return; }
       setBulkPreview(ops);
