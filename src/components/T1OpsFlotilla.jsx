@@ -2615,8 +2615,15 @@ function ModuleManifiesto() {
     const unique = {};
     (asiData || []).forEach(a => {
       const key = (a.nombre_operador || "").trim().toLowerCase();
-      if (key && key !== "registro manual" && !unique[key]) {
-        unique[key] = { nombre: a.nombre_operador, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, tipo_operacion: a.tipo_operacion || "Última Milla", fecha: a.fecha, id: a.id };
+      if (key && key !== "registro manual") {
+        if (!unique[key]) {
+          unique[key] = { nombre: a.nombre_operador, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, tipo_operacion: a.tipo_operacion || "Última Milla", fecha: a.fecha, id: a.id };
+        } else {
+          // Always keep the most recent data (query is desc by timestamp, so first hit is newest — but update if we find a newer fecha)
+          if ((a.fecha || "") > (unique[key].fecha || "")) {
+            unique[key] = { nombre: a.nombre_operador, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, tipo_operacion: a.tipo_operacion || "Última Milla", fecha: a.fecha, id: a.id };
+          }
+        }
       }
     });
     setOperadores(Object.values(unique).sort((a, b) => a.nombre.localeCompare(b.nombre)));
