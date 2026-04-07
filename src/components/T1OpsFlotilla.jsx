@@ -1133,6 +1133,7 @@ function ModuleOperadores() {
   const [bulkPreview, setBulkPreview] = useState([]);
   const [bulkMsg, setBulkMsg] = useState("");
   const [importing, setImporting] = useState(false);
+  const [filtroProv, setFiltroProv] = useState("Todos");
 
   const LICENCIAS = ["A", "B", "C", "D", "E"];
 
@@ -1254,6 +1255,8 @@ function ModuleOperadores() {
   };
 
   const activos = operadores.filter(o => o.activo).length;
+  const proveedoresOps = [...new Set(operadores.map(o => o.proveedor).filter(Boolean))].sort();
+  const filteredOps = filtroProv === "Todos" ? operadores : operadores.filter(o => o.proveedor === filtroProv);
 
   return (
     <div>
@@ -1393,6 +1396,17 @@ function ModuleOperadores() {
         </div>
       )}
 
+      {/* Filtro por proveedor */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted }}>Filtrar por proveedor:</span>
+        <select value={filtroProv} onChange={e => setFiltroProv(e.target.value)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color: C.text, cursor: "pointer" }}>
+          <option value="Todos">Todos los proveedores</option>
+          {proveedoresOps.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        {filtroProv !== "Todos" && <button onClick={() => setFiltroProv("Todos")} style={{ padding: "5px 10px", borderRadius: 6, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Limpiar</button>}
+        <span style={{ fontSize: 12, color: C.textMuted, marginLeft: "auto" }}>{filteredOps.length} operador{filteredOps.length !== 1 ? "es" : ""}</span>
+      </div>
+
       <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
         {loading ? (
           <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando...</div>
@@ -1406,13 +1420,13 @@ function ModuleOperadores() {
               </tr>
             </thead>
             <tbody>
-              {operadores.length === 0 ? (
+              {filteredOps.length === 0 ? (
                 <tr><td colSpan={5} style={{ padding: 48, textAlign: "center", color: C.textMuted }}>
                   <div style={{ fontSize: 36, marginBottom: 10 }}>👤</div>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>Sin operadores registrados</div>
                   <div style={{ fontSize: 12, marginTop: 4 }}>Agrega operadores para usarlos en el check-in</div>
                 </td></tr>
-              ) : operadores.map((o) => (
+              ) : filteredOps.map((o) => (
                 <tr key={o.id} style={{ borderBottom: "1px solid " + C.border }}
                   onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
                   onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
