@@ -2616,7 +2616,7 @@ function ModuleManifiesto() {
     (asiData || []).forEach(a => {
       const key = (a.nombre_operador || "").trim().toLowerCase();
       if (key && key !== "registro manual" && !unique[key]) {
-        unique[key] = { nombre: a.nombre_operador, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, fecha: a.fecha, id: a.id };
+        unique[key] = { nombre: a.nombre_operador, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, tipo_operacion: a.tipo_operacion || "Última Milla", fecha: a.fecha, id: a.id };
       }
     });
     setOperadores(Object.values(unique).sort((a, b) => a.nombre.localeCompare(b.nombre)));
@@ -2681,6 +2681,7 @@ function ModuleManifiesto() {
       operador: selectedOp.nombre,
       proveedor: selectedOp.proveedor,
       tipo_unidad: selectedOp.tipo_unidad,
+      tipo_operacion: selectedOp.tipo_operacion || "Última Milla",
       fecha: now.substring(0, 10),
       total_guias: guias.length,
       guias: JSON.stringify(guias),
@@ -2689,7 +2690,7 @@ function ModuleManifiesto() {
     });
     if (error) { setMsg("Error al guardar: " + error.message); return; }
     setMsg("Manifiesto " + manId + " guardado correctamente.");
-    generatePDF(manId, selectedOp, guias, observaciones);
+    generatePDF(manId, selectedOp, guias, observaciones, selectedOp.tipo_operacion);
     setGuias([]);
     setSelectedOp(null);
     setObservaciones("");
@@ -2697,7 +2698,8 @@ function ModuleManifiesto() {
     loadData();
   };
 
-  const generatePDF = (manId, op, guiasList, obs) => {
+  const generatePDF = (manId, op, guiasList, obs, tipoOp) => {
+    const tipoOperacion = tipoOp || op.tipo_operacion || "Última Milla";
     const fecha = new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
     const hora = new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
     const totalPqtes = guiasList.reduce((s, g) => s + (parseInt(g.paquetes) || 1), 0);
@@ -2714,7 +2716,7 @@ function ModuleManifiesto() {
       </style></head><body>
         <div style="text-align:center;margin-bottom:16px;">
           <img src="https://t1envios.com/assets/images/logos/T1Paginas.svg" alt="T1 Envíos" style="height:36px;" />
-          <div style="font-size:16px;font-weight:800;margin-top:6px;padding:6px 0;border-top:2px solid #000;border-bottom:2px solid #000;">MANIFIESTO DE SALIDA</div>
+          <div style="font-size:16px;font-weight:800;margin-top:6px;padding:6px 0;border-top:2px solid #000;border-bottom:2px solid #000;">MANIFIESTO — ${tipoOperacion.toUpperCase()}</div>
           <div style="font-size:10px;color:#666;margin-top:3px;">${manId}</div>
         </div>
 
@@ -2780,7 +2782,7 @@ function ModuleManifiesto() {
 
   const redownload = (m) => {
     const guiasList = JSON.parse(m.guias || "[]");
-    generatePDF(m.id_manifiesto, { nombre: m.operador, proveedor: m.proveedor, tipo_unidad: m.tipo_unidad, fecha: m.fecha }, guiasList, m.observaciones || "");
+    generatePDF(m.id_manifiesto, { nombre: m.operador, proveedor: m.proveedor, tipo_unidad: m.tipo_unidad, fecha: m.fecha }, guiasList, m.observaciones || "", m.tipo_operacion);
   };
 
   const deleteManifiesto = async (id) => {
@@ -2841,7 +2843,7 @@ function ModuleManifiesto() {
                       transition: "all 0.15s",
                     }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{op.nombre}</div>
-                      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{op.proveedor} · {op.tipo_unidad}</div>
+                      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{op.proveedor} · {op.tipo_unidad} · {op.tipo_operacion}</div>
                       <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>Asistencia: {op.fecha}</div>
                     </button>
                   );
@@ -2943,7 +2945,7 @@ function ModuleManifiesto() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
-                {["ID Manifiesto", "Fecha", "Operador", "Proveedor", "Unidad", "Guías", "Notas", "Acciones"].map(h => (
+                {["ID Manifiesto", "Fecha", "Operador", "Proveedor", "Unidad", "Tipo", "Guías", "Notas", "Acciones"].map(h => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                 ))}
               </tr>
@@ -2959,6 +2961,14 @@ function ModuleManifiesto() {
                   <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{m.proveedor}</td>
                   <td style={{ padding: "12px 14px" }}>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: C.blueBg, color: C.blue }}>{m.tipo_unidad}</span>
+                  </td>
+                  <td style={{ padding: "12px 14px" }}>
+                    {(() => {
+                      const tp = m.tipo_operacion || "Última Milla";
+                      const tpMap = { "Última Milla": { bg: C.accentLight, c: C.accent }, "CrossDock": { bg: C.blueBg, c: C.blue }, "Logística Inversa": { bg: C.purpleBg, c: C.purple } };
+                      const tc = tpMap[tp] || { bg: "#F3F4F6", c: C.textMuted };
+                      return <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, backgroundColor: tc.bg, color: tc.c }}>{tp}</span>;
+                    })()}
                   </td>
                   <td style={{ padding: "12px 14px", fontSize: 14, fontWeight: 700, color: C.text }}>{m.total_guias}</td>
                   <td style={{ padding: "12px 14px", textAlign: "center" }}>
