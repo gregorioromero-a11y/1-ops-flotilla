@@ -2781,31 +2781,26 @@ function ModuleManifiesto() {
         </div>
       </body></html>
     `;
-    // Auto-download PDF using html2pdf.js
-    const loadHtml2Pdf = () => new Promise((resolve) => {
-      if (window.html2pdf) return resolve(window.html2pdf);
-      const s = document.createElement("script");
-      s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.2/html2pdf.bundle.min.js";
-      s.onload = () => resolve(window.html2pdf);
-      document.body.appendChild(s);
-    });
-    const container = document.createElement("div");
-    container.innerHTML = html;
-    container.style.position = "fixed";
-    container.style.left = "-9999px";
-    container.style.width = "816px";
-    document.body.appendChild(container);
-    loadHtml2Pdf().then(html2pdf => {
-      html2pdf().set({
-        margin: [10, 12, 10, 12],
-        filename: `${manId}.pdf`,
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true },
-        jsPDF: { unit: "mm", format: "letter", orientation: "portrait" },
-      }).from(container).save().then(() => {
-        document.body.removeChild(container);
-      });
-    });
+    // Open in new window, load html2pdf there, auto-download then close
+    const w = window.open("", "_blank", "width=800,height=1000");
+    w.document.write(html);
+    w.document.close();
+    const script = w.document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.2/html2pdf.bundle.min.js";
+    script.onload = () => {
+      setTimeout(() => {
+        w.html2pdf().set({
+          margin: [10, 12, 10, 12],
+          filename: manId + ".pdf",
+          image: { type: "jpeg", quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true },
+          jsPDF: { unit: "mm", format: "letter", orientation: "portrait" },
+        }).from(w.document.body).save().then(() => {
+          setTimeout(() => w.close(), 500);
+        });
+      }, 800);
+    };
+    w.document.head.appendChild(script);
   };
 
   const redownload = (m) => {
