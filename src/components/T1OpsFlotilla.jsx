@@ -2007,6 +2007,9 @@ function ModuleRuteo() {
   const [rawRows, setRawRows] = useState([]);
   const [fileInfo, setFileInfo] = useState(null);
   const [mapMaximized, setMapMaximized] = useState(false);
+  const [historico, setHistorico] = useState([]);
+  const [loadingHist, setLoadingHist] = useState(false);
+  const [showHistorico, setShowHistorico] = useState(false);
   const mapDivRef = useRef(null);
   const canvasRef = useRef(null);
   const leafletMapRef = useRef(null);
@@ -2297,6 +2300,96 @@ function ModuleRuteo() {
     setMsg(`✓ Re-clusterizado con ${k} rutas.`);
   };
 
+  const loadHistorico = async () => {
+    setLoadingHist(true);
+    const { data } = await supabase.from("ruteo_puntos").select("sesion, created_at, cluster").order("created_at", { ascending: false });
+    if (data && data.length > 0) {
+      const grouped = {};
+      data.forEach(r => {
+        if (!grouped[r.sesion]) grouped[r.sesion] = { sesion: r.sesion, fecha: r.created_at, puntos: 0, rutas: new Set() };
+        grouped[r.sesion].puntos += 1;
+        grouped[r.sesion].rutas.add(r.cluster);
+      });
+      setHistorico(Object.values(grouped).map(g => ({ ...g, rutas: g.rutas.size })).sort((a, b) => b.fecha.localeCompare(a.fecha)));
+    }
+    setLoadingHist(false);
+  };
+
+  const loadSesion = async (sid) => {
+    setLoading(true); setMsg("");
+    const { data } = await supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice");
+    if (data && data.length > 0) {
+      const pts = data.map(r => {
+        const extra = r.datos_extra ? (typeof r.datos_extra === "string" ? JSON.parse(r.datos_extra) : r.datos_extra) : {};
+        return { ...extra, lat: r.latitud, lng: r.longitud, _i: r.indice };
+      });
+      const assigns = data.map(r => r.cluster);
+      const maxCluster = Math.max(...assigns) + 1;
+      // Detect guia key from extra data
+      const sample = pts[0] || {};
+      const gk = Object.keys(sample).find(k => /tracking/i.test(k)) || Object.keys(sample).find(k => /guia|guía/i.test(k)) || "";
+      setGuiaKey(gk);
+      setPuntos(pts);
+      setRawRows(pts);
+      setAsignaciones(assigns);
+      setNumClusters(maxCluster);
+      setSesionId(sid);
+      setFileInfo({ count: pts.length, name: "Sesión " + sid.substring(0, 10) });
+      setMsg(`✓ Sesión ${sid.substring(0, 10)} cargada — ${pts.length} puntos, ${maxCluster} rutas.`);
+      setShowHistorico(false);
+    } else {
+      setMsg("No se encontraron puntos para esta sesión.");
+    }
+    setLoading(false);
+  };
+
+  const exportHistMapHTML = async (sid) => {
+    const { data } = await supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice");
+    if (!data || data.length === 0) return;
+    const pts = data.map(r => {
+      const extra = r.datos_extra ? (typeof r.datos_extra === "string" ? JSON.parse(r.datos_extra) : r.datos_extra) : {};
+      return { ...extra, lat: r.latitud, lng: r.longitud, cluster: r.cluster };
+    });
+    const gk = Object.keys(pts[0]).find(k => /tracking/i.test(k)) || Object.keys(pts[0]).find(k => /guia|guía/i.test(k)) || "";
+    const cc = {};
+    pts.forEach(p => { cc[p.cluster] = (cc[p.cluster] || 0) + 1; });
+    const markers = pts.map(p => {
+      const color = RCOLORS[p.cluster % RCOLORS.length];
+      const label = gk && p[gk] ? String(p[gk]) : "";
+      return `L.circleMarker([${p.lat},${p.lng}],{radius:7,fillColor:"${color}",color:"white",weight:2,fillOpacity:0.9}).addTo(map).bindPopup("<b>Ruta ${p.cluster+1}</b>${label ? "<br/>"+label : ""}<br/>${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}");`;
+    }).join("\n");
+    const legend = Object.entries(cc).sort((a,b)=>+a[0]-+b[0]).map(([cl,cnt])=>{
+      const color = RCOLORS[+cl % RCOLORS.length];
+      return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0"><div style="width:12px;height:12px;border-radius:50%;background:${color}"></div><span>Ruta ${+cl+1} — ${cnt} pts</span></div>`;
+    }).join("");
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"/><title>Mapa Ruteo — ${sid}</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
+<style>body{margin:0;font-family:Arial,sans-serif}#map{height:100vh;width:100%}.legend{position:absolute;bottom:20px;left:20px;background:white;padding:14px 18px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:1000;font-size:13px;max-height:60vh;overflow-y:auto}.legend h4{margin:0 0 8px;font-size:14px}</style>
+</head><body>
+<div id="map"></div>
+<div class="legend"><h4>T1 Envíos — Ruteo</h4><div style="font-size:11px;color:#666;margin-bottom:8px">${pts.length} puntos · ${Object.keys(cc).length} rutas · ${sid.substring(0,10)}</div>${legend}</div>
+<script>
+var map=L.map("map").setView([${DEPOSITO_LAT},${DEPOSITO_LNG}],12);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
+L.marker([${DEPOSITO_LAT},${DEPOSITO_LNG}]).addTo(map).bindPopup("<b>Almacén T1</b>");
+${markers}
+map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]});
+<\/script>
+</body></html>`;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+    a.download = `mapa_${sid.substring(0,10)}.html`;
+    a.click();
+  };
+
+  const deleteHistSesion = async (sid) => {
+    if (!confirm("¿Eliminar esta sesión de ruteo?")) return;
+    await supabase.from("ruteo_puntos").delete().eq("sesion", sid);
+    setHistorico(prev => prev.filter(h => h.sesion !== sid));
+  };
+
   const exportCSV = () => {
     if (!puntos.length) return;
     const extraK = Object.keys(puntos[0]).filter(k => !["lat", "lng", "_i"].includes(k) && k !== guiaKey);
@@ -2543,22 +2636,59 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
           <div style={{ fontSize: 48, marginBottom: 16 }}>🗺️</div>
           <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 8 }}>Carga un archivo para comenzar</div>
           <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 20 }}>CSV o Excel con columnas <b>Latitud</b> y <b>Longitud</b>. Después de cargar el archivo, define el número de rutas y haz clic en <b>Generar rutas</b>.</div>
-          <div style={{ fontSize: 11, color: C.textMuted, backgroundColor: C.bg, padding: "14px 20px", borderRadius: 8, display: "inline-block", textAlign: "left", maxWidth: 560 }}>
-            <b>SQL requerido en Supabase:</b>
-            <pre style={{ fontSize: 10, marginTop: 8, whiteSpace: "pre-wrap", color: C.text }}>{`CREATE TABLE ruteo_puntos (
-  id bigserial PRIMARY KEY,
-  sesion text,
-  indice int,
-  latitud float8,
-  longitud float8,
-  cluster int,
-  ruta text,
-  datos_extra jsonb,
-  created_at timestamptz DEFAULT now()
-);`}</pre>
-          </div>
         </div>
       )}
+
+      {/* Histórico de sesiones */}
+      <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginTop: 20 }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Histórico de ruteos</div>
+          <button onClick={() => { setShowHistorico(!showHistorico); if (!showHistorico && historico.length === 0) loadHistorico(); }}
+            style={{ padding: "6px 16px", borderRadius: 6, border: "1px solid " + (showHistorico ? C.textMuted : C.accent), backgroundColor: showHistorico ? C.bg : C.accentLight, color: showHistorico ? C.textMuted : C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            {showHistorico ? "Ocultar" : "Ver sesiones anteriores"}
+          </button>
+        </div>
+        {showHistorico && (
+          loadingHist ? (
+            <div style={{ padding: 30, textAlign: "center", color: C.textMuted, fontSize: 13 }}>Cargando sesiones...</div>
+          ) : historico.length === 0 ? (
+            <div style={{ padding: 30, textAlign: "center", color: C.textMuted, fontSize: 13 }}>Sin sesiones guardadas</div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid " + C.border }}>
+                  {["Sesión", "Fecha", "Puntos", "Rutas", "Acciones"].map(h => (
+                    <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {historico.map((h) => (
+                  <tr key={h.sesion} style={{ borderBottom: "1px solid " + C.border }}
+                    onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
+                    onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
+                    <td style={{ padding: "12px 14px", fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{h.sesion.substring(0, 14)}</td>
+                    <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{new Date(h.fecha).toLocaleString("es-MX", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
+                    <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700 }}>{h.puntos}</td>
+                    <td style={{ padding: "12px 14px" }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 10px", borderRadius: 4, backgroundColor: C.blueBg, color: C.blue }}>{h.rutas} rutas</span>
+                    </td>
+                    <td style={{ padding: "12px 14px", display: "flex", gap: 6 }}>
+                      <button onClick={() => loadSesion(h.sesion)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                        <IC.MapPin /> Cargar
+                      </button>
+                      <button onClick={() => exportHistMapHTML(h.sesion)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                        <IC.Map /> Mapa HTML
+                      </button>
+                      <button onClick={() => deleteHistSesion(h.sesion)} style={{ padding: "5px 8px", borderRadius: 6, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red }}><IC.Trash /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        )}
+      </div>
     </div>
   );
 }
