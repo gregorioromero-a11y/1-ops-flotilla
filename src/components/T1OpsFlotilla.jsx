@@ -2313,6 +2313,40 @@ function ModuleRuteo() {
     a.click();
   };
 
+  const exportMapHTML = () => {
+    if (!puntos.length) return;
+    const markers = puntos.map((p, i) => {
+      const cl = asignaciones[i] ?? 0;
+      const color = RCOLORS[cl % RCOLORS.length];
+      const label = guiaKey && p[guiaKey] ? String(p[guiaKey]) : "";
+      return `L.circleMarker([${p.lat},${p.lng}],{radius:7,fillColor:"${color}",color:"white",weight:2,fillOpacity:0.9}).addTo(map).bindPopup("<b>Ruta ${cl+1}</b>${label ? "<br/>"+label : ""}<br/>${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}");`;
+    }).join("\n");
+    const legend = Object.entries(clusterCount).sort((a,b)=>+a[0]-+b[0]).map(([cl,cnt])=>{
+      const color = RCOLORS[+cl % RCOLORS.length];
+      return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0"><div style="width:12px;height:12px;border-radius:50%;background:${color}"></div><span>Ruta ${+cl+1} — ${cnt} pts</span></div>`;
+    }).join("");
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"/><title>Mapa Ruteo — T1 Envíos</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
+<style>body{margin:0;font-family:Arial,sans-serif}#map{height:100vh;width:100%}.legend{position:absolute;bottom:20px;left:20px;background:white;padding:14px 18px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:1000;font-size:13px;max-height:60vh;overflow-y:auto}.legend h4{margin:0 0 8px;font-size:14px}</style>
+</head><body>
+<div id="map"></div>
+<div class="legend"><h4>T1 Envíos — Ruteo</h4><div style="font-size:11px;color:#666;margin-bottom:8px">${puntos.length} puntos · ${Object.keys(clusterCount).length} rutas</div>${legend}</div>
+<script>
+var map=L.map("map").setView([${DEPOSITO_LAT},${DEPOSITO_LNG}],12);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
+L.marker([${DEPOSITO_LAT},${DEPOSITO_LNG}]).addTo(map).bindPopup("<b>Almacén T1</b>");
+${markers}
+map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]});
+<\/script>
+</body></html>`;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+    a.download = "mapa_ruteo.html";
+    a.click();
+  };
+
   const clusterCount = {};
   asignaciones.forEach(c => { clusterCount[c] = (clusterCount[c] || 0) + 1; });
 
@@ -2324,9 +2358,14 @@ function ModuleRuteo() {
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Carga coordenadas · K-Means++ automático · Reasignación manual en mapa · Exportar CSV</p>
         </div>
         {puntos.length > 0 && (
-          <button onClick={exportCSV} style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-            <IC.Download /> Exportar CSV
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={exportMapHTML} style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+              <IC.Map /> Descargar Mapa
+            </button>
+            <button onClick={exportCSV} style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+              <IC.Download /> Exportar CSV
+            </button>
+          </div>
         )}
       </div>
 
