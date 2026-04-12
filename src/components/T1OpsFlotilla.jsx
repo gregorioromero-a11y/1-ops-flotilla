@@ -1701,6 +1701,100 @@ function ModuleCostos() {
         </div>
       )}
 
+      {/* Resumen de costo por proveedor */}
+      {filtrados.length > 0 && (() => {
+        const resumenProv = {};
+        filtrados.forEach(r => {
+          const p = r.proveedor || "Sin proveedor";
+          if (!resumenProv[p]) resumenProv[p] = { proveedor: p, costo: 0, ops: 0, um: 0, cd: 0, li: 0, costoUM: 0, costoCD: 0, costoLI: 0, tipos: {} };
+          const c = getCosto(r);
+          resumenProv[p].costo += c;
+          resumenProv[p].ops += 1;
+          resumenProv[p].tipos[r.tipo_unidad] = (resumenProv[p].tipos[r.tipo_unidad] || 0) + 1;
+          if (r.tipo_operacion === "Última Milla") { resumenProv[p].um += 1; resumenProv[p].costoUM += c; }
+          else if (r.tipo_operacion === "CrossDock") { resumenProv[p].cd += 1; resumenProv[p].costoCD += c; }
+          else if (r.tipo_operacion === "Logística Inversa") { resumenProv[p].li += 1; resumenProv[p].costoLI += c; }
+        });
+        const resumenProvList = Object.values(resumenProv).sort((a, b) => b.costo - a.costo);
+        return (
+          <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden", marginBottom:16 }}>
+            <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:C.text }}>Resumen de costo por proveedor</div>
+              <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                <button onClick={() => setFiltroProv("Todos")} style={{ padding:"4px 10px", borderRadius:6, border:"1px solid "+(filtroProv==="Todos"?C.accent:C.border), backgroundColor:filtroProv==="Todos"?C.accentLight:"transparent", color:filtroProv==="Todos"?C.accent:C.textMuted, fontSize:11, fontWeight:600, cursor:"pointer" }}>Todos</button>
+                {resumenProvList.map(rp => (
+                  <button key={rp.proveedor} onClick={() => setFiltroProv(filtroProv===rp.proveedor?"Todos":rp.proveedor)} style={{ padding:"4px 10px", borderRadius:6, border:"1px solid "+(filtroProv===rp.proveedor?C.blue:C.border), backgroundColor:filtroProv===rp.proveedor?C.blueBg:"transparent", color:filtroProv===rp.proveedor?C.blue:C.textMuted, fontSize:11, fontWeight:600, cursor:"pointer" }}>{rp.proveedor}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                <thead>
+                  <tr style={{ backgroundColor:C.bg }}>
+                    {["Proveedor","Operadores","Tipos de unidad","Última Milla","CrossDock","Log. Inversa","Costo total","%"].map(h => (
+                      <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {resumenProvList.map((rp, i) => {
+                    const pct = totalCosto > 0 ? ((rp.costo / totalCosto) * 100).toFixed(1) : "0.0";
+                    return (
+                      <tr key={i} style={{ borderTop:"1px solid "+C.border, cursor:"pointer", backgroundColor:filtroProv===rp.proveedor?C.blueBg+"88":"transparent" }}
+                        onClick={() => setFiltroProv(filtroProv===rp.proveedor?"Todos":rp.proveedor)}
+                        onMouseEnter={ev=>{if(filtroProv!==rp.proveedor)ev.currentTarget.style.backgroundColor="#FAFBFF"}}
+                        onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=filtroProv===rp.proveedor?C.blueBg+"88":"transparent"}}>
+                        <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:C.text }}>{rp.proveedor}</td>
+                        <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{rp.ops}</td>
+                        <td style={{ padding:"10px 14px" }}>
+                          <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
+                            {Object.entries(rp.tipos).map(([tipo, cnt]) => {
+                              const tc = tipoColors[tipo] || {bg:"#F3F4F6",c:"#7C8495"};
+                              return <span key={tipo} style={{ fontSize:10, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c, whiteSpace:"nowrap" }}>{tipo} ×{cnt}</span>;
+                            })}
+                          </div>
+                        </td>
+                        <td style={{ padding:"10px 14px", fontSize:12 }}>
+                          <span style={{ fontWeight:700, color:C.accent }}>${rp.costoUM.toLocaleString()}</span>
+                          <span style={{ color:C.textMuted, fontSize:10, marginLeft:4 }}>({rp.um})</span>
+                        </td>
+                        <td style={{ padding:"10px 14px", fontSize:12 }}>
+                          <span style={{ fontWeight:700, color:C.blue }}>${rp.costoCD.toLocaleString()}</span>
+                          <span style={{ color:C.textMuted, fontSize:10, marginLeft:4 }}>({rp.cd})</span>
+                        </td>
+                        <td style={{ padding:"10px 14px", fontSize:12 }}>
+                          <span style={{ fontWeight:700, color:C.purple }}>${rp.costoLI.toLocaleString()}</span>
+                          <span style={{ color:C.textMuted, fontSize:10, marginLeft:4 }}>({rp.li})</span>
+                        </td>
+                        <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:C.green }}>${rp.costo.toLocaleString()}</td>
+                        <td style={{ padding:"10px 14px" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                            <div style={{ width:60, height:6, borderRadius:3, backgroundColor:C.border, overflow:"hidden" }}>
+                              <div style={{ width:pct+"%", height:"100%", borderRadius:3, backgroundColor:C.green }} />
+                            </div>
+                            <span style={{ fontSize:11, fontWeight:600, color:C.textMuted }}>{pct}%</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  <tr style={{ backgroundColor:"#FAFBFF", borderTop:"2px solid "+C.border }}>
+                    <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>TOTAL</td>
+                    <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>{filtrados.length}</td>
+                    <td style={{ padding:"10px 14px" }} />
+                    <td style={{ padding:"10px 14px", fontSize:12, fontWeight:800, color:C.accent }}>${totalUM.toLocaleString()}</td>
+                    <td style={{ padding:"10px 14px", fontSize:12, fontWeight:800, color:C.blue }}>${totalCD.toLocaleString()}</td>
+                    <td style={{ padding:"10px 14px", fontSize:12, fontWeight:800, color:C.purple }}>${totalLI.toLocaleString()}</td>
+                    <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:C.green }}>${totalCosto.toLocaleString()}</td>
+                    <td style={{ padding:"10px 14px", fontSize:11, fontWeight:600, color:C.textMuted }}>100%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Tabla principal */}
       <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden" }}>
         <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
