@@ -2332,20 +2332,7 @@ function ModuleRuteo() {
       const na = pts.map(p => { let md = Infinity, nr = 0; C.forEach((c, ci) => { const d = (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2; if (d < md) { md = d; nr = ci; } }); return nr; });
       if (na.every((a, i) => a === assigns[i])) break;
       assigns = na;
-      for (let ci = 0; ci < k; ci++) {
-        const cp = pts.filter((_, i) => assigns[i] === ci);
-        if (cp.length) {
-          C[ci] = { lat: cp.reduce((s, p) => s + p.lat, 0) / cp.length, lng: cp.reduce((s, p) => s + p.lng, 0) / cp.length };
-        } else {
-          // Empty cluster: reinitialize centroid to the farthest point from its nearest centroid
-          let maxD = -1, farthestIdx = 0;
-          pts.forEach((p, pi) => {
-            const d = Math.min(...C.filter((_, cci) => cci !== ci).map(c => (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2));
-            if (d > maxD) { maxD = d; farthestIdx = pi; }
-          });
-          C[ci] = { lat: pts[farthestIdx].lat, lng: pts[farthestIdx].lng };
-        }
-      }
+      for (let ci = 0; ci < k; ci++) { const cp = pts.filter((_, i) => assigns[i] === ci); if (cp.length) C[ci] = { lat: cp.reduce((s, p) => s + p.lat, 0) / cp.length, lng: cp.reduce((s, p) => s + p.lng, 0) / cp.length }; }
     }
     // Compact: renumber clusters to ensure 0..N-1 with no gaps
     const usedClusters = [...new Set(assigns)].sort((a, b) => a - b);
@@ -2413,14 +2400,17 @@ function ModuleRuteo() {
     const k = Math.min(numClusters, puntos.length);
     const assigns = kMeans(puntos, k);
     setAsignaciones(assigns);
-    // Persist to DB if session exists
+    // Persist to DB: delete old rows and re-insert with new clusters
     if (sesionId) {
-      const updates = assigns.map((cluster, i) =>
-        supabase.from("ruteo_puntos").update({ cluster, ruta: "Ruta " + (cluster + 1) }).eq("sesion", sesionId).eq("indice", i)
-      );
-      await Promise.all(updates);
+      await supabase.from("ruteo_puntos").delete().eq("sesion", sesionId);
+      const dbRows = puntos.map((p, i) => ({
+        sesion: sesionId, indice: i, latitud: p.lat, longitud: p.lng,
+        cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1),
+        datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k))))
+      }));
+      await supabase.from("ruteo_puntos").insert(dbRows);
     }
-    setMsg(`✓ Re-clusterizado con ${k} rutas. ${sesionId ? "Guardado en DB." : ""}`);
+    setMsg(`✓ Re-clusterizado con ${k} rutas. ${sesionId ? "Guardado." : ""}`);
     setLoading(false);
   };
 
