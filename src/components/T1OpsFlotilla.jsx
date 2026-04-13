@@ -2311,7 +2311,7 @@ function ModuleRuteo() {
     const nc = bulkCluster;
     setAsignaciones(prev => { const next = [...prev]; indices.forEach(i => next[i] = nc); return next; });
     const sid = sesionIdRef.current;
-    if (sid) indices.forEach(i => supabase.from("ruteo_puntos").update({ cluster: nc, ruta: "Ruta " + (nc + 1) }).eq("sesion", sid).eq("indice", i));
+    if (sid) Promise.all(indices.map(i => supabase.from("ruteo_puntos").update({ cluster: nc, ruta: "Ruta " + (nc + 1) }).eq("sesion", sid).eq("indice", i)));
     setSelectedIndices(new Set());
     setMsg(`✓ ${indices.length} punto(s) reasignados a Ruta ${nc + 1}.`);
   };
@@ -2387,12 +2387,21 @@ function ModuleRuteo() {
     setLoading(false);
   };
 
-  const reCluster = () => {
+  const reCluster = async () => {
     if (!puntos.length) return;
+    setLoading(true);
     const k = Math.min(numClusters, puntos.length);
     const assigns = kMeans(puntos, k);
     setAsignaciones(assigns);
-    setMsg(`✓ Re-clusterizado con ${k} rutas.`);
+    // Persist to DB if session exists
+    if (sesionId) {
+      const updates = assigns.map((cluster, i) =>
+        supabase.from("ruteo_puntos").update({ cluster, ruta: "Ruta " + (cluster + 1) }).eq("sesion", sesionId).eq("indice", i)
+      );
+      await Promise.all(updates);
+    }
+    setMsg(`✓ Re-clusterizado con ${k} rutas. ${sesionId ? "Guardado en DB." : ""}`);
+    setLoading(false);
   };
 
   const loadHistorico = async () => {
