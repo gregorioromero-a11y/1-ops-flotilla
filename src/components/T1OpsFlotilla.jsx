@@ -2891,47 +2891,61 @@ function ModuleAsignaciones() {
 
       {loading ? <div style={{ padding:40, textAlign:"center", color:C.textMuted }}>Cargando...</div> : (
         <>
-          {/* Tabla de costos por carrier */}
-          <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden", marginBottom:20 }}>
-            <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, fontSize:13, fontWeight:700, color:C.text }}>Catálogo de carriers — Última milla</div>
-            <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                <thead>
-                  <tr style={{ backgroundColor:C.bg }}>
-                    {["Proveedor","Tipo unidad","Costo/Día","Mín. paquetes ($"+COSTO_MAX+")","Ideal paquetes ($"+COSTO_IDEAL+")"].map(h => (
-                      <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {carriers.map((c, i) => {
-                    const costo = parseFloat(c.costo_unidad) || 0;
-                    const tc = tipoColors[c.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"};
-                    return (
-                      <tr key={i} style={{ borderTop:"1px solid "+C.border }}
-                        onMouseEnter={ev=>ev.currentTarget.style.backgroundColor="#FAFBFF"}
-                        onMouseLeave={ev=>ev.currentTarget.style.backgroundColor="transparent"}>
-                        <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{c.proveedor}</td>
-                        <td style={{ padding:"10px 14px" }}>
-                          <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c }}>{c.tipo_unidad}</span>
-                        </td>
-                        <td style={{ padding:"10px 14px", fontSize:14, fontWeight:700, color:C.green }}>${costo.toLocaleString()}</td>
-                        <td style={{ padding:"10px 14px" }}>
-                          <span style={{ fontSize:14, fontWeight:800, color:C.accent }}>{minPaq(costo)}</span>
-                          <span style={{ fontSize:11, color:C.textMuted, marginLeft:6 }}>→ ${(costo/minPaq(costo)).toFixed(1)}/paq</span>
-                        </td>
-                        <td style={{ padding:"10px 14px" }}>
-                          <span style={{ fontSize:14, fontWeight:800, color:C.blue }}>{idealPaq(costo)}</span>
-                          <span style={{ fontSize:11, color:C.textMuted, marginLeft:6 }}>→ ${(costo/idealPaq(costo)).toFixed(1)}/paq</span>
-                        </td>
+          {/* Tabla pivot de costos por carrier */}
+          {(() => {
+            const provs = [...new Set(carriers.map(c => c.proveedor))].sort();
+            const tipos = [...new Set(carriers.map(c => c.tipo_unidad))];
+            const tipoOrder = ["Moto","Sedan","SmallVan","Van","1.5","3.5","Rabon","Torton","Tracto"];
+            tipos.sort((a, b) => (tipoOrder.indexOf(a) === -1 ? 99 : tipoOrder.indexOf(a)) - (tipoOrder.indexOf(b) === -1 ? 99 : tipoOrder.indexOf(b)));
+            const getCost = (prov, tipo) => { const c = carriers.find(x => x.proveedor === prov && x.tipo_unidad === tipo); return c ? parseFloat(c.costo_unidad) || 0 : null; };
+            return (
+              <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden", marginBottom:20 }}>
+                <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:C.text }}>Catálogo de carriers — Última milla</div>
+                  <div style={{ display:"flex", gap:12, fontSize:11, color:C.textMuted }}>
+                    <span>Costo/día por unidad</span>
+                    <span style={{ color:C.textMuted }}>·</span>
+                    <span style={{ color:C.blue, fontWeight:600 }}>Min. paq (${ COSTO_MAX})</span>
+                  </div>
+                </div>
+                <div style={{ overflowX:"auto" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                    <thead>
+                      <tr style={{ backgroundColor:C.bg }}>
+                        <th style={{ padding:"10px 16px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", position:"sticky", left:0, backgroundColor:C.bg, zIndex:1 }}>Proveedor</th>
+                        {tipos.map(t => {
+                          const tc = tipoColors[t] || {bg:"#F3F4F6",c:"#7C8495"};
+                          return <th key={t} style={{ padding:"10px 14px", textAlign:"center", fontSize:10, fontWeight:700, minWidth:90 }}>
+                            <span style={{ padding:"3px 10px", borderRadius:5, backgroundColor:tc.bg, color:tc.c, fontWeight:700 }}>{t}</span>
+                          </th>;
+                        })}
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            {carriers.length === 0 && <div style={{ padding:32, textAlign:"center", color:C.textMuted, fontSize:13 }}>No hay carriers con operación "Última milla" configurados.</div>}
-          </div>
+                    </thead>
+                    <tbody>
+                      {provs.map((prov, pi) => (
+                        <tr key={prov} style={{ borderTop:"1px solid "+C.border }}
+                          onMouseEnter={ev=>ev.currentTarget.style.backgroundColor="#FAFBFF"}
+                          onMouseLeave={ev=>ev.currentTarget.style.backgroundColor="transparent"}>
+                          <td style={{ padding:"12px 16px", fontSize:13, fontWeight:700, color:C.text, whiteSpace:"nowrap", position:"sticky", left:0, backgroundColor:"inherit", zIndex:1 }}>{prov}</td>
+                          {tipos.map(t => {
+                            const cost = getCost(prov, t);
+                            if (cost === null) return <td key={t} style={{ padding:"10px 14px", textAlign:"center", color:C.border, fontSize:12 }}>—</td>;
+                            return (
+                              <td key={t} style={{ padding:"8px 10px", textAlign:"center" }}>
+                                <div style={{ fontSize:14, fontWeight:800, color:C.green }}>${cost.toLocaleString()}</div>
+                                <div style={{ fontSize:10, color:C.blue, fontWeight:600, marginTop:2 }}>{minPaq(cost)} paq</div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {carriers.length === 0 && <div style={{ padding:32, textAlign:"center", color:C.textMuted, fontSize:13 }}>No hay carriers con operación "Última milla" configurados.</div>}
+              </div>
+            );
+          })()}
 
           {/* Selector de sesión de ruteo */}
           <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden", marginBottom:20 }}>
