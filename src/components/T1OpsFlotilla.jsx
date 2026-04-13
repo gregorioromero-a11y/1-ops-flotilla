@@ -3095,80 +3095,70 @@ function ModuleAsignaciones() {
                             <tr key={idx+"_exp"} style={{ backgroundColor:C.bg }}>
                               <td colSpan={9} style={{ padding:0 }}>
                                 <div style={{ padding:"8px 14px 12px" }}>
-                                  {opciones.length === 0 ? (
-                                    <div style={{ fontSize:12, color:C.red, padding:8 }}>No hay opciones viables. Se necesitan más paquetes para cumplir el costo máximo de ${COSTO_MAX}/paq.</div>
-                                  ) : (
-                                    <table style={{ width:"100%", borderCollapse:"collapse", borderRadius:8, overflow:"hidden", border:"1px solid "+C.border, backgroundColor:C.white }}>
-                                      <thead>
-                                        <tr>
-                                          <th style={{ padding:"8px 12px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}></th>
-                                          <th style={{ padding:"8px 12px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Proveedor</th>
-                                          <th style={{ padding:"8px 12px", textAlign:"center", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Tipo</th>
-                                          <th style={{ padding:"8px 12px", textAlign:"right", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Costo/Día</th>
-                                          <th style={{ padding:"8px 12px", textAlign:"center", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Unidades</th>
-                                          <th style={{ padding:"8px 12px", textAlign:"right", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Costo Total</th>
-                                          <th style={{ padding:"8px 12px", textAlign:"right", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>$/Paq</th>
-                                          <th style={{ padding:"8px 12px", textAlign:"center", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Estado</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {opciones.map((op, oi) => {
-                                          const isSelected = a && a.proveedor === op.proveedor && a.tipo_unidad === op.tipo_unidad;
-                                          const opTc = tipoColors[op.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"};
-                                          const uniVal = isSelected ? (a.unidades || 1) : 1;
-                                          const opCostoTotal = op.costo * uniVal;
-                                          const opCostoPaq = ruta.paquetes > 0 ? opCostoTotal / ruta.paquetes : 0;
-                                          return (
-                                            <tr key={oi} style={{ borderTop:oi>0?"1px solid "+C.border:"none", backgroundColor:isSelected?C.accentLight:"transparent", cursor:"pointer" }}
-                                              onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: op.proveedor, tipo_unidad: op.tipo_unidad, unidades: isSelected ? (a.unidades||1) : 1 }}); }}
-                                              onMouseEnter={ev=>{if(!isSelected)ev.currentTarget.style.backgroundColor="#FAFBFF"}}
-                                              onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=isSelected?C.accentLight:"transparent"}}>
-                                              <td style={{ padding:"9px 12px", width:30 }}>
-                                                <div style={{ width:16, height:16, borderRadius:8, border:"2px solid "+(isSelected?C.accent:C.border), backgroundColor:isSelected?C.accent:"transparent", display:"flex", alignItems:"center", justifyContent:"center" }}>
-                                                  {isSelected && <div style={{ width:6, height:6, borderRadius:3, backgroundColor:"white" }} />}
+                                  {(() => {
+                                    const provsList = [...new Set(carriers.map(c => c.proveedor))].sort();
+                                    const tipoOrder = ["Moto","Sedan","SmallVan","Van","1.5","3.5","Rabon","Torton","Tracto"];
+                                    const tiposList = [...new Set(carriers.map(c => c.tipo_unidad))].sort((x, y) => (tipoOrder.indexOf(x)===-1?99:tipoOrder.indexOf(x)) - (tipoOrder.indexOf(y)===-1?99:tipoOrder.indexOf(y)));
+                                    const getCarrierCost = (prov, tipo) => { const c = carriers.find(x => x.proveedor === prov && x.tipo_unidad === tipo); return c ? parseFloat(c.costo_unidad) || 0 : null; };
+                                    return (
+                                      <div style={{ overflowX:"auto" }}>
+                                        <table style={{ width:"100%", borderCollapse:"collapse", borderRadius:8, overflow:"hidden", border:"1px solid "+C.border, backgroundColor:C.white }}>
+                                          <thead>
+                                            <tr>
+                                              <th style={{ padding:"8px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border, position:"sticky", left:0, zIndex:1 }}>Proveedor</th>
+                                              {tiposList.map(t => {
+                                                const ttc = tipoColors[t] || {bg:"#F3F4F6",c:"#7C8495"};
+                                                return <th key={t} style={{ padding:"8px 10px", textAlign:"center", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border, minWidth:80 }}>
+                                                  <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:4, backgroundColor:ttc.bg, color:ttc.c }}>{t}</span>
+                                                </th>;
+                                              })}
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {provsList.map((prov, pi) => (
+                                              <tr key={prov} style={{ borderTop:pi>0?"1px solid "+C.border:"none" }}>
+                                                <td style={{ padding:"10px 14px", fontSize:12, fontWeight:700, whiteSpace:"nowrap", position:"sticky", left:0, backgroundColor:C.white, zIndex:1 }}>{prov}</td>
+                                                {tiposList.map(tipo => {
+                                                  const cost = getCarrierCost(prov, tipo);
+                                                  if (cost === null) return <td key={tipo} style={{ padding:"6px 8px", textAlign:"center", color:C.border, fontSize:11 }}>—</td>;
+                                                  const cpq = ruta.paquetes > 0 ? cost / ruta.paquetes : 0;
+                                                  const isIdeal = cpq <= COSTO_IDEAL;
+                                                  const isViable = cpq <= COSTO_MAX;
+                                                  const isSel = a && !noAsignar && a.proveedor === prov && a.tipo_unidad === tipo;
+                                                  return (
+                                                    <td key={tipo} style={{ padding:"4px 4px", textAlign:"center" }}>
+                                                      <div onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: prov, tipo_unidad: tipo, unidades: 1 }}); }}
+                                                        style={{ padding:"8px 6px", borderRadius:6, cursor:"pointer", border:"2px solid "+(isSel?C.accent:isIdeal?"#BBF7D0":isViable?"#FDE68A":"#FECACA"), backgroundColor:isSel?C.accentLight:isIdeal?"#F0FDF4":isViable?"#FFFBEB":"#FEF2F2", transition:"all 0.1s" }}
+                                                        onMouseEnter={ev=>{if(!isSel)ev.currentTarget.style.transform="scale(1.05)"}}
+                                                        onMouseLeave={ev=>{ev.currentTarget.style.transform="scale(1)"}}>
+                                                        <div style={{ fontSize:13, fontWeight:800, color:isIdeal?C.green:isViable?"#CA8A04":C.red }}>${cpq.toFixed(1)}</div>
+                                                        <div style={{ fontSize:9, color:C.textMuted, marginTop:1 }}>${cost.toLocaleString()}/día</div>
+                                                        {isSel && <div style={{ fontSize:8, fontWeight:800, color:C.accent, marginTop:2 }}>ASIGNADO</div>}
+                                                      </div>
+                                                    </td>
+                                                  );
+                                                })}
+                                              </tr>
+                                            ))}
+                                            {/* No asignar row */}
+                                            <tr style={{ borderTop:"2px solid "+C.border }}>
+                                              <td colSpan={tiposList.length + 1} style={{ padding:"6px 14px" }}>
+                                                <div onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { noAsignar: true }}); }}
+                                                  style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"8px 16px", borderRadius:6, cursor:"pointer", border:"2px solid "+(noAsignar?C.red:C.border), backgroundColor:noAsignar?"#FEF2F2":"transparent" }}
+                                                  onMouseEnter={ev=>{if(!noAsignar)ev.currentTarget.style.backgroundColor="#FEF2F2"}}
+                                                  onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=noAsignar?"#FEF2F2":"transparent"}}>
+                                                  <div style={{ width:14, height:14, borderRadius:7, border:"2px solid "+(noAsignar?C.red:C.border), backgroundColor:noAsignar?C.red:"transparent", display:"flex", alignItems:"center", justifyContent:"center" }}>
+                                                    {noAsignar && <div style={{ width:5, height:5, borderRadius:3, backgroundColor:"white" }} />}
+                                                  </div>
+                                                  <span style={{ fontSize:12, fontWeight:600, color:noAsignar?C.red:C.textMuted, fontStyle:"italic" }}>No asignar — esta ruta no sale</span>
                                                 </div>
                                               </td>
-                                              <td style={{ padding:"9px 12px", fontSize:13, fontWeight:isSelected?700:600 }}>{op.proveedor}</td>
-                                              <td style={{ padding:"9px 12px", textAlign:"center" }}>
-                                                <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:opTc.bg, color:opTc.c }}>{op.tipo_unidad}</span>
-                                              </td>
-                                              <td style={{ padding:"9px 12px", textAlign:"right", fontSize:13, fontWeight:600, color:C.green }}>${op.costo.toLocaleString()}</td>
-                                              <td style={{ padding:"9px 6px", textAlign:"center" }}>
-                                                <input type="number" min="1" max="10" value={uniVal}
-                                                  onClick={e => e.stopPropagation()}
-                                                  onChange={e => { e.stopPropagation(); const v = Math.max(1, parseInt(e.target.value)||1); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: op.proveedor, tipo_unidad: op.tipo_unidad, unidades: v }}); }}
-                                                  style={{ width:48, padding:"4px 4px", borderRadius:5, border:"1px solid "+C.border, fontSize:13, fontWeight:700, textAlign:"center" }} />
-                                              </td>
-                                              <td style={{ padding:"9px 12px", textAlign:"right", fontSize:13, fontWeight:700 }}>${opCostoTotal.toLocaleString()}</td>
-                                              <td style={{ padding:"9px 12px", textAlign:"right", fontSize:13, fontWeight:800, color:opCostoPaq<=COSTO_IDEAL?C.green:opCostoPaq<=COSTO_MAX?"#CA8A04":C.red }}>${opCostoPaq.toFixed(1)}</td>
-                                              <td style={{ padding:"9px 12px", textAlign:"center" }}>
-                                                {op.ideal ? (
-                                                  <span style={{ fontSize:10, fontWeight:700, color:C.green, padding:"2px 8px", borderRadius:4, backgroundColor:"#F0FDF4" }}>Ideal</span>
-                                                ) : (
-                                                  <span style={{ fontSize:10, fontWeight:700, color:"#CA8A04", padding:"2px 8px", borderRadius:4, backgroundColor:"#FEF9C3" }}>Viable</span>
-                                                )}
-                                              </td>
                                             </tr>
-                                          );
-                                        })}
-                                        <tr style={{ borderTop:"2px solid "+C.border, backgroundColor:noAsignar?"#FEF2F2":"transparent", cursor:"pointer" }}
-                                          onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { noAsignar: true }}); }}
-                                          onMouseEnter={ev=>{if(!noAsignar)ev.currentTarget.style.backgroundColor="#FEF2F2"}}
-                                          onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=noAsignar?"#FEF2F2":"transparent"}}>
-                                          <td style={{ padding:"9px 12px", width:30 }}>
-                                            <div style={{ width:16, height:16, borderRadius:8, border:"2px solid "+(noAsignar?C.red:C.border), backgroundColor:noAsignar?C.red:"transparent", display:"flex", alignItems:"center", justifyContent:"center" }}>
-                                              {noAsignar && <div style={{ width:6, height:6, borderRadius:3, backgroundColor:"white" }} />}
-                                            </div>
-                                          </td>
-                                          <td colSpan={5} style={{ padding:"9px 12px", fontSize:13, fontWeight:600, color:C.red, fontStyle:"italic" }}>No asignar — esta ruta no sale</td>
-                                          <td style={{ padding:"9px 12px", textAlign:"right", fontSize:13, fontWeight:700, color:C.textMuted }}>$0</td>
-                                          <td style={{ padding:"9px 12px", textAlign:"center" }}>
-                                            <span style={{ fontSize:10, fontWeight:700, color:C.textMuted, padding:"2px 8px", borderRadius:4, backgroundColor:C.bg, border:"1px solid "+C.border }}>No sale</span>
-                                          </td>
-                                        </tr>
-                                      </tbody>
-                                    </table>
-                                  )}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    );
+                                  })()}
                                 </div>
                               </td>
                             </tr>
