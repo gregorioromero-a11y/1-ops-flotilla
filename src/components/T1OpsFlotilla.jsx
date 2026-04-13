@@ -2332,7 +2332,27 @@ function ModuleRuteo() {
       const na = pts.map(p => { let md = Infinity, nr = 0; C.forEach((c, ci) => { const d = (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2; if (d < md) { md = d; nr = ci; } }); return nr; });
       if (na.every((a, i) => a === assigns[i])) break;
       assigns = na;
-      for (let ci = 0; ci < k; ci++) { const cp = pts.filter((_, i) => assigns[i] === ci); if (cp.length) C[ci] = { lat: cp.reduce((s, p) => s + p.lat, 0) / cp.length, lng: cp.reduce((s, p) => s + p.lng, 0) / cp.length }; }
+      for (let ci = 0; ci < k; ci++) {
+        const cp = pts.filter((_, i) => assigns[i] === ci);
+        if (cp.length) {
+          C[ci] = { lat: cp.reduce((s, p) => s + p.lat, 0) / cp.length, lng: cp.reduce((s, p) => s + p.lng, 0) / cp.length };
+        } else {
+          // Empty cluster: reinitialize centroid to the farthest point from its nearest centroid
+          let maxD = -1, farthestIdx = 0;
+          pts.forEach((p, pi) => {
+            const d = Math.min(...C.filter((_, cci) => cci !== ci).map(c => (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2));
+            if (d > maxD) { maxD = d; farthestIdx = pi; }
+          });
+          C[ci] = { lat: pts[farthestIdx].lat, lng: pts[farthestIdx].lng };
+        }
+      }
+    }
+    // Compact: renumber clusters to ensure 0..N-1 with no gaps
+    const usedClusters = [...new Set(assigns)].sort((a, b) => a - b);
+    if (usedClusters.length < k) {
+      const remap = {};
+      usedClusters.forEach((c, i) => { remap[c] = i; });
+      assigns = assigns.map(a => remap[a]);
     }
     return assigns;
   };
