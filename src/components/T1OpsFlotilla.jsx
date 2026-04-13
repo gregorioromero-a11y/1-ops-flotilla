@@ -3068,51 +3068,65 @@ function ModuleAsignaciones() {
                           isExpanded && (
                             <tr key={idx+"_exp"} style={{ backgroundColor:C.bg }}>
                               <td colSpan={9} style={{ padding:0 }}>
-                                <div style={{ padding:"12px 18px 16px" }}>
-                                  <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:10, textTransform:"uppercase", letterSpacing:"0.05em" }}>Opciones viables para {ruta.nombre} ({ruta.paquetes} paquetes)</div>
+                                <div style={{ padding:"8px 14px 12px" }}>
                                   {opciones.length === 0 ? (
                                     <div style={{ fontSize:12, color:C.red, padding:8 }}>No hay opciones viables. Se necesitan más paquetes para cumplir el costo máximo de ${COSTO_MAX}/paq.</div>
                                   ) : (
-                                    <div style={{ display:"grid", gap:8 }}>
-                                      {opciones.map((op, oi) => {
-                                        const isSelected = a && a.proveedor === op.proveedor && a.tipo_unidad === op.tipo_unidad;
-                                        const opTc = tipoColors[op.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"};
-                                        const uniVal = isSelected ? (a.unidades || 1) : 1;
-                                        const opCostoTotal = op.costo * uniVal;
-                                        const opCostoPaq = ruta.paquetes > 0 ? opCostoTotal / ruta.paquetes : 0;
-                                        return (
-                                          <div key={oi} style={{
-                                            display:"flex", alignItems:"center", gap:12, padding:"10px 14px", borderRadius:8,
-                                            border:"2px solid "+(isSelected?C.accent:C.border),
-                                            backgroundColor:isSelected?C.accentLight:C.white, cursor:"pointer", flexWrap:"wrap"
-                                          }}
-                                            onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: op.proveedor, tipo_unidad: op.tipo_unidad, unidades: isSelected ? (a.unidades||1) : 1 }}); }}>
-                                            <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:130 }}>
-                                              <div style={{ width:14, height:14, borderRadius:7, border:"2px solid "+(isSelected?C.accent:C.border), backgroundColor:isSelected?C.accent:"transparent", display:"flex", alignItems:"center", justifyContent:"center" }}>
-                                                {isSelected && <div style={{ width:6, height:6, borderRadius:3, backgroundColor:"white" }} />}
-                                              </div>
-                                              <span style={{ fontSize:13, fontWeight:700 }}>{op.proveedor}</span>
-                                            </div>
-                                            <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:opTc.bg, color:opTc.c }}>{op.tipo_unidad}</span>
-                                            <span style={{ fontSize:12, fontWeight:600, color:C.green }}>${op.costo.toLocaleString()}/día</span>
-                                            <div style={{ display:"flex", alignItems:"center", gap:6, marginLeft:"auto" }}>
-                                              <span style={{ fontSize:11, fontWeight:600, color:C.textMuted }}>Unidades:</span>
-                                              <input type="number" min="1" max="10" value={uniVal}
-                                                onClick={e => e.stopPropagation()}
-                                                onChange={e => { e.stopPropagation(); const v = Math.max(1, parseInt(e.target.value)||1); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: op.proveedor, tipo_unidad: op.tipo_unidad, unidades: v }}); }}
-                                                style={{ width:52, padding:"5px 6px", borderRadius:6, border:"1px solid "+C.border, fontSize:13, fontWeight:700, textAlign:"center" }} />
-                                              <span style={{ fontSize:12, color:C.textMuted, minWidth:70 }}>= ${opCostoTotal.toLocaleString()}</span>
-                                              <span style={{ fontSize:12, fontWeight:800, color:opCostoPaq<=COSTO_IDEAL?C.green:opCostoPaq<=COSTO_MAX?"#CA8A04":C.red, minWidth:55 }}>${opCostoPaq.toFixed(1)}/paq</span>
-                                              {op.ideal ? (
-                                                <span style={{ fontSize:10, fontWeight:700, color:C.green, padding:"2px 6px", borderRadius:4, backgroundColor:"#F0FDF4" }}>Ideal</span>
-                                              ) : (
-                                                <span style={{ fontSize:10, fontWeight:700, color:"#CA8A04", padding:"2px 6px", borderRadius:4, backgroundColor:"#FEF9C3" }}>Viable</span>
-                                              )}
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
+                                    <table style={{ width:"100%", borderCollapse:"collapse", borderRadius:8, overflow:"hidden", border:"1px solid "+C.border, backgroundColor:C.white }}>
+                                      <thead>
+                                        <tr>
+                                          <th style={{ padding:"8px 12px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}></th>
+                                          <th style={{ padding:"8px 12px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Proveedor</th>
+                                          <th style={{ padding:"8px 12px", textAlign:"center", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Tipo</th>
+                                          <th style={{ padding:"8px 12px", textAlign:"right", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Costo/Día</th>
+                                          <th style={{ padding:"8px 12px", textAlign:"center", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Unidades</th>
+                                          <th style={{ padding:"8px 12px", textAlign:"right", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Costo Total</th>
+                                          <th style={{ padding:"8px 12px", textAlign:"right", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>$/Paq</th>
+                                          <th style={{ padding:"8px 12px", textAlign:"center", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#F8FAFC", borderBottom:"1px solid "+C.border }}>Estado</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {opciones.map((op, oi) => {
+                                          const isSelected = a && a.proveedor === op.proveedor && a.tipo_unidad === op.tipo_unidad;
+                                          const opTc = tipoColors[op.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"};
+                                          const uniVal = isSelected ? (a.unidades || 1) : 1;
+                                          const opCostoTotal = op.costo * uniVal;
+                                          const opCostoPaq = ruta.paquetes > 0 ? opCostoTotal / ruta.paquetes : 0;
+                                          return (
+                                            <tr key={oi} style={{ borderTop:oi>0?"1px solid "+C.border:"none", backgroundColor:isSelected?C.accentLight:"transparent", cursor:"pointer" }}
+                                              onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: op.proveedor, tipo_unidad: op.tipo_unidad, unidades: isSelected ? (a.unidades||1) : 1 }}); }}
+                                              onMouseEnter={ev=>{if(!isSelected)ev.currentTarget.style.backgroundColor="#FAFBFF"}}
+                                              onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=isSelected?C.accentLight:"transparent"}}>
+                                              <td style={{ padding:"9px 12px", width:30 }}>
+                                                <div style={{ width:16, height:16, borderRadius:8, border:"2px solid "+(isSelected?C.accent:C.border), backgroundColor:isSelected?C.accent:"transparent", display:"flex", alignItems:"center", justifyContent:"center" }}>
+                                                  {isSelected && <div style={{ width:6, height:6, borderRadius:3, backgroundColor:"white" }} />}
+                                                </div>
+                                              </td>
+                                              <td style={{ padding:"9px 12px", fontSize:13, fontWeight:isSelected?700:600 }}>{op.proveedor}</td>
+                                              <td style={{ padding:"9px 12px", textAlign:"center" }}>
+                                                <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:opTc.bg, color:opTc.c }}>{op.tipo_unidad}</span>
+                                              </td>
+                                              <td style={{ padding:"9px 12px", textAlign:"right", fontSize:13, fontWeight:600, color:C.green }}>${op.costo.toLocaleString()}</td>
+                                              <td style={{ padding:"9px 6px", textAlign:"center" }}>
+                                                <input type="number" min="1" max="10" value={uniVal}
+                                                  onClick={e => e.stopPropagation()}
+                                                  onChange={e => { e.stopPropagation(); const v = Math.max(1, parseInt(e.target.value)||1); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: op.proveedor, tipo_unidad: op.tipo_unidad, unidades: v }}); }}
+                                                  style={{ width:48, padding:"4px 4px", borderRadius:5, border:"1px solid "+C.border, fontSize:13, fontWeight:700, textAlign:"center" }} />
+                                              </td>
+                                              <td style={{ padding:"9px 12px", textAlign:"right", fontSize:13, fontWeight:700 }}>${opCostoTotal.toLocaleString()}</td>
+                                              <td style={{ padding:"9px 12px", textAlign:"right", fontSize:13, fontWeight:800, color:opCostoPaq<=COSTO_IDEAL?C.green:opCostoPaq<=COSTO_MAX?"#CA8A04":C.red }}>${opCostoPaq.toFixed(1)}</td>
+                                              <td style={{ padding:"9px 12px", textAlign:"center" }}>
+                                                {op.ideal ? (
+                                                  <span style={{ fontSize:10, fontWeight:700, color:C.green, padding:"2px 8px", borderRadius:4, backgroundColor:"#F0FDF4" }}>Ideal</span>
+                                                ) : (
+                                                  <span style={{ fontSize:10, fontWeight:700, color:"#CA8A04", padding:"2px 8px", borderRadius:4, backgroundColor:"#FEF9C3" }}>Viable</span>
+                                                )}
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
                                   )}
                                 </div>
                               </td>
