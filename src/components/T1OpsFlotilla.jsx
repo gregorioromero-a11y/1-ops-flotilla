@@ -2796,6 +2796,8 @@ function ModuleAsignaciones() {
   const [sesionId, setSesionId] = useState(null);
   const [rutas, setRutas] = useState([]);
   const [loadingSession, setLoadingSession] = useState(false);
+  const [asignacion, setAsignacion] = useState({});
+  const [expandedRuta, setExpandedRuta] = useState(null);
 
   const COSTO_IDEAL = 40;
   const COSTO_MAX = 45;
@@ -2833,10 +2835,29 @@ function ModuleAsignaciones() {
         if (!rutaMap[rn]) rutaMap[rn] = { nombre: rn, cluster: r.cluster, paquetes: 0 };
         rutaMap[rn].paquetes += 1;
       });
-      setRutas(Object.values(rutaMap).sort((a, b) => a.cluster - b.cluster));
+      const rutaList = Object.values(rutaMap).sort((a, b) => a.cluster - b.cluster);
+      setRutas(rutaList);
+      // Auto-assign best recommendation per route
+      const autoAsign = {};
+      rutaList.forEach(ruta => {
+        const opciones = carriers.map(c => {
+          const costo = parseFloat(c.costo_unidad) || 0;
+          const minP = Math.ceil(costo / COSTO_MAX);
+          const viable = ruta.paquetes >= minP;
+          const costoPorPaq = ruta.paquetes > 0 ? costo / ruta.paquetes : Infinity;
+          return { proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, costo, viable, costoPorPaq, carrierId: c.id };
+        }).filter(o => o.viable);
+        opciones.sort((a, b) => a.costoPorPaq - b.costoPorPaq);
+        if (opciones[0]) {
+          autoAsign[ruta.nombre] = { proveedor: opciones[0].proveedor, tipo_unidad: opciones[0].tipo_unidad, unidades: 1 };
+        }
+      });
+      setAsignacion(autoAsign);
     } else {
       setRutas([]);
+      setAsignacion({});
     }
+    setExpandedRuta(null);
     setLoadingSession(false);
   };
 
@@ -2943,80 +2964,234 @@ function ModuleAsignaciones() {
 
           {/* Recomendación de asignación */}
           {loadingSession && <div style={{ padding:32, textAlign:"center", color:C.textMuted }}>Cargando sesión...</div>}
-          {sesionId && !loadingSession && rutas.length > 0 && (
-            <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden" }}>
-              <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                <div style={{ fontSize:13, fontWeight:700, color:C.text }}>Recomendación de asignación — {rutas.length} rutas</div>
-                <div style={{ fontSize:11, color:C.textMuted }}>Sesión: {sesionId.substring(0,10)}</div>
+          {sesionId && !loadingSession && rutas.length > 0 && (() => {
+            const totalCostoAsignado = rutas.reduce((s, ruta) => {
+              const a = asignacion[ruta.nombre];
+              if (!a) return s;
+              const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+              return s + ((parseFloat(car?.costo_unidad) || 0) * (a.unidades || 1));
+            }, 0);
+            const totalPaquetes = rutas.reduce((s, r) => s + r.paquetes, 0);
+            const costoPromPaq = totalPaquetes > 0 ? totalCostoAsignado / totalPaquetes : 0;
+            return (
+            <>
+              {/* Stat cards resumen asignación */}
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px,1fr))", gap:14, marginBottom:16 }}>
+                {[
+                  { label:"Rutas", value:rutas.length, color:C.blue },
+                  { label:"Paquetes totales", value:totalPaquetes, color:C.text },
+                  { label:"Costo total asignado", value:"$"+totalCostoAsignado.toLocaleString(), color:C.green },
+                  { label:"Costo promedio/paq", value:"$"+costoPromPaq.toFixed(1), color:costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?"#CA8A04":C.red },
+                ].map(s => (
+                  <div key={s.label} style={{ backgroundColor:C.white, borderRadius:10, padding:"14px 16px", border:"1px solid "+C.border }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>{s.label}</div>
+                    <div style={{ fontSize:22, fontWeight:800, color:s.color }}>{s.value}</div>
+                  </div>
+                ))}
               </div>
-              <div style={{ overflowX:"auto" }}>
-                <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                  <thead>
-                    <tr style={{ backgroundColor:C.bg }}>
-                      {["Ruta","Paquetes","Recomendación","Proveedor","Tipo","Costo/Día","Costo/Paq","Estado"].map(h => (
-                        <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rutas.map((ruta, idx) => {
-                      const opciones = getRecomendacion(ruta.paquetes);
-                      const mejor = opciones[0] || null;
-                      const sinOpcion = !mejor;
-                      return (
-                        <tr key={idx} style={{ borderTop:"1px solid "+C.border, backgroundColor:sinOpcion?"#FEF2F2":"transparent" }}
-                          onMouseEnter={ev=>{if(!sinOpcion)ev.currentTarget.style.backgroundColor="#FAFBFF"}}
-                          onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=sinOpcion?"#FEF2F2":"transparent"}}>
-                          <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700 }}>{ruta.nombre}</td>
-                          <td style={{ padding:"10px 14px" }}>
-                            <span style={{ fontSize:16, fontWeight:800, color:sinOpcion?C.red:C.text }}>{ruta.paquetes}</span>
-                          </td>
-                          <td style={{ padding:"10px 14px" }}>
-                            {sinOpcion ? (
-                              <span style={{ fontSize:11, fontWeight:700, color:C.red, padding:"3px 10px", borderRadius:20, backgroundColor:C.redBg }}>Sin opción viable</span>
-                            ) : mejor.ideal ? (
-                              <span style={{ fontSize:11, fontWeight:700, color:C.green, padding:"3px 10px", borderRadius:20, backgroundColor:"#F0FDF4" }}>Ideal</span>
-                            ) : (
-                              <span style={{ fontSize:11, fontWeight:700, color:"#CA8A04", padding:"3px 10px", borderRadius:20, backgroundColor:"#FEF9C3" }}>Viable</span>
-                            )}
-                          </td>
-                          <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{mejor ? mejor.proveedor : "—"}</td>
-                          <td style={{ padding:"10px 14px" }}>
-                            {mejor ? (() => { const tc = tipoColors[mejor.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"}; return <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c }}>{mejor.tipo_unidad}</span>; })() : "—"}
-                          </td>
-                          <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:mejor?C.green:C.textMuted }}>{mejor ? "$"+mejor.costo.toLocaleString() : "—"}</td>
-                          <td style={{ padding:"10px 14px" }}>
-                            {mejor ? (
-                              <span style={{ fontSize:14, fontWeight:800, color:mejor.costoPorPaq<=COSTO_IDEAL?C.green:mejor.costoPorPaq<=COSTO_MAX?"#CA8A04":C.red }}>${mejor.costoPorPaq.toFixed(1)}</span>
-                            ) : "—"}
-                          </td>
-                          <td style={{ padding:"10px 14px" }}>
-                            {sinOpcion ? (
-                              <span style={{ fontSize:11, color:C.red }}>Necesita mín. {carriers.length>0?minPaq(Math.min(...carriers.map(c=>parseFloat(c.costo_unidad)||Infinity))):"-"} paq</span>
-                            ) : mejor.ideal ? (
-                              <span style={{ fontSize:11, color:C.green }}>+{ruta.paquetes - mejor.idealP} sobre ideal</span>
-                            ) : (
-                              <span style={{ fontSize:11, color:"#CA8A04" }}>Faltan {mejor.idealP - ruta.paquetes} para ideal</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    <tr style={{ backgroundColor:"#FAFBFF", borderTop:"2px solid "+C.border }}>
-                      <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>TOTAL</td>
-                      <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800 }}>{rutas.reduce((s,r)=>s+r.paquetes,0)}</td>
-                      <td colSpan={3} style={{ padding:"10px 14px" }}>
-                        <span style={{ fontSize:11, fontWeight:600, color:C.green, marginRight:10 }}>{rutas.filter(r=>getRecomendacion(r.paquetes).length>0 && getRecomendacion(r.paquetes)[0].ideal).length} ideales</span>
-                        <span style={{ fontSize:11, fontWeight:600, color:"#CA8A04", marginRight:10 }}>{rutas.filter(r=>{const o=getRecomendacion(r.paquetes);return o.length>0&&!o[0].ideal;}).length} viables</span>
-                        <span style={{ fontSize:11, fontWeight:600, color:C.red }}>{rutas.filter(r=>getRecomendacion(r.paquetes).length===0).length} sin opción</span>
-                      </td>
-                      <td colSpan={3} />
-                    </tr>
-                  </tbody>
-                </table>
+
+              {/* Tabla de asignación interactiva */}
+              <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden", marginBottom:16 }}>
+                <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:C.text }}>Asignación de rutas — {rutas.length} rutas</div>
+                  <div style={{ fontSize:11, color:C.textMuted }}>Sesión: {sesionId.substring(0,10)} · Click en una ruta para ver opciones</div>
+                </div>
+                <div style={{ overflowX:"auto" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                    <thead>
+                      <tr style={{ backgroundColor:C.bg }}>
+                        {["","Ruta","Paquetes","Proveedor asignado","Tipo","Unidades","Costo/Día","Costo/Paq","Estado"].map(h => (
+                          <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rutas.map((ruta, idx) => {
+                        const a = asignacion[ruta.nombre];
+                        const opciones = getRecomendacion(ruta.paquetes);
+                        const isExpanded = expandedRuta === ruta.nombre;
+                        const car = a ? carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad) : null;
+                        const costoUnit = parseFloat(car?.costo_unidad) || 0;
+                        const costoTotal = costoUnit * (a?.unidades || 1);
+                        const costoPorPaq = ruta.paquetes > 0 ? costoTotal / ruta.paquetes : 0;
+                        const sinOpcion = opciones.length === 0;
+                        const esIdeal = costoPorPaq > 0 && costoPorPaq <= COSTO_IDEAL;
+                        const esViable = costoPorPaq > 0 && costoPorPaq <= COSTO_MAX;
+                        const tc = a ? (tipoColors[a.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"}) : null;
+                        return [
+                          <tr key={idx} style={{ borderTop:"1px solid "+C.border, backgroundColor:sinOpcion?"#FEF2F2":isExpanded?C.blueBg+"66":"transparent", cursor:"pointer" }}
+                            onClick={() => setExpandedRuta(isExpanded?null:ruta.nombre)}
+                            onMouseEnter={ev=>{if(!isExpanded&&!sinOpcion)ev.currentTarget.style.backgroundColor="#FAFBFF"}}
+                            onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=sinOpcion?"#FEF2F2":isExpanded?C.blueBg+"66":"transparent"}}>
+                            <td style={{ padding:"10px 8px 10px 14px", fontSize:12, color:C.textMuted }}>{isExpanded ? "▼" : "▶"}</td>
+                            <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700 }}>{ruta.nombre}</td>
+                            <td style={{ padding:"10px 14px" }}>
+                              <span style={{ fontSize:16, fontWeight:800, color:sinOpcion?C.red:C.text }}>{ruta.paquetes}</span>
+                            </td>
+                            <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{a ? a.proveedor : "—"}</td>
+                            <td style={{ padding:"10px 14px" }}>
+                              {tc ? <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c }}>{a.tipo_unidad}</span> : "—"}
+                            </td>
+                            <td style={{ padding:"10px 14px", fontSize:14, fontWeight:700 }}>{a ? a.unidades : "—"}</td>
+                            <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:a?C.green:C.textMuted }}>{a ? "$"+costoTotal.toLocaleString() : "—"}</td>
+                            <td style={{ padding:"10px 14px" }}>
+                              {a ? <span style={{ fontSize:14, fontWeight:800, color:esIdeal?C.green:esViable?"#CA8A04":C.red }}>${costoPorPaq.toFixed(1)}</span> : "—"}
+                            </td>
+                            <td style={{ padding:"10px 14px" }}>
+                              {sinOpcion ? (
+                                <span style={{ fontSize:11, fontWeight:700, color:C.red, padding:"3px 10px", borderRadius:20, backgroundColor:C.redBg }}>Sin opción</span>
+                              ) : esIdeal ? (
+                                <span style={{ fontSize:11, fontWeight:700, color:C.green, padding:"3px 10px", borderRadius:20, backgroundColor:"#F0FDF4" }}>Ideal</span>
+                              ) : esViable ? (
+                                <span style={{ fontSize:11, fontWeight:700, color:"#CA8A04", padding:"3px 10px", borderRadius:20, backgroundColor:"#FEF9C3" }}>Viable</span>
+                              ) : a ? (
+                                <span style={{ fontSize:11, fontWeight:700, color:C.red, padding:"3px 10px", borderRadius:20, backgroundColor:C.redBg }}>Excede máx</span>
+                              ) : (
+                                <span style={{ fontSize:11, color:C.textMuted }}>Sin asignar</span>
+                              )}
+                            </td>
+                          </tr>,
+                          isExpanded && (
+                            <tr key={idx+"_exp"} style={{ backgroundColor:C.bg }}>
+                              <td colSpan={9} style={{ padding:0 }}>
+                                <div style={{ padding:"12px 18px 16px" }}>
+                                  <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:10, textTransform:"uppercase", letterSpacing:"0.05em" }}>Opciones viables para {ruta.nombre} ({ruta.paquetes} paquetes)</div>
+                                  {opciones.length === 0 ? (
+                                    <div style={{ fontSize:12, color:C.red, padding:8 }}>No hay opciones viables. Se necesitan más paquetes para cumplir el costo máximo de ${COSTO_MAX}/paq.</div>
+                                  ) : (
+                                    <div style={{ display:"grid", gap:8 }}>
+                                      {opciones.map((op, oi) => {
+                                        const isSelected = a && a.proveedor === op.proveedor && a.tipo_unidad === op.tipo_unidad;
+                                        const opTc = tipoColors[op.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"};
+                                        const uniVal = isSelected ? (a.unidades || 1) : 1;
+                                        const opCostoTotal = op.costo * uniVal;
+                                        const opCostoPaq = ruta.paquetes > 0 ? opCostoTotal / ruta.paquetes : 0;
+                                        return (
+                                          <div key={oi} style={{
+                                            display:"flex", alignItems:"center", gap:12, padding:"10px 14px", borderRadius:8,
+                                            border:"2px solid "+(isSelected?C.accent:C.border),
+                                            backgroundColor:isSelected?C.accentLight:C.white, cursor:"pointer", flexWrap:"wrap"
+                                          }}
+                                            onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: op.proveedor, tipo_unidad: op.tipo_unidad, unidades: isSelected ? (a.unidades||1) : 1 }}); }}>
+                                            <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:130 }}>
+                                              <div style={{ width:14, height:14, borderRadius:7, border:"2px solid "+(isSelected?C.accent:C.border), backgroundColor:isSelected?C.accent:"transparent", display:"flex", alignItems:"center", justifyContent:"center" }}>
+                                                {isSelected && <div style={{ width:6, height:6, borderRadius:3, backgroundColor:"white" }} />}
+                                              </div>
+                                              <span style={{ fontSize:13, fontWeight:700 }}>{op.proveedor}</span>
+                                            </div>
+                                            <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:opTc.bg, color:opTc.c }}>{op.tipo_unidad}</span>
+                                            <span style={{ fontSize:12, fontWeight:600, color:C.green }}>${op.costo.toLocaleString()}/día</span>
+                                            <div style={{ display:"flex", alignItems:"center", gap:6, marginLeft:"auto" }}>
+                                              <span style={{ fontSize:11, fontWeight:600, color:C.textMuted }}>Unidades:</span>
+                                              <input type="number" min="1" max="10" value={uniVal}
+                                                onClick={e => e.stopPropagation()}
+                                                onChange={e => { e.stopPropagation(); const v = Math.max(1, parseInt(e.target.value)||1); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: op.proveedor, tipo_unidad: op.tipo_unidad, unidades: v }}); }}
+                                                style={{ width:52, padding:"5px 6px", borderRadius:6, border:"1px solid "+C.border, fontSize:13, fontWeight:700, textAlign:"center" }} />
+                                              <span style={{ fontSize:12, color:C.textMuted, minWidth:70 }}>= ${opCostoTotal.toLocaleString()}</span>
+                                              <span style={{ fontSize:12, fontWeight:800, color:opCostoPaq<=COSTO_IDEAL?C.green:opCostoPaq<=COSTO_MAX?"#CA8A04":C.red, minWidth:55 }}>${opCostoPaq.toFixed(1)}/paq</span>
+                                              {op.ideal ? (
+                                                <span style={{ fontSize:10, fontWeight:700, color:C.green, padding:"2px 6px", borderRadius:4, backgroundColor:"#F0FDF4" }}>Ideal</span>
+                                              ) : (
+                                                <span style={{ fontSize:10, fontWeight:700, color:"#CA8A04", padding:"2px 6px", borderRadius:4, backgroundColor:"#FEF9C3" }}>Viable</span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        ];
+                      })}
+                      <tr style={{ backgroundColor:"#FAFBFF", borderTop:"2px solid "+C.border }}>
+                        <td />
+                        <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>TOTAL</td>
+                        <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800 }}>{totalPaquetes}</td>
+                        <td colSpan={3} style={{ padding:"10px 14px" }}>
+                          <span style={{ fontSize:11, fontWeight:600, color:C.green, marginRight:10 }}>
+                            {rutas.filter(r => { const aa=asignacion[r.nombre]; if(!aa) return false; const cc=carriers.find(c=>c.proveedor===aa.proveedor&&c.tipo_unidad===aa.tipo_unidad); const ct=(parseFloat(cc?.costo_unidad)||0)*(aa.unidades||1); return r.paquetes>0&&ct/r.paquetes<=COSTO_IDEAL; }).length} ideales
+                          </span>
+                          <span style={{ fontSize:11, fontWeight:600, color:"#CA8A04", marginRight:10 }}>
+                            {rutas.filter(r => { const aa=asignacion[r.nombre]; if(!aa) return false; const cc=carriers.find(c=>c.proveedor===aa.proveedor&&c.tipo_unidad===aa.tipo_unidad); const ct=(parseFloat(cc?.costo_unidad)||0)*(aa.unidades||1); const cp=r.paquetes>0?ct/r.paquetes:Infinity; return cp>COSTO_IDEAL&&cp<=COSTO_MAX; }).length} viables
+                          </span>
+                          <span style={{ fontSize:11, fontWeight:600, color:C.red }}>
+                            {rutas.filter(r => !asignacion[r.nombre] || getRecomendacion(r.paquetes).length===0).length} sin opción
+                          </span>
+                        </td>
+                        <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:C.green }}>${totalCostoAsignado.toLocaleString()}</td>
+                        <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?"#CA8A04":C.red }}>${costoPromPaq.toFixed(1)}</td>
+                        <td />
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
+
+              {/* Resumen por proveedor */}
+              {(() => {
+                const resumenProv = {};
+                rutas.forEach(ruta => {
+                  const a = asignacion[ruta.nombre];
+                  if (!a) return;
+                  const key = a.proveedor + "|" + a.tipo_unidad;
+                  if (!resumenProv[key]) resumenProv[key] = { proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, rutas: 0, unidades: 0, paquetes: 0, costo: 0 };
+                  const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+                  resumenProv[key].rutas += 1;
+                  resumenProv[key].unidades += a.unidades || 1;
+                  resumenProv[key].paquetes += ruta.paquetes;
+                  resumenProv[key].costo += (parseFloat(car?.costo_unidad) || 0) * (a.unidades || 1);
+                });
+                const resList = Object.values(resumenProv).sort((a, b) => b.costo - a.costo);
+                if (resList.length === 0) return null;
+                return (
+                  <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden" }}>
+                    <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, fontSize:13, fontWeight:700, color:C.text }}>Resumen de asignación por proveedor</div>
+                    <div style={{ overflowX:"auto" }}>
+                      <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                        <thead>
+                          <tr style={{ backgroundColor:C.bg }}>
+                            {["Proveedor","Tipo","Rutas","Unidades","Paquetes","Costo total","Costo/Paq"].map(h => (
+                              <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {resList.map((rp, i) => {
+                            const cpq = rp.paquetes > 0 ? rp.costo / rp.paquetes : 0;
+                            const rtc = tipoColors[rp.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"};
+                            return (
+                              <tr key={i} style={{ borderTop:"1px solid "+C.border }}>
+                                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700 }}>{rp.proveedor}</td>
+                                <td style={{ padding:"10px 14px" }}><span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:rtc.bg, color:rtc.c }}>{rp.tipo_unidad}</span></td>
+                                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{rp.rutas}</td>
+                                <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800 }}>{rp.unidades}</td>
+                                <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{rp.paquetes}</td>
+                                <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:C.green }}>${rp.costo.toLocaleString()}</td>
+                                <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:cpq<=COSTO_IDEAL?C.green:cpq<=COSTO_MAX?"#CA8A04":C.red }}>${cpq.toFixed(1)}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr style={{ backgroundColor:"#FAFBFF", borderTop:"2px solid "+C.border }}>
+                            <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>TOTAL</td>
+                            <td />
+                            <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>{resList.reduce((s,r)=>s+r.rutas,0)}</td>
+                            <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800 }}>{resList.reduce((s,r)=>s+r.unidades,0)}</td>
+                            <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>{totalPaquetes}</td>
+                            <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:C.green }}>${totalCostoAsignado.toLocaleString()}</td>
+                            <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?"#CA8A04":C.red }}>${costoPromPaq.toFixed(1)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
+            </>
+            );
+          })()}
           {sesionId && !loadingSession && rutas.length === 0 && (
             <div style={{ padding:32, textAlign:"center", color:C.textMuted, fontSize:13 }}>No se encontraron rutas en esta sesión.</div>
           )}
