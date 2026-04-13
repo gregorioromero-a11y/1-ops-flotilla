@@ -87,6 +87,7 @@ const navSections = [
   ]},
   { label: "HERRAMIENTAS", items: [
     { id: "ruteo", label: "Ruteo / Clusters", icon: IC.Map, badge: "Nuevo" },
+    { id: "asignaciones", label: "Asignaciones", icon: IC.ClipboardCheck, badge: "Nuevo" },
     { id: "manifiesto", label: "Manifiesto", icon: IC.ClipboardCheck, badge: "Nuevo" },
   ]},
   { label: "SISTEMA", items: [
@@ -2787,6 +2788,244 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
   );
 }
 
+// --- ASIGNACIONES ---
+function ModuleAsignaciones() {
+  const [carriers, setCarriers] = useState([]);
+  const [historico, setHistorico] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sesionId, setSesionId] = useState(null);
+  const [rutas, setRutas] = useState([]);
+  const [loadingSession, setLoadingSession] = useState(false);
+
+  const COSTO_IDEAL = 40;
+  const COSTO_MAX = 45;
+
+  useEffect(() => { loadData(); }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    const [{ data: cData }, { data: rData }] = await Promise.all([
+      supabase.from("carriers").select("*").order("proveedor"),
+      supabase.from("ruteo_puntos").select("sesion, created_at, cluster").order("created_at", { ascending: false }),
+    ]);
+    const umCarriers = (cData || []).filter(c => c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—" && (c.operacion || "").toLowerCase().includes("ltima"));
+    setCarriers(umCarriers);
+    if (rData && rData.length > 0) {
+      const grouped = {};
+      rData.forEach(r => {
+        if (!grouped[r.sesion]) grouped[r.sesion] = { sesion: r.sesion, fecha: r.created_at, puntos: 0, rutas: new Set() };
+        grouped[r.sesion].puntos += 1;
+        grouped[r.sesion].rutas.add(r.cluster);
+      });
+      setHistorico(Object.values(grouped).map(g => ({ ...g, rutas: g.rutas.size })).sort((a, b) => b.fecha.localeCompare(a.fecha)));
+    }
+    setLoading(false);
+  };
+
+  const loadSesion = async (sid) => {
+    setLoadingSession(true);
+    setSesionId(sid);
+    const { data } = await supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice");
+    if (data && data.length > 0) {
+      const rutaMap = {};
+      data.forEach(r => {
+        const rn = r.ruta || "Ruta " + (r.cluster + 1);
+        if (!rutaMap[rn]) rutaMap[rn] = { nombre: rn, cluster: r.cluster, paquetes: 0 };
+        rutaMap[rn].paquetes += 1;
+      });
+      setRutas(Object.values(rutaMap).sort((a, b) => a.cluster - b.cluster));
+    } else {
+      setRutas([]);
+    }
+    setLoadingSession(false);
+  };
+
+  const minPaq = costo => Math.ceil(costo / COSTO_MAX);
+  const idealPaq = costo => Math.ceil(costo / COSTO_IDEAL);
+
+  const getRecomendacion = (paquetes) => {
+    const opciones = carriers.map(c => {
+      const costo = parseFloat(c.costo_unidad) || 0;
+      const minP = minPaq(costo);
+      const idealP = idealPaq(costo);
+      const costoPorPaq = paquetes > 0 ? costo / paquetes : Infinity;
+      const viable = paquetes >= minP;
+      const ideal = paquetes >= idealP;
+      return { proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, costo, minP, idealP, costoPorPaq, viable, ideal };
+    }).filter(o => o.viable);
+    opciones.sort((a, b) => a.costoPorPaq - b.costoPorPaq);
+    return opciones;
+  };
+
+  const tipoColors = { Moto:{bg:"#FEF3C7",c:"#D97706"}, Sedan:{bg:"#DBEAFE",c:"#2563EB"}, SmallVan:{bg:"#EDE9FE",c:"#7C3AED"}, Van:{bg:"#EDE9FE",c:"#7C3AED"}, "1.5":{bg:"#FEF9C3",c:"#CA8A04"}, "3.5":{bg:"#FFEDD5",c:"#C2410C"}, Rabon:{bg:"#FFEDD5",c:"#EA580C"}, Torton:{bg:"#FEE2E2",c:"#DC2626"}, Tracto:{bg:"#F1F5F9",c:"#475569"} };
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16, flexWrap:"wrap", gap:10 }}>
+        <div>
+          <h1 style={{ fontSize:24, fontWeight:800, margin:0 }}>Asignaciones</h1>
+          <p style={{ color:C.textMuted, fontSize:13, marginTop:2 }}>Recomendación de asignación por costo · Última milla · Target: ${COSTO_IDEAL} ideal / ${COSTO_MAX} máx por paquete</p>
+        </div>
+      </div>
+
+      {loading ? <div style={{ padding:40, textAlign:"center", color:C.textMuted }}>Cargando...</div> : (
+        <>
+          {/* Tabla de costos por carrier */}
+          <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden", marginBottom:20 }}>
+            <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, fontSize:13, fontWeight:700, color:C.text }}>Catálogo de carriers — Última milla</div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                <thead>
+                  <tr style={{ backgroundColor:C.bg }}>
+                    {["Proveedor","Tipo unidad","Costo/Día","Mín. paquetes ($"+COSTO_MAX+")","Ideal paquetes ($"+COSTO_IDEAL+")"].map(h => (
+                      <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {carriers.map((c, i) => {
+                    const costo = parseFloat(c.costo_unidad) || 0;
+                    const tc = tipoColors[c.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"};
+                    return (
+                      <tr key={i} style={{ borderTop:"1px solid "+C.border }}
+                        onMouseEnter={ev=>ev.currentTarget.style.backgroundColor="#FAFBFF"}
+                        onMouseLeave={ev=>ev.currentTarget.style.backgroundColor="transparent"}>
+                        <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{c.proveedor}</td>
+                        <td style={{ padding:"10px 14px" }}>
+                          <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c }}>{c.tipo_unidad}</span>
+                        </td>
+                        <td style={{ padding:"10px 14px", fontSize:14, fontWeight:700, color:C.green }}>${costo.toLocaleString()}</td>
+                        <td style={{ padding:"10px 14px" }}>
+                          <span style={{ fontSize:14, fontWeight:800, color:C.accent }}>{minPaq(costo)}</span>
+                          <span style={{ fontSize:11, color:C.textMuted, marginLeft:6 }}>→ ${(costo/minPaq(costo)).toFixed(1)}/paq</span>
+                        </td>
+                        <td style={{ padding:"10px 14px" }}>
+                          <span style={{ fontSize:14, fontWeight:800, color:C.blue }}>{idealPaq(costo)}</span>
+                          <span style={{ fontSize:11, color:C.textMuted, marginLeft:6 }}>→ ${(costo/idealPaq(costo)).toFixed(1)}/paq</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {carriers.length === 0 && <div style={{ padding:32, textAlign:"center", color:C.textMuted, fontSize:13 }}>No hay carriers con operación "Última milla" configurados.</div>}
+          </div>
+
+          {/* Selector de sesión de ruteo */}
+          <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden", marginBottom:20 }}>
+            <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, fontSize:13, fontWeight:700, color:C.text }}>Seleccionar sesión de ruteo</div>
+            {historico.length === 0 ? (
+              <div style={{ padding:32, textAlign:"center", color:C.textMuted, fontSize:13 }}>No hay sesiones de ruteo guardadas. Crea una en el módulo Ruteo/Clusters.</div>
+            ) : (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(220px,1fr))", gap:12, padding:16 }}>
+                {historico.map(h => {
+                  const isSelected = sesionId === h.sesion;
+                  const dateStr = new Date(h.fecha).toLocaleDateString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+                  return (
+                    <button key={h.sesion} onClick={() => loadSesion(h.sesion)} style={{
+                      padding:"14px 16px", borderRadius:10, border:"2px solid "+(isSelected?C.accent:C.border),
+                      backgroundColor:isSelected?C.accentLight:C.white, cursor:"pointer", textAlign:"left",
+                      transition:"all 0.15s"
+                    }}>
+                      <div style={{ fontSize:12, fontWeight:700, color:isSelected?C.accent:C.text, marginBottom:4 }}>{h.sesion.substring(0,10)}</div>
+                      <div style={{ fontSize:11, color:C.textMuted }}>{dateStr}</div>
+                      <div style={{ display:"flex", gap:12, marginTop:8 }}>
+                        <span style={{ fontSize:11, fontWeight:600, color:C.blue }}>{h.puntos} puntos</span>
+                        <span style={{ fontSize:11, fontWeight:600, color:C.purple }}>{h.rutas} rutas</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Recomendación de asignación */}
+          {loadingSession && <div style={{ padding:32, textAlign:"center", color:C.textMuted }}>Cargando sesión...</div>}
+          {sesionId && !loadingSession && rutas.length > 0 && (
+            <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden" }}>
+              <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div style={{ fontSize:13, fontWeight:700, color:C.text }}>Recomendación de asignación — {rutas.length} rutas</div>
+                <div style={{ fontSize:11, color:C.textMuted }}>Sesión: {sesionId.substring(0,10)}</div>
+              </div>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                  <thead>
+                    <tr style={{ backgroundColor:C.bg }}>
+                      {["Ruta","Paquetes","Recomendación","Proveedor","Tipo","Costo/Día","Costo/Paq","Estado"].map(h => (
+                        <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rutas.map((ruta, idx) => {
+                      const opciones = getRecomendacion(ruta.paquetes);
+                      const mejor = opciones[0] || null;
+                      const sinOpcion = !mejor;
+                      return (
+                        <tr key={idx} style={{ borderTop:"1px solid "+C.border, backgroundColor:sinOpcion?"#FEF2F2":"transparent" }}
+                          onMouseEnter={ev=>{if(!sinOpcion)ev.currentTarget.style.backgroundColor="#FAFBFF"}}
+                          onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=sinOpcion?"#FEF2F2":"transparent"}}>
+                          <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700 }}>{ruta.nombre}</td>
+                          <td style={{ padding:"10px 14px" }}>
+                            <span style={{ fontSize:16, fontWeight:800, color:sinOpcion?C.red:C.text }}>{ruta.paquetes}</span>
+                          </td>
+                          <td style={{ padding:"10px 14px" }}>
+                            {sinOpcion ? (
+                              <span style={{ fontSize:11, fontWeight:700, color:C.red, padding:"3px 10px", borderRadius:20, backgroundColor:C.redBg }}>Sin opción viable</span>
+                            ) : mejor.ideal ? (
+                              <span style={{ fontSize:11, fontWeight:700, color:C.green, padding:"3px 10px", borderRadius:20, backgroundColor:"#F0FDF4" }}>Ideal</span>
+                            ) : (
+                              <span style={{ fontSize:11, fontWeight:700, color:"#CA8A04", padding:"3px 10px", borderRadius:20, backgroundColor:"#FEF9C3" }}>Viable</span>
+                            )}
+                          </td>
+                          <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{mejor ? mejor.proveedor : "—"}</td>
+                          <td style={{ padding:"10px 14px" }}>
+                            {mejor ? (() => { const tc = tipoColors[mejor.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"}; return <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c }}>{mejor.tipo_unidad}</span>; })() : "—"}
+                          </td>
+                          <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:mejor?C.green:C.textMuted }}>{mejor ? "$"+mejor.costo.toLocaleString() : "—"}</td>
+                          <td style={{ padding:"10px 14px" }}>
+                            {mejor ? (
+                              <span style={{ fontSize:14, fontWeight:800, color:mejor.costoPorPaq<=COSTO_IDEAL?C.green:mejor.costoPorPaq<=COSTO_MAX?"#CA8A04":C.red }}>${mejor.costoPorPaq.toFixed(1)}</span>
+                            ) : "—"}
+                          </td>
+                          <td style={{ padding:"10px 14px" }}>
+                            {sinOpcion ? (
+                              <span style={{ fontSize:11, color:C.red }}>Necesita mín. {carriers.length>0?minPaq(Math.min(...carriers.map(c=>parseFloat(c.costo_unidad)||Infinity))):"-"} paq</span>
+                            ) : mejor.ideal ? (
+                              <span style={{ fontSize:11, color:C.green }}>+{ruta.paquetes - mejor.idealP} sobre ideal</span>
+                            ) : (
+                              <span style={{ fontSize:11, color:"#CA8A04" }}>Faltan {mejor.idealP - ruta.paquetes} para ideal</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    <tr style={{ backgroundColor:"#FAFBFF", borderTop:"2px solid "+C.border }}>
+                      <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>TOTAL</td>
+                      <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800 }}>{rutas.reduce((s,r)=>s+r.paquetes,0)}</td>
+                      <td colSpan={3} style={{ padding:"10px 14px" }}>
+                        <span style={{ fontSize:11, fontWeight:600, color:C.green, marginRight:10 }}>{rutas.filter(r=>getRecomendacion(r.paquetes).length>0 && getRecomendacion(r.paquetes)[0].ideal).length} ideales</span>
+                        <span style={{ fontSize:11, fontWeight:600, color:"#CA8A04", marginRight:10 }}>{rutas.filter(r=>{const o=getRecomendacion(r.paquetes);return o.length>0&&!o[0].ideal;}).length} viables</span>
+                        <span style={{ fontSize:11, fontWeight:600, color:C.red }}>{rutas.filter(r=>getRecomendacion(r.paquetes).length===0).length} sin opción</span>
+                      </td>
+                      <td colSpan={3} />
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {sesionId && !loadingSession && rutas.length === 0 && (
+            <div style={{ padding:32, textAlign:"center", color:C.textMuted, fontSize:13 }}>No se encontraron rutas en esta sesión.</div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // --- OPS Type Module (T1 Envíos, Warehouse, HalfMile, Same Day) ---
 function ModuleOpsType({ tipo, color }) {
   const data = opsBreakdown.find(o => o.tipo === tipo) || opsBreakdown[0];
@@ -3334,6 +3573,7 @@ export default function T1OpsFlotilla() {
       case "halfmile": return <ModuleOpsType tipo="HalfMile" color={C.purple} />;
       case "sameday": return <ModuleOpsType tipo="Same Day" color={C.yellow} />;
       case "ruteo": return <ModuleRuteo />;
+      case "asignaciones": return <ModuleAsignaciones />;
       case "manifiesto": return <ModuleManifiesto />;
       case "config": return <ModulePlaceholder title="Configuración" desc="Ajustes del sistema" />;
       default: return <ModuleDashboard />;
