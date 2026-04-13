@@ -2981,21 +2981,25 @@ function ModuleAsignaciones() {
           {sesionId && !loadingSession && rutas.length > 0 && (() => {
             const totalCostoAsignado = rutas.reduce((s, ruta) => {
               const a = asignacion[ruta.nombre];
-              if (!a) return s;
+              if (!a || a.noAsignar) return s;
               const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
               return s + ((parseFloat(car?.costo_unidad) || 0) * (a.unidades || 1));
             }, 0);
+            const rutasAsignadas = rutas.filter(r => { const aa = asignacion[r.nombre]; return aa && !aa.noAsignar; });
+            const rutasNoSalen = rutas.filter(r => { const aa = asignacion[r.nombre]; return aa && aa.noAsignar; });
             const totalPaquetes = rutas.reduce((s, r) => s + r.paquetes, 0);
-            const costoPromPaq = totalPaquetes > 0 ? totalCostoAsignado / totalPaquetes : 0;
+            const paqAsignados = rutasAsignadas.reduce((s, r) => s + r.paquetes, 0);
+            const costoPromPaq = paqAsignados > 0 ? totalCostoAsignado / paqAsignados : 0;
             return (
             <>
               {/* Stat cards resumen asignación */}
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px,1fr))", gap:14, marginBottom:16 }}>
                 {[
-                  { label:"Rutas", value:rutas.length, color:C.blue },
-                  { label:"Paquetes totales", value:totalPaquetes, color:C.text },
-                  { label:"Costo total asignado", value:"$"+totalCostoAsignado.toLocaleString(), color:C.green },
-                  { label:"Costo promedio/paq", value:"$"+costoPromPaq.toFixed(1), color:costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?"#CA8A04":C.red },
+                  { label:"Rutas asignadas", value:rutasAsignadas.length+" / "+rutas.length, color:C.blue },
+                  { label:"No salen", value:rutasNoSalen.length, color:rutasNoSalen.length>0?C.red:C.textMuted },
+                  { label:"Paquetes asignados", value:paqAsignados+" / "+totalPaquetes, color:C.text },
+                  { label:"Costo total", value:"$"+totalCostoAsignado.toLocaleString(), color:C.green },
+                  { label:"Costo promedio/paq", value:paqAsignados>0?"$"+costoPromPaq.toFixed(1):"—", color:costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?"#CA8A04":C.red },
                 ].map(s => (
                   <div key={s.label} style={{ backgroundColor:C.white, borderRadius:10, padding:"14px 16px", border:"1px solid "+C.border }}>
                     <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>{s.label}</div>
@@ -3022,37 +3026,40 @@ function ModuleAsignaciones() {
                     <tbody>
                       {rutas.map((ruta, idx) => {
                         const a = asignacion[ruta.nombre];
+                        const noAsignar = a && a.noAsignar;
                         const opciones = getRecomendacion(ruta.paquetes);
                         const isExpanded = expandedRuta === ruta.nombre;
-                        const car = a ? carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad) : null;
+                        const car = (a && !noAsignar) ? carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad) : null;
                         const costoUnit = parseFloat(car?.costo_unidad) || 0;
-                        const costoTotal = costoUnit * (a?.unidades || 1);
-                        const costoPorPaq = ruta.paquetes > 0 ? costoTotal / ruta.paquetes : 0;
+                        const costoTotal = noAsignar ? 0 : costoUnit * (a?.unidades || 1);
+                        const costoPorPaq = (!noAsignar && ruta.paquetes > 0) ? costoTotal / ruta.paquetes : 0;
                         const sinOpcion = opciones.length === 0;
-                        const esIdeal = costoPorPaq > 0 && costoPorPaq <= COSTO_IDEAL;
-                        const esViable = costoPorPaq > 0 && costoPorPaq <= COSTO_MAX;
-                        const tc = a ? (tipoColors[a.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"}) : null;
+                        const esIdeal = !noAsignar && costoPorPaq > 0 && costoPorPaq <= COSTO_IDEAL;
+                        const esViable = !noAsignar && costoPorPaq > 0 && costoPorPaq <= COSTO_MAX;
+                        const tc = (a && !noAsignar) ? (tipoColors[a.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"}) : null;
                         return [
-                          <tr key={idx} style={{ borderTop:"1px solid "+C.border, backgroundColor:sinOpcion?"#FEF2F2":isExpanded?C.blueBg+"66":"transparent", cursor:"pointer" }}
+                          <tr key={idx} style={{ borderTop:"1px solid "+C.border, backgroundColor:noAsignar?"#F9FAFB":sinOpcion?"#FEF2F2":isExpanded?C.blueBg+"66":"transparent", cursor:"pointer", opacity:noAsignar?0.6:1 }}
                             onClick={() => setExpandedRuta(isExpanded?null:ruta.nombre)}
-                            onMouseEnter={ev=>{if(!isExpanded&&!sinOpcion)ev.currentTarget.style.backgroundColor="#FAFBFF"}}
-                            onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=sinOpcion?"#FEF2F2":isExpanded?C.blueBg+"66":"transparent"}}>
+                            onMouseEnter={ev=>{if(!isExpanded&&!sinOpcion&&!noAsignar)ev.currentTarget.style.backgroundColor="#FAFBFF"}}
+                            onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=noAsignar?"#F9FAFB":sinOpcion?"#FEF2F2":isExpanded?C.blueBg+"66":"transparent"}}>
                             <td style={{ padding:"10px 8px 10px 14px", fontSize:12, color:C.textMuted }}>{isExpanded ? "▼" : "▶"}</td>
                             <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700 }}>{ruta.nombre}</td>
                             <td style={{ padding:"10px 14px" }}>
                               <span style={{ fontSize:16, fontWeight:800, color:sinOpcion?C.red:C.text }}>{ruta.paquetes}</span>
                             </td>
-                            <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{a ? a.proveedor : "—"}</td>
+                            <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600, color:noAsignar?C.textMuted:C.text, fontStyle:noAsignar?"italic":"normal" }}>{noAsignar ? "No asignar" : a ? a.proveedor : "—"}</td>
                             <td style={{ padding:"10px 14px" }}>
                               {tc ? <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c }}>{a.tipo_unidad}</span> : "—"}
                             </td>
-                            <td style={{ padding:"10px 14px", fontSize:14, fontWeight:700 }}>{a ? a.unidades : "—"}</td>
-                            <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:a?C.green:C.textMuted }}>{a ? "$"+costoTotal.toLocaleString() : "—"}</td>
+                            <td style={{ padding:"10px 14px", fontSize:14, fontWeight:700 }}>{(a && !noAsignar) ? a.unidades : "—"}</td>
+                            <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:(a&&!noAsignar)?C.green:C.textMuted }}>{(a && !noAsignar) ? "$"+costoTotal.toLocaleString() : "—"}</td>
                             <td style={{ padding:"10px 14px" }}>
-                              {a ? <span style={{ fontSize:14, fontWeight:800, color:esIdeal?C.green:esViable?"#CA8A04":C.red }}>${costoPorPaq.toFixed(1)}</span> : "—"}
+                              {(a && !noAsignar) ? <span style={{ fontSize:14, fontWeight:800, color:esIdeal?C.green:esViable?"#CA8A04":C.red }}>${costoPorPaq.toFixed(1)}</span> : "—"}
                             </td>
                             <td style={{ padding:"10px 14px" }}>
-                              {sinOpcion ? (
+                              {noAsignar ? (
+                                <span style={{ fontSize:11, fontWeight:700, color:C.textMuted, padding:"3px 10px", borderRadius:20, backgroundColor:C.bg, border:"1px solid "+C.border }}>No sale</span>
+                              ) : sinOpcion ? (
                                 <span style={{ fontSize:11, fontWeight:700, color:C.red, padding:"3px 10px", borderRadius:20, backgroundColor:C.redBg }}>Sin opción</span>
                               ) : esIdeal ? (
                                 <span style={{ fontSize:11, fontWeight:700, color:C.green, padding:"3px 10px", borderRadius:20, backgroundColor:"#F0FDF4" }}>Ideal</span>
@@ -3125,6 +3132,21 @@ function ModuleAsignaciones() {
                                             </tr>
                                           );
                                         })}
+                                        <tr style={{ borderTop:"2px solid "+C.border, backgroundColor:noAsignar?"#FEF2F2":"transparent", cursor:"pointer" }}
+                                          onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { noAsignar: true }}); }}
+                                          onMouseEnter={ev=>{if(!noAsignar)ev.currentTarget.style.backgroundColor="#FEF2F2"}}
+                                          onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=noAsignar?"#FEF2F2":"transparent"}}>
+                                          <td style={{ padding:"9px 12px", width:30 }}>
+                                            <div style={{ width:16, height:16, borderRadius:8, border:"2px solid "+(noAsignar?C.red:C.border), backgroundColor:noAsignar?C.red:"transparent", display:"flex", alignItems:"center", justifyContent:"center" }}>
+                                              {noAsignar && <div style={{ width:6, height:6, borderRadius:3, backgroundColor:"white" }} />}
+                                            </div>
+                                          </td>
+                                          <td colSpan={5} style={{ padding:"9px 12px", fontSize:13, fontWeight:600, color:C.red, fontStyle:"italic" }}>No asignar — esta ruta no sale</td>
+                                          <td style={{ padding:"9px 12px", textAlign:"right", fontSize:13, fontWeight:700, color:C.textMuted }}>$0</td>
+                                          <td style={{ padding:"9px 12px", textAlign:"center" }}>
+                                            <span style={{ fontSize:10, fontWeight:700, color:C.textMuted, padding:"2px 8px", borderRadius:4, backgroundColor:C.bg, border:"1px solid "+C.border }}>No sale</span>
+                                          </td>
+                                        </tr>
                                       </tbody>
                                     </table>
                                   )}
@@ -3140,17 +3162,20 @@ function ModuleAsignaciones() {
                         <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800 }}>{totalPaquetes}</td>
                         <td colSpan={3} style={{ padding:"10px 14px" }}>
                           <span style={{ fontSize:11, fontWeight:600, color:C.green, marginRight:10 }}>
-                            {rutas.filter(r => { const aa=asignacion[r.nombre]; if(!aa) return false; const cc=carriers.find(c=>c.proveedor===aa.proveedor&&c.tipo_unidad===aa.tipo_unidad); const ct=(parseFloat(cc?.costo_unidad)||0)*(aa.unidades||1); return r.paquetes>0&&ct/r.paquetes<=COSTO_IDEAL; }).length} ideales
+                            {rutas.filter(r => { const aa=asignacion[r.nombre]; if(!aa||aa.noAsignar) return false; const cc=carriers.find(c=>c.proveedor===aa.proveedor&&c.tipo_unidad===aa.tipo_unidad); const ct=(parseFloat(cc?.costo_unidad)||0)*(aa.unidades||1); return r.paquetes>0&&ct/r.paquetes<=COSTO_IDEAL; }).length} ideales
                           </span>
                           <span style={{ fontSize:11, fontWeight:600, color:"#CA8A04", marginRight:10 }}>
-                            {rutas.filter(r => { const aa=asignacion[r.nombre]; if(!aa) return false; const cc=carriers.find(c=>c.proveedor===aa.proveedor&&c.tipo_unidad===aa.tipo_unidad); const ct=(parseFloat(cc?.costo_unidad)||0)*(aa.unidades||1); const cp=r.paquetes>0?ct/r.paquetes:Infinity; return cp>COSTO_IDEAL&&cp<=COSTO_MAX; }).length} viables
+                            {rutas.filter(r => { const aa=asignacion[r.nombre]; if(!aa||aa.noAsignar) return false; const cc=carriers.find(c=>c.proveedor===aa.proveedor&&c.tipo_unidad===aa.tipo_unidad); const ct=(parseFloat(cc?.costo_unidad)||0)*(aa.unidades||1); const cp=r.paquetes>0?ct/r.paquetes:Infinity; return cp>COSTO_IDEAL&&cp<=COSTO_MAX; }).length} viables
+                          </span>
+                          <span style={{ fontSize:11, fontWeight:600, color:C.textMuted, marginRight:10 }}>
+                            {rutasNoSalen.length} no salen
                           </span>
                           <span style={{ fontSize:11, fontWeight:600, color:C.red }}>
-                            {rutas.filter(r => !asignacion[r.nombre] || getRecomendacion(r.paquetes).length===0).length} sin opción
+                            {rutas.filter(r => { const aa=asignacion[r.nombre]; return !aa || (!aa.noAsignar && getRecomendacion(r.paquetes).length===0); }).length} sin opción
                           </span>
                         </td>
                         <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:C.green }}>${totalCostoAsignado.toLocaleString()}</td>
-                        <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?"#CA8A04":C.red }}>${costoPromPaq.toFixed(1)}</td>
+                        <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:paqAsignados>0?(costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?"#CA8A04":C.red):C.textMuted }}>{paqAsignados>0?"$"+costoPromPaq.toFixed(1):"—"}</td>
                         <td />
                       </tr>
                     </tbody>
@@ -3163,7 +3188,7 @@ function ModuleAsignaciones() {
                 const resumenProv = {};
                 rutas.forEach(ruta => {
                   const a = asignacion[ruta.nombre];
-                  if (!a) return;
+                  if (!a || a.noAsignar) return;
                   const key = a.proveedor + "|" + a.tipo_unidad;
                   if (!resumenProv[key]) resumenProv[key] = { proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, rutas: 0, unidades: 0, paquetes: 0, costo: 0 };
                   const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
