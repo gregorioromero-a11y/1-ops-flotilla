@@ -3109,6 +3109,146 @@ function ModuleAsignaciones() {
 
   const tipoColors = { Moto:{bg:"#FEF3C7",c:"#D97706"}, Sedan:{bg:"#DBEAFE",c:"#2563EB"}, SmallVan:{bg:"#EDE9FE",c:"#7C3AED"}, Van:{bg:"#EDE9FE",c:"#7C3AED"}, "1.5":{bg:"#FEF9C3",c:"#CA8A04"}, "3.5":{bg:"#FFEDD5",c:"#C2410C"}, Rabon:{bg:"#FFEDD5",c:"#EA580C"}, Torton:{bg:"#FEE2E2",c:"#DC2626"}, Tracto:{bg:"#F1F5F9",c:"#475569"} };
 
+  const exportarPDF = () => {
+    if (!sesionId || rutas.length === 0) return;
+    const fechaStr = new Date().toLocaleString("es-MX", { dateStyle: "long", timeStyle: "short" });
+    const totalPaq = rutas.reduce((s, r) => s + r.paquetes, 0);
+    const filas = rutas.map(r => {
+      const a = asignacion[r.nombre];
+      if (!a) return { ruta: r.nombre, paquetes: r.paquetes, proveedor: "—", tipo: "—", unidades: "—", costo: "—", costoPaq: "—", estado: "Sin asignar" };
+      if (a.noAsignar) return { ruta: r.nombre, paquetes: r.paquetes, proveedor: "NO ASIGNAR", tipo: "—", unidades: "—", costo: "$0", costoPaq: "—", estado: "No sale" };
+      const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+      const cu = parseFloat(car?.costo_unidad) || 0;
+      const ct = cu * (a.unidades || 1);
+      const cpq = r.paquetes > 0 ? ct / r.paquetes : 0;
+      return {
+        ruta: r.nombre, paquetes: r.paquetes, proveedor: a.proveedor, tipo: a.tipo_unidad,
+        unidades: a.unidades || 1, costo: "$" + ct.toLocaleString(),
+        costoPaq: "$" + cpq.toFixed(1),
+        estado: cpq <= COSTO_IDEAL ? "Ideal" : cpq <= COSTO_MAX ? "Viable" : "Excede"
+      };
+    });
+    const totalCosto = rutas.reduce((s, r) => {
+      const a = asignacion[r.nombre]; if (!a || a.noAsignar) return s;
+      const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+      return s + ((parseFloat(car?.costo_unidad) || 0) * (a.unidades || 1));
+    }, 0);
+    const paqAsig = rutas.filter(r => { const a = asignacion[r.nombre]; return a && !a.noAsignar; }).reduce((s, r) => s + r.paquetes, 0);
+
+    // Resumen por proveedor
+    const resProv = {};
+    rutas.forEach(r => {
+      const a = asignacion[r.nombre]; if (!a || a.noAsignar) return;
+      const k = a.proveedor + "|" + a.tipo_unidad;
+      if (!resProv[k]) resProv[k] = { proveedor: a.proveedor, tipo: a.tipo_unidad, rutas: 0, unidades: 0, paquetes: 0, costo: 0 };
+      const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+      resProv[k].rutas++; resProv[k].unidades += a.unidades || 1; resProv[k].paquetes += r.paquetes;
+      resProv[k].costo += (parseFloat(car?.costo_unidad) || 0) * (a.unidades || 1);
+    });
+    const provList = Object.values(resProv).sort((a, b) => b.costo - a.costo);
+
+    const colorEstado = e => e === "Ideal" ? "#16A34A" : e === "Viable" ? "#CA8A04" : e === "No sale" ? "#7C8495" : e === "Excede" ? "#DC2626" : "#7C8495";
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Asignaciones ${sesionId.substring(0,10)}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'DM Sans',-apple-system,sans-serif;color:#1F2937;padding:14mm 12mm;font-size:10pt}
+  .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #FF4500;padding-bottom:10px;margin-bottom:14px}
+  .title{font-size:20pt;font-weight:800;color:#1F2937}
+  .subtitle{font-size:9pt;color:#7C8495;margin-top:3px}
+  .meta{font-size:8.5pt;color:#7C8495;text-align:right;line-height:1.5}
+  .meta b{color:#1F2937}
+  .stats{display:flex;gap:8px;margin-bottom:14px}
+  .stat{flex:1;border:1px solid #E5E7EB;border-radius:6px;padding:8px 10px}
+  .stat-label{font-size:7.5pt;font-weight:700;color:#7C8495;text-transform:uppercase;letter-spacing:0.05em}
+  .stat-value{font-size:14pt;font-weight:800;color:#1F2937;margin-top:2px}
+  h2{font-size:11pt;font-weight:700;margin:14px 0 6px;color:#1F2937}
+  table{width:100%;border-collapse:collapse;font-size:8.5pt}
+  th{background:#F3F4F6;padding:6px 8px;text-align:left;font-size:7.5pt;font-weight:700;color:#7C8495;text-transform:uppercase;letter-spacing:0.04em;border-bottom:1px solid #E5E7EB}
+  td{padding:6px 8px;border-bottom:1px solid #F1F5F9}
+  .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:7.5pt;font-weight:700;color:#FFF}
+  .right{text-align:right}
+  .total-row{background:#FAFBFF;font-weight:800}
+  .total-row td{border-top:2px solid #1F2937;font-size:9pt}
+  .footer{margin-top:18px;padding-top:8px;border-top:1px solid #E5E7EB;font-size:7.5pt;color:#7C8495;text-align:center}
+</style></head><body>
+  <div class="header">
+    <div>
+      <div class="title">Asignación de Rutas</div>
+      <div class="subtitle">Última milla · Target $${COSTO_IDEAL} ideal / $${COSTO_MAX} máx por paquete</div>
+    </div>
+    <div class="meta">
+      <div><b>Sesión:</b> ${sesionId}</div>
+      <div><b>Generado:</b> ${fechaStr}</div>
+      <div><b>Total rutas:</b> ${rutas.length} · <b>Paquetes:</b> ${totalPaq}</div>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Rutas asignadas</div><div class="stat-value">${rutas.filter(r=>{const a=asignacion[r.nombre];return a&&!a.noAsignar;}).length} / ${rutas.length}</div></div>
+    <div class="stat"><div class="stat-label">Paquetes asignados</div><div class="stat-value">${paqAsig} / ${totalPaq}</div></div>
+    <div class="stat"><div class="stat-label">Costo total</div><div class="stat-value" style="color:#16A34A">$${totalCosto.toLocaleString()}</div></div>
+    <div class="stat"><div class="stat-label">Costo / paquete</div><div class="stat-value">${paqAsig>0?"$"+(totalCosto/paqAsig).toFixed(1):"—"}</div></div>
+  </div>
+
+  <h2>Detalle por ruta</h2>
+  <table>
+    <thead><tr><th>Ruta</th><th class="right">Paquetes</th><th>Proveedor</th><th>Tipo unidad</th><th class="right">Unidades</th><th class="right">Costo</th><th class="right">$/Paq</th><th>Estado</th></tr></thead>
+    <tbody>
+      ${filas.map(f => `<tr>
+        <td><b>${f.ruta}</b></td>
+        <td class="right">${f.paquetes}</td>
+        <td>${f.proveedor}</td>
+        <td>${f.tipo}</td>
+        <td class="right">${f.unidades}</td>
+        <td class="right">${f.costo}</td>
+        <td class="right"><b>${f.costoPaq}</b></td>
+        <td><span class="badge" style="background:${colorEstado(f.estado)}">${f.estado}</span></td>
+      </tr>`).join("")}
+      <tr class="total-row"><td>TOTAL</td><td class="right">${totalPaq}</td><td colspan="3">${rutas.length} rutas</td><td class="right">$${totalCosto.toLocaleString()}</td><td class="right">${paqAsig>0?"$"+(totalCosto/paqAsig).toFixed(1):"—"}</td><td></td></tr>
+    </tbody>
+  </table>
+
+  ${provList.length > 0 ? `
+  <h2>Resumen por proveedor</h2>
+  <table>
+    <thead><tr><th>Proveedor</th><th>Tipo</th><th class="right">Rutas</th><th class="right">Unidades</th><th class="right">Paquetes</th><th class="right">Costo total</th><th class="right">$/Paq</th></tr></thead>
+    <tbody>
+      ${provList.map(p => `<tr>
+        <td><b>${p.proveedor}</b></td>
+        <td>${p.tipo}</td>
+        <td class="right">${p.rutas}</td>
+        <td class="right">${p.unidades}</td>
+        <td class="right">${p.paquetes}</td>
+        <td class="right">$${p.costo.toLocaleString()}</td>
+        <td class="right"><b>$${(p.costo/p.paquetes).toFixed(1)}</b></td>
+      </tr>`).join("")}
+      <tr class="total-row"><td colspan="2">TOTAL</td><td class="right">${provList.reduce((s,p)=>s+p.rutas,0)}</td><td class="right">${provList.reduce((s,p)=>s+p.unidades,0)}</td><td class="right">${paqAsig}</td><td class="right">$${totalCosto.toLocaleString()}</td><td class="right">${paqAsig>0?"$"+(totalCosto/paqAsig).toFixed(1):"—"}</td></tr>
+    </tbody>
+  </table>` : ""}
+
+  <div class="footer">T1 OPS Envíos · Flotilla Propia · Asignación generada automáticamente</div>
+</body></html>`;
+
+    const w = window.open("", "_blank", "width=900,height=700");
+    if (!w) { alert("Permite ventanas emergentes para descargar el PDF"); return; }
+    w.document.write(html);
+    w.document.close();
+    const script = w.document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.2/html2pdf.bundle.min.js";
+    script.onload = () => {
+      setTimeout(() => {
+        w.html2pdf().set({
+          margin: [10, 10, 10, 10],
+          filename: `Asignacion_${sesionId.substring(0,10)}_${new Date().toISOString().split("T")[0]}.pdf`,
+          image: { type: "jpeg", quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true },
+          jsPDF: { unit: "mm", format: "letter", orientation: "landscape" },
+        }).from(w.document.body).save().then(() => { setTimeout(() => w.close(), 500); });
+      }, 600);
+    };
+    w.document.head.appendChild(script);
+  };
+
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16, flexWrap:"wrap", gap:10 }}>
@@ -3116,6 +3256,11 @@ function ModuleAsignaciones() {
           <h1 style={{ fontSize:24, fontWeight:800, margin:0 }}>Asignaciones</h1>
           <p style={{ color:C.textMuted, fontSize:13, marginTop:2 }}>Recomendación de asignación por costo · Última milla · Target: ${COSTO_IDEAL} ideal / ${COSTO_MAX} máx por paquete</p>
         </div>
+        {sesionId && rutas.length > 0 && (
+          <button onClick={exportarPDF} style={{ padding:"9px 18px", borderRadius:8, border:"none", backgroundColor:C.accent, color:"white", fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}>
+            <IC.Download /> Exportar PDF
+          </button>
+        )}
       </div>
 
       {loading ? <div style={{ padding:40, textAlign:"center", color:C.textMuted }}>Cargando...</div> : (
