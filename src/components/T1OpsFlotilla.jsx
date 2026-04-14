@@ -3049,10 +3049,16 @@ function ModuleAsignaciones() {
     setLoading(false);
   };
 
+  const [saveMsg, setSaveMsg] = useState("");
+  const [saving, setSaving] = useState(false);
+
   const loadSesion = async (sid) => {
     setLoadingSession(true);
     setSesionId(sid);
-    const data = await fetchAllPaginated(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice"));
+    const [data, savedRows] = await Promise.all([
+      fetchAllPaginated(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice")),
+      supabase.from("asignaciones_sesion").select("*").eq("sesion", sid).then(r => r.data || []).catch(() => []),
+    ]);
     console.log(`[Asignaciones] Sesión ${sid}: ${data.length} puntos cargados de Supabase`);
     if (data && data.length > 0) {
       const rutaMap = {};
@@ -3066,28 +3072,77 @@ function ModuleAsignaciones() {
       console.log(`[Asignaciones] Excluidos: ${excluidos} · En rutas: ${data.length - excluidos}`);
       const rutaList = Object.values(rutaMap).sort((a, b) => a.cluster - b.cluster);
       setRutas(rutaList);
-      // Auto-assign best recommendation per route
-      const autoAsign = {};
+
+      // Build saved-assignment map keyed by ruta_nombre
+      const savedMap = {};
+      (savedRows || []).forEach(s => {
+        savedMap[s.ruta_nombre] = s.no_asignar
+          ? { noAsignar: true }
+          : { proveedor: s.proveedor, tipo_unidad: s.tipo_unidad, unidades: s.unidades || 1 };
+      });
+
+      const finalAsign = {};
       rutaList.forEach(ruta => {
-        const opciones = carriers.map(c => {
-          const costo = parseFloat(c.costo_unidad) || 0;
-          const minP = Math.ceil(costo / COSTO_MAX);
-          const viable = ruta.paquetes >= minP;
-          const costoPorPaq = ruta.paquetes > 0 ? costo / ruta.paquetes : Infinity;
-          return { proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, costo, viable, costoPorPaq, carrierId: c.id };
-        }).filter(o => o.viable);
-        opciones.sort((a, b) => a.costoPorPaq - b.costoPorPaq);
-        if (opciones[0]) {
-          autoAsign[ruta.nombre] = { proveedor: opciones[0].proveedor, tipo_unidad: opciones[0].tipo_unidad, unidades: 1 };
+        if (savedMap[ruta.nombre]) {
+          finalAsign[ruta.nombre] = savedMap[ruta.nombre];
+        } else {
+          // Auto-assign best recommendation if no saved value
+          const opciones = carriers.map(c => {
+            const costo = parseFloat(c.costo_unidad) || 0;
+            const minP = Math.ceil(costo / COSTO_MAX);
+            const viable = ruta.paquetes >= minP;
+            const costoPorPaq = ruta.paquetes > 0 ? costo / ruta.paquetes : Infinity;
+            return { proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, costo, viable, costoPorPaq };
+          }).filter(o => o.viable);
+          opciones.sort((a, b) => a.costoPorPaq - b.costoPorPaq);
+          if (opciones[0]) {
+            finalAsign[ruta.nombre] = { proveedor: opciones[0].proveedor, tipo_unidad: opciones[0].tipo_unidad, unidades: 1 };
+          }
         }
       });
-      setAsignacion(autoAsign);
+      setAsignacion(finalAsign);
+      if (savedRows && savedRows.length > 0) {
+        setSaveMsg(`✓ Asignación previa cargada (${savedRows.length} rutas guardadas)`);
+        setTimeout(() => setSaveMsg(""), 4000);
+      }
     } else {
       setRutas([]);
       setAsignacion({});
     }
     setExpandedRuta(null);
     setLoadingSession(false);
+  };
+
+  const guardarAsignacion = async () => {
+    if (!sesionId || rutas.length === 0) return;
+    setSaving(true);
+    setSaveMsg("");
+    try {
+      // Wipe previous saved assignments for this session
+      await supabase.from("asignaciones_sesion").delete().eq("sesion", sesionId);
+      // Build rows
+      const rows = rutas.map(ruta => {
+        const a = asignacion[ruta.nombre];
+        if (!a) return null;
+        if (a.noAsignar) return { sesion: sesionId, ruta_nombre: ruta.nombre, proveedor: null, tipo_unidad: null, unidades: null, no_asignar: true };
+        return { sesion: sesionId, ruta_nombre: ruta.nombre, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, unidades: a.unidades || 1, no_asignar: false };
+      }).filter(Boolean);
+      if (rows.length > 0) {
+        const { error } = await supabase.from("asignaciones_sesion").insert(rows);
+        if (error) throw error;
+      }
+      setSaveMsg(`✓ Asignación guardada (${rows.length} rutas)`);
+      setTimeout(() => setSaveMsg(""), 4000);
+    } catch (err) {
+      const msg = err?.message || String(err);
+      if (/relation .* does not exist/i.test(msg) || /does not exist/i.test(msg)) {
+        setSaveMsg("⚠ Falta crear la tabla 'asignaciones_sesion' en Supabase. Ver consola para SQL.");
+        console.warn("Ejecuta este SQL en Supabase:\n\nCREATE TABLE asignaciones_sesion (\n  id bigserial PRIMARY KEY,\n  sesion text NOT NULL,\n  ruta_nombre text NOT NULL,\n  proveedor text,\n  tipo_unidad text,\n  unidades int,\n  no_asignar boolean DEFAULT false,\n  created_at timestamptz DEFAULT now(),\n  UNIQUE (sesion, ruta_nombre)\n);\nCREATE INDEX idx_asignaciones_sesion ON asignaciones_sesion(sesion);");
+      } else {
+        setSaveMsg("Error: " + msg);
+      }
+    }
+    setSaving(false);
   };
 
   const minPaq = costo => Math.ceil(costo / COSTO_MAX);
@@ -3257,9 +3312,15 @@ function ModuleAsignaciones() {
           <p style={{ color:C.textMuted, fontSize:13, marginTop:2 }}>Recomendación de asignación por costo · Última milla · Target: ${COSTO_IDEAL} ideal / ${COSTO_MAX} máx por paquete</p>
         </div>
         {sesionId && rutas.length > 0 && (
-          <button onClick={exportarPDF} style={{ padding:"9px 18px", borderRadius:8, border:"none", backgroundColor:C.accent, color:"white", fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}>
-            <IC.Download /> Exportar PDF
-          </button>
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+            {saveMsg && <span style={{ fontSize:12, fontWeight:600, color:saveMsg.startsWith("✓")?C.green:saveMsg.startsWith("⚠")?"#CA8A04":C.red }}>{saveMsg}</span>}
+            <button onClick={guardarAsignacion} disabled={saving} style={{ padding:"9px 18px", borderRadius:8, border:"none", backgroundColor:saving?C.textMuted:C.green, color:"white", fontSize:13, fontWeight:700, cursor:saving?"default":"pointer", display:"flex", alignItems:"center", gap:6 }}>
+              {saving ? "Guardando..." : "✓ Guardar asignación"}
+            </button>
+            <button onClick={exportarPDF} style={{ padding:"9px 18px", borderRadius:8, border:"none", backgroundColor:C.accent, color:"white", fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}>
+              <IC.Download /> Exportar PDF
+            </button>
+          </div>
         )}
       </div>
 
