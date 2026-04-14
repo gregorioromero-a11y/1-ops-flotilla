@@ -3013,11 +3013,27 @@ function ModuleAsignaciones() {
 
   useEffect(() => { loadData(); }, []);
 
+  // Paginated fetch to bypass Supabase's default 1000-row cap
+  const fetchAllPaginated = async (queryBuilder) => {
+    let all = [];
+    const pageSize = 1000;
+    let from = 0;
+    while (true) {
+      const { data: chunk, error } = await queryBuilder().range(from, from + pageSize - 1);
+      if (error) { console.error("Pagination error:", error); break; }
+      if (!chunk || chunk.length === 0) break;
+      all = all.concat(chunk);
+      if (chunk.length < pageSize) break;
+      from += pageSize;
+    }
+    return all;
+  };
+
   const loadData = async () => {
     setLoading(true);
-    const [{ data: cData }, { data: rData }] = await Promise.all([
+    const [{ data: cData }, rData] = await Promise.all([
       supabase.from("carriers").select("*").order("proveedor"),
-      supabase.from("ruteo_puntos").select("sesion, created_at, cluster").order("created_at", { ascending: false }),
+      fetchAllPaginated(() => supabase.from("ruteo_puntos").select("sesion, created_at, cluster").order("created_at", { ascending: false })),
     ]);
     const umCarriers = (cData || []).filter(c => c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—" && (c.operacion || "").toLowerCase().includes("ltima"));
     setCarriers(umCarriers);
@@ -3036,25 +3052,18 @@ function ModuleAsignaciones() {
   const loadSesion = async (sid) => {
     setLoadingSession(true);
     setSesionId(sid);
-    // Paginate to bypass Supabase's default 1000-row cap
-    let data = [];
-    const pageSize = 1000;
-    let from = 0;
-    while (true) {
-      const { data: chunk } = await supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice").range(from, from + pageSize - 1);
-      if (!chunk || chunk.length === 0) break;
-      data = data.concat(chunk);
-      if (chunk.length < pageSize) break;
-      from += pageSize;
-    }
+    const data = await fetchAllPaginated(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice"));
+    console.log(`[Asignaciones] Sesión ${sid}: ${data.length} puntos cargados de Supabase`);
     if (data && data.length > 0) {
       const rutaMap = {};
+      let excluidos = 0;
       data.forEach(r => {
-        if (r.cluster === -1) return; // skip excluded points
+        if (r.cluster === -1) { excluidos++; return; } // skip excluded points
         const rn = r.ruta || "Ruta " + (r.cluster + 1);
         if (!rutaMap[rn]) rutaMap[rn] = { nombre: rn, cluster: r.cluster, paquetes: 0 };
         rutaMap[rn].paquetes += 1;
       });
+      console.log(`[Asignaciones] Excluidos: ${excluidos} · En rutas: ${data.length - excluidos}`);
       const rutaList = Object.values(rutaMap).sort((a, b) => a.cluster - b.cluster);
       setRutas(rutaList);
       // Auto-assign best recommendation per route
