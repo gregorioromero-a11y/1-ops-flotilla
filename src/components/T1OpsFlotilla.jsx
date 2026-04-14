@@ -2553,7 +2553,10 @@ function ModuleRuteo() {
       const sid = "S" + Date.now();
       setSesionId(sid);
       const dbRows = pts.map((p, i) => ({ sesion: sid, indice: i, latitud: p.lat, longitud: p.lng, cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1), datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k)))) }));
-      await supabase.from("ruteo_puntos").insert(dbRows);
+      // Chunked insert (500 rows/batch) to avoid payload size issues
+      for (let bi = 0; bi < dbRows.length; bi += 500) {
+        await supabase.from("ruteo_puntos").insert(dbRows.slice(bi, bi + 500));
+      }
       setMsg(`✓ ${pts.length} puntos clusterizados en ${k} rutas.`);
     } catch (err) { setMsg("Error: " + err.message); }
     setLoading(false);
@@ -2573,15 +2576,32 @@ function ModuleRuteo() {
         cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1),
         datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k))))
       }));
-      await supabase.from("ruteo_puntos").insert(dbRows);
+      for (let bi = 0; bi < dbRows.length; bi += 500) {
+        await supabase.from("ruteo_puntos").insert(dbRows.slice(bi, bi + 500));
+      }
     }
     setMsg(`✓ Re-clusterizado con ${k} rutas. ${sesionId ? "Guardado." : ""}`);
     setLoading(false);
   };
 
+  // Paginated fetch to bypass Supabase's default 1000-row cap
+  const fetchAllRuteoPuntos = async (queryBuilder) => {
+    let all = [];
+    const pageSize = 1000;
+    let from = 0;
+    while (true) {
+      const { data: chunk } = await queryBuilder().range(from, from + pageSize - 1);
+      if (!chunk || chunk.length === 0) break;
+      all = all.concat(chunk);
+      if (chunk.length < pageSize) break;
+      from += pageSize;
+    }
+    return all;
+  };
+
   const loadHistorico = async () => {
     setLoadingHist(true);
-    const { data } = await supabase.from("ruteo_puntos").select("sesion, created_at, cluster").order("created_at", { ascending: false });
+    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("sesion, created_at, cluster").order("created_at", { ascending: false }));
     if (data && data.length > 0) {
       const grouped = {};
       data.forEach(r => {
@@ -2596,7 +2616,7 @@ function ModuleRuteo() {
 
   const loadSesion = async (sid) => {
     setLoading(true); setMsg("");
-    const { data } = await supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice");
+    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice"));
     if (data && data.length > 0) {
       const pts = data.map(r => {
         const extra = r.datos_extra ? (typeof r.datos_extra === "string" ? JSON.parse(r.datos_extra) : r.datos_extra) : {};
@@ -2623,7 +2643,7 @@ function ModuleRuteo() {
   };
 
   const exportHistMapHTML = async (sid) => {
-    const { data } = await supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice");
+    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice"));
     if (!data || data.length === 0) return;
     const pts = data.map(r => {
       const extra = r.datos_extra ? (typeof r.datos_extra === "string" ? JSON.parse(r.datos_extra) : r.datos_extra) : {};
@@ -3016,7 +3036,17 @@ function ModuleAsignaciones() {
   const loadSesion = async (sid) => {
     setLoadingSession(true);
     setSesionId(sid);
-    const { data } = await supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice");
+    // Paginate to bypass Supabase's default 1000-row cap
+    let data = [];
+    const pageSize = 1000;
+    let from = 0;
+    while (true) {
+      const { data: chunk } = await supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice").range(from, from + pageSize - 1);
+      if (!chunk || chunk.length === 0) break;
+      data = data.concat(chunk);
+      if (chunk.length < pageSize) break;
+      from += pageSize;
+    }
     if (data && data.length > 0) {
       const rutaMap = {};
       data.forEach(r => {
