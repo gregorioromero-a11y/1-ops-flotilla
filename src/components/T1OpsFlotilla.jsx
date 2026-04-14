@@ -3128,12 +3128,12 @@ function ModuleAsignaciones() {
                                                   return (
                                                     <td key={tipo} style={{ padding:"4px 4px", textAlign:"center" }}>
                                                       <div onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: prov, tipo_unidad: tipo, unidades: 1 }}); }}
-                                                        style={{ padding:"8px 6px", borderRadius:6, cursor:"pointer", border:"2px solid "+(isSel?C.accent:isIdeal?"#BBF7D0":isViable?"#FDE68A":"#FECACA"), backgroundColor:isSel?C.accentLight:isIdeal?"#F0FDF4":isViable?"#FFFBEB":"#FEF2F2", transition:"all 0.1s" }}
+                                                        style={{ padding:"8px 6px", borderRadius:6, cursor:"pointer", border:"2px solid "+(isSel?C.blue:isIdeal?"#BBF7D0":isViable?"#FDE68A":"#FECACA"), backgroundColor:isSel?C.blueBg:isIdeal?"#F0FDF4":isViable?"#FFFBEB":"#FEF2F2", transition:"all 0.1s" }}
                                                         onMouseEnter={ev=>{if(!isSel)ev.currentTarget.style.transform="scale(1.05)"}}
                                                         onMouseLeave={ev=>{ev.currentTarget.style.transform="scale(1)"}}>
                                                         <div style={{ fontSize:13, fontWeight:800, color:isIdeal?C.green:isViable?"#CA8A04":C.red }}>${cpq.toFixed(1)}</div>
                                                         <div style={{ fontSize:9, color:C.textMuted, marginTop:1 }}>${cost.toLocaleString()}/día</div>
-                                                        {isSel && <div style={{ fontSize:8, fontWeight:800, color:C.accent, marginTop:2 }}>ASIGNADO</div>}
+                                                        {isSel && <div style={{ fontSize:8, fontWeight:800, color:C.blue, marginTop:2 }}>ASIGNADO</div>}
                                                       </div>
                                                     </td>
                                                   );
