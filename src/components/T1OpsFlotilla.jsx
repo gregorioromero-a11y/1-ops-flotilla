@@ -2275,14 +2275,17 @@ function ModuleRuteo() {
     markersRef.current = [];
     pts.forEach((p, i) => {
       const cl = assigns[i] ?? 0;
-      const color = RCOLORS[cl % RCOLORS.length];
+      const isExcluded = cl === -1;
+      const color = isExcluded ? "#94A3B8" : RCOLORS[cl % RCOLORS.length];
       const isSel = selSet && selSet.has(i);
-      const w = isSel ? 28 : 22;
-      const h = isSel ? 38 : 30;
-      const pinHtml = `<div style="cursor:pointer;filter:${isSel ? "drop-shadow(0 0 6px #FACC15)" : "drop-shadow(0 2px 4px rgba(0,0,0,0.4))"}">
+      const w = isSel ? 36 : 30;
+      const h = isSel ? 50 : 42;
+      const labelTxt = isExcluded ? "✕" : String(cl + 1);
+      const fontSize = isExcluded ? 11 : (labelTxt.length >= 2 ? 10 : 12);
+      const pinHtml = `<div style="cursor:pointer;opacity:${isExcluded ? 0.55 : 1};filter:${isSel ? "drop-shadow(0 0 6px #FACC15)" : "drop-shadow(0 2px 4px rgba(0,0,0,0.4))"}">
         <svg width="${w}" height="${h}" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg">
           <path d="M12 1C6.477 1 2 5.477 2 11c0 8.5 10 19 10 19s10-10.5 10-19C24 5.477 19.523 1 12 1z" fill="${color}" stroke="${isSel ? "#FACC15" : "white"}" stroke-width="${isSel ? 2.5 : 1.5}"/>
-          <text x="12" y="12" text-anchor="middle" dominant-baseline="middle" fill="white" font-size="${isSel ? 9 : 8}" font-weight="700" font-family="sans-serif">${cl + 1}</text>
+          <text x="12" y="12" text-anchor="middle" dominant-baseline="middle" fill="white" font-size="${fontSize}" font-weight="800" font-family="sans-serif">${labelTxt}</text>
         </svg>
       </div>`;
       const icon = L.divIcon({ html: pinHtml, className: "", iconSize: [w, h], iconAnchor: [w / 2, h] });
@@ -2316,33 +2319,195 @@ function ModuleRuteo() {
     setMsg(`✓ ${indices.length} punto(s) reasignados a Ruta ${nc + 1}.`);
   };
 
-  // KMeans++ implementation
+  const excludeFromRoute = () => {
+    const indices = Array.from(selectedIndices);
+    if (!indices.length) return;
+    setAsignaciones(prev => { const next = [...prev]; indices.forEach(i => next[i] = -1); return next; });
+    const sid = sesionIdRef.current;
+    if (sid) Promise.all(indices.map(i => supabase.from("ruteo_puntos").update({ cluster: -1, ruta: "Excluido" }).eq("sesion", sid).eq("indice", i)));
+    setSelectedIndices(new Set());
+    setMsg(`✓ ${indices.length} punto(s) excluidos de ruta — no saldrán del almacén.`);
+  };
+
+  const includeInRoute = () => {
+    const indices = Array.from(selectedIndices);
+    if (!indices.length) return;
+    const nc = bulkCluster;
+    setAsignaciones(prev => { const next = [...prev]; indices.forEach(i => next[i] = nc); return next; });
+    const sid = sesionIdRef.current;
+    if (sid) Promise.all(indices.map(i => supabase.from("ruteo_puntos").update({ cluster: nc, ruta: "Ruta " + (nc + 1) }).eq("sesion", sid).eq("indice", i)));
+    setSelectedIndices(new Set());
+    setMsg(`✓ ${indices.length} punto(s) reincluidos en Ruta ${nc + 1}.`);
+  };
+
+  // ================================================================
+  // Capacity-Constrained Power Diagrams (CCPD) + Time-Dependent
+  // routing optimized with Guided Local Search (GLS) over 2-opt.
+  //
+  //   1. KMeans++ seeding for centroids.
+  //   2. Power Diagram assignment: each point goes to the centroid
+  //      that minimizes the *power distance*  d²(p,c) - w(c).
+  //      Adjusting the weights w(c) balances cluster capacities
+  //      (all clusters tend toward |pts|/k points).
+  //   3. Lloyd centroid update.
+  //   4. Per-cluster TSP ordering refined with Guided Local Search
+  //      using a time-dependent edge cost (later visits cost more).
+  // ================================================================
   const kMeans = (pts, k) => {
     if (!pts.length || k < 1) return [];
-    const C = [{ ...pts[Math.floor(Math.random() * pts.length)] }];
-    while (C.length < k) {
-      const dists = pts.map(p => Math.min(...C.map(c => (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2)));
+    const n = pts.length;
+    const targetCap = n / k;
+
+    // --- KMeans++ centroid seeding ---
+    const centers = [{ lat: pts[Math.floor(Math.random() * n)].lat, lng: pts[Math.floor(Math.random() * n)].lng }];
+    while (centers.length < k) {
+      const dists = pts.map(p => Math.min(...centers.map(c => (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2)));
       const total = dists.reduce((s, d) => s + d, 0);
-      let r = Math.random() * total, chosen = pts[pts.length - 1];
-      for (let j = 0; j < pts.length; j++) { r -= dists[j]; if (r <= 0) { chosen = pts[j]; break; } }
-      C.push({ lat: chosen.lat, lng: chosen.lng });
+      let r = Math.random() * total, chosen = pts[n - 1];
+      for (let j = 0; j < n; j++) { r -= dists[j]; if (r <= 0) { chosen = pts[j]; break; } }
+      centers.push({ lat: chosen.lat, lng: chosen.lng });
     }
-    let assigns = new Array(pts.length).fill(0);
-    for (let it = 0; it < 200; it++) {
-      const na = pts.map(p => { let md = Infinity, nr = 0; C.forEach((c, ci) => { const d = (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2; if (d < md) { md = d; nr = ci; } }); return nr; });
-      if (na.every((a, i) => a === assigns[i])) break;
+
+    // --- Power Diagram + capacity-constrained Lloyd iterations ---
+    let weights = new Array(k).fill(0);
+    let assigns = new Array(n).fill(0);
+    const powerDist = (p, c, w) => (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2 - w;
+    const lr = 5e-7; // weight learning rate (in deg² units)
+
+    for (let it = 0; it < 150; it++) {
+      const na = pts.map(p => {
+        let md = Infinity, nr = 0;
+        for (let ci = 0; ci < k; ci++) {
+          const d = powerDist(p, centers[ci], weights[ci]);
+          if (d < md) { md = d; nr = ci; }
+        }
+        return nr;
+      });
+      // Update centroids (Lloyd step)
+      for (let ci = 0; ci < k; ci++) {
+        const cp = pts.filter((_, i) => na[i] === ci);
+        if (cp.length) centers[ci] = {
+          lat: cp.reduce((s, p) => s + p.lat, 0) / cp.length,
+          lng: cp.reduce((s, p) => s + p.lng, 0) / cp.length,
+        };
+      }
+      // Adjust weights to balance capacities: oversized clusters
+      // get smaller weights (push points away), undersized get larger.
+      const sizes = new Array(k).fill(0);
+      na.forEach(a => sizes[a]++);
+      weights = weights.map((w, ci) => w + lr * (targetCap - sizes[ci]));
+
+      if (na.every((a, i) => a === assigns[i])) { assigns = na; break; }
       assigns = na;
-      for (let ci = 0; ci < k; ci++) { const cp = pts.filter((_, i) => assigns[i] === ci); if (cp.length) C[ci] = { lat: cp.reduce((s, p) => s + p.lat, 0) / cp.length, lng: cp.reduce((s, p) => s + p.lng, 0) / cp.length }; }
     }
-    // Compact: renumber clusters to ensure 0..N-1 with no gaps
-    const usedClusters = [...new Set(assigns)].sort((a, b) => a - b);
-    if (usedClusters.length < k) {
+
+    // --- Compact cluster IDs to 0..N-1 with no gaps ---
+    const used = [...new Set(assigns)].sort((a, b) => a - b);
+    if (used.length < k) {
       const remap = {};
-      usedClusters.forEach((c, i) => { remap[c] = i; });
+      used.forEach((c, i) => { remap[c] = i; });
       assigns = assigns.map(a => remap[a]);
     }
+
+    // --- Per-cluster TSP ordering with Guided Local Search (2-opt) ---
+    // Time-dependent edge cost: visit i→j taking place at sequence
+    // position p has an extra (1 + p*tau) multiplier that simulates
+    // increasing congestion later in the route.
+    const numClustersFinal = Math.max(...assigns) + 1;
+    const tau = 0.02; // time-dependent decay factor
+    const haver = (a, b) => {
+      const R = 6371, toR = d => d * Math.PI / 180;
+      const dLat = toR(b.lat - a.lat), dLng = toR(b.lng - a.lng);
+      const s = Math.sin(dLat / 2) ** 2 + Math.cos(toR(a.lat)) * Math.cos(toR(b.lat)) * Math.sin(dLng / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(s));
+    };
+    const tdCost = (a, b, pos) => haver(a, b) * (1 + pos * tau);
+
+    // Per-point sequence position (1-based) within its cluster after GLS
+    const seqOrder = new Array(n).fill(0);
+
+    for (let ci = 0; ci < numClustersFinal; ci++) {
+      const idxs = [];
+      pts.forEach((_, i) => { if (assigns[i] === ci) idxs.push(i); });
+      if (idxs.length <= 2) { idxs.forEach((gi, lp) => { seqOrder[gi] = lp; }); continue; }
+
+      // Greedy nearest-neighbor seed tour starting at the centroid-closest point
+      let startIdx = idxs[0], minD = Infinity;
+      idxs.forEach(gi => {
+        const d = (pts[gi].lat - centers[ci].lat) ** 2 + (pts[gi].lng - centers[ci].lng) ** 2;
+        if (d < minD) { minD = d; startIdx = gi; }
+      });
+      const remaining = new Set(idxs);
+      remaining.delete(startIdx);
+      const tour = [startIdx];
+      while (remaining.size) {
+        const last = pts[tour[tour.length - 1]];
+        let best = null, bestD = Infinity;
+        remaining.forEach(gi => {
+          const d = haver(last, pts[gi]);
+          if (d < bestD) { bestD = d; best = gi; }
+        });
+        tour.push(best);
+        remaining.delete(best);
+      }
+
+      // Guided Local Search: penalize most-utilized edges to escape local optima
+      const m = tour.length;
+      const penalties = {}; // key: "min-max" of point indices in tour position
+      const lambda = 0.1;
+      const tourCost = (t, pen) => {
+        let s = 0;
+        for (let i = 0; i < t.length - 1; i++) {
+          const key = Math.min(t[i], t[i + 1]) + "-" + Math.max(t[i], t[i + 1]);
+          s += tdCost(pts[t[i]], pts[t[i + 1]], i) + lambda * (pen[key] || 0);
+        }
+        return s;
+      };
+      const augmentedCost = c => c;
+
+      const twoOpt = t => {
+        let improved = true, best = [...t];
+        while (improved) {
+          improved = false;
+          for (let i = 1; i < best.length - 2; i++) {
+            for (let j = i + 1; j < best.length - 1; j++) {
+              const cand = [...best.slice(0, i), ...best.slice(i, j + 1).reverse(), ...best.slice(j + 1)];
+              if (augmentedCost(tourCost(cand, penalties)) < augmentedCost(tourCost(best, penalties)) - 1e-9) {
+                best = cand; improved = true;
+              }
+            }
+          }
+        }
+        return best;
+      };
+
+      let current = twoOpt(tour);
+      let bestEver = [...current];
+      let bestEverCost = tourCost(current, {});
+      const glsIters = Math.min(10, Math.max(3, Math.floor(40 / m)));
+      for (let g = 0; g < glsIters; g++) {
+        // Penalize edges with highest utility = cost / (1 + penalty)
+        let maxUtil = -1, worstKey = null;
+        for (let i = 0; i < current.length - 1; i++) {
+          const key = Math.min(current[i], current[i + 1]) + "-" + Math.max(current[i], current[i + 1]);
+          const c = haver(pts[current[i]], pts[current[i + 1]]);
+          const util = c / (1 + (penalties[key] || 0));
+          if (util > maxUtil) { maxUtil = util; worstKey = key; }
+        }
+        if (worstKey) penalties[worstKey] = (penalties[worstKey] || 0) + 1;
+        current = twoOpt(current);
+        const realCost = tourCost(current, {});
+        if (realCost < bestEverCost) { bestEverCost = realCost; bestEver = [...current]; }
+      }
+
+      bestEver.forEach((gi, lp) => { seqOrder[gi] = lp; });
+    }
+
+    // Stash sequence order on assignment objects for the caller via closure
+    kMeans._lastSeqOrder = seqOrder;
     return assigns;
   };
+  kMeans._lastSeqOrder = null;
 
   const handleFile = async e => {
     const file = e.target.files?.[0];
@@ -2674,6 +2839,9 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                   {Array.from({ length: numClusters }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
                 </select>
                 <button onClick={applyBulk} style={{ padding: "5px 16px", borderRadius: 6, border: "none", backgroundColor: C.green, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✓ Aplicar</button>
+                <div style={{ width: 1, height: 22, backgroundColor: C.border }} />
+                <button onClick={excludeFromRoute} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #94A3B8", backgroundColor: "#F1F5F9", color: "#475569", fontSize: 12, fontWeight: 700, cursor: "pointer" }} title="Quitar de ruta — estos puntos no saldrán del almacén">✕ Excluir de ruta</button>
+                <button onClick={includeInRoute} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 12, fontWeight: 700, cursor: "pointer" }} title="Reincluir puntos excluidos en la ruta seleccionada">↻ Reincluir</button>
                 <span style={{ fontSize: 11, color: C.textMuted, marginLeft: "auto" }}>
                   {mapMode === "lasso" ? "Dibuja una curva sobre el mapa para seleccionar puntos" : "Clic en marcador para seleccionar/deseleccionar · acumulable"}
                 </span>
@@ -2704,7 +2872,8 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                 <tbody>
                   {puntos.map((p, i) => {
                     const cl = asignaciones[i] ?? 0;
-                    const color = RCOLORS[cl % RCOLORS.length];
+                    const isExc = cl === -1;
+                    const color = isExc ? "#94A3B8" : RCOLORS[cl % RCOLORS.length];
                     const isSel = selectedIndices.has(i);
                     return (
                       <tr key={i} style={{ borderTop: "1px solid " + C.border, backgroundColor: isSel ? "#FFFBEB" : "transparent" }}
@@ -2727,13 +2896,14 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                           <select value={cl} onChange={e => {
                             const nc = parseInt(e.target.value);
                             setAsignaciones(prev => { const n = [...prev]; n[i] = nc; return n; });
-                            if (sesionId) supabase.from("ruteo_puntos").update({ cluster: nc, ruta: "Ruta " + (nc + 1) }).eq("sesion", sesionId).eq("indice", i);
+                            if (sesionId) supabase.from("ruteo_puntos").update({ cluster: nc, ruta: nc === -1 ? "Excluido" : "Ruta " + (nc + 1) }).eq("sesion", sesionId).eq("indice", i);
                           }} style={{ padding: "4px 8px", borderRadius: 5, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color, cursor: "pointer", backgroundColor: color + "12" }}>
+                            <option value={-1}>✕ Excluido</option>
                             {Array.from({ length: numClusters }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
                           </select>
                         </td>
                         <td style={{ padding: "7px 14px" }}>
-                          <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 10px", borderRadius: 4, backgroundColor: color + "18", color }}>Ruta {cl + 1}</span>
+                          <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 10px", borderRadius: 4, backgroundColor: color + "18", color }}>{isExc ? "Excluido" : "Ruta " + (cl + 1)}</span>
                         </td>
                       </tr>
                     );
@@ -2850,6 +3020,7 @@ function ModuleAsignaciones() {
     if (data && data.length > 0) {
       const rutaMap = {};
       data.forEach(r => {
+        if (r.cluster === -1) return; // skip excluded points
         const rn = r.ruta || "Ruta " + (r.cluster + 1);
         if (!rutaMap[rn]) rutaMap[rn] = { nombre: rn, cluster: r.cluster, paquetes: 0 };
         rutaMap[rn].paquetes += 1;
