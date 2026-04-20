@@ -560,13 +560,99 @@ function ModuleEnvios() {
   const [selectedRows, setSelectedRows] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [costosData, setCostosData] = useState([]);
+  const [asistencia, setAsistencia] = useState([]);
+  const [carriers, setCarriers] = useState([]);
 
   // Load rutas and costos when date changes
-  useEffect(() => { loadRutas(); loadCostos(); }, [fechaDesde, fechaHasta]);
+  useEffect(() => { loadRutas(); loadCostos(); loadAsistenciaCarriers(); }, [fechaDesde, fechaHasta]);
 
   const loadCostos = async () => {
     const { data } = await supabase.from("costos").select("*").gte("fecha", fechaDesde).lte("fecha", fechaHasta);
     setCostosData(data || []);
+  };
+
+  const loadAsistenciaCarriers = async () => {
+    const [{ data: aData }, { data: cData }] = await Promise.all([
+      supabase.from("asistencia").select("*").gte("fecha", fechaDesde).lte("fecha", fechaHasta),
+      supabase.from("carriers").select("*"),
+    ]);
+    // Keep only automatic records (exclude "Registro manual")
+    setAsistencia((aData || []).filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual"));
+    setCarriers(cData || []);
+  };
+
+  // Formula evaluator: supports +, -, *, /, parens, decimals, and `costo` variable
+  const evalFormula = (expr, costo) => {
+    if (!expr || !String(expr).trim()) return 0;
+    let s = String(expr).replace(/costo/gi, "(" + (parseFloat(costo) || 0) + ")");
+    if (!/^[\d+\-*/().\s]*$/.test(s)) return NaN;
+    try {
+      // eslint-disable-next-line no-new-func
+      const result = Function('"use strict"; return (' + s + ')')();
+      return (typeof result === "number" && isFinite(result)) ? result : NaN;
+    } catch { return NaN; }
+  };
+
+  // Normalize strings for operator name matching (case/accents/spaces insensitive)
+  const norm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+
+  // Lookup unit + provider + base cost for a ruta based on matching automatic asistencia
+  // record (same day + same operator name) joined with carriers catalog.
+  const getCostoInfo = r => {
+    const fecha = (r.salida || "").substring(0, 10);
+    if (!fecha || !r.operador) return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
+    const matches = asistencia.filter(a => (a.fecha || "").substring(0, 10) === fecha && norm(a.nombre_operador) === norm(r.operador));
+    if (!matches.length) return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
+    const a = matches[0]; // Single record per day per operator (per user spec)
+    const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+    const baseCost = parseFloat(car?.costo_unidad) || 0;
+    return { baseCost, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, missing: false, tipo_operacion: a.tipo_operacion };
+  };
+
+  const isCrossdock = r => {
+    const t = (r.tipoRuta || "").toLowerCase();
+    return t.includes("half") || t.includes("cross");
+  };
+
+  // Final cost after penalty discount
+  const getCostoReal = r => {
+    const { baseCost } = getCostoInfo(r);
+    const pen = evalFormula(r.penalizacion, baseCost);
+    const penVal = isNaN(pen) ? 0 : pen;
+    return { baseCost, penalizacion: penVal, costoNuevo: baseCost - penVal };
+  };
+
+  // Cost per package (last mile uses delivered, crossdock uses collected)
+  const getCostoPorPaquete = r => {
+    const { costoNuevo } = getCostoReal(r);
+    const divisor = isCrossdock(r) ? r.recolecciones : r.entregados;
+    if (!divisor || divisor <= 0) return { value: null, divisor: 0 };
+    return { value: costoNuevo / divisor, divisor };
+  };
+
+  const savePenalizacion = async (rutaIdx, value) => {
+    const updated = [...rutas];
+    updated[rutaIdx] = { ...updated[rutaIdx], penalizacion: value };
+    setRutas(updated);
+    const r = updated[rutaIdx];
+    if (r.id) {
+      try {
+        const { error } = await supabase.from("rutas").update({ penalizacion: value }).eq("id", r.id);
+        if (error && /does not exist|schema cache/i.test(error.message)) {
+          alert("⚠ Falta agregar la columna 'penalizacion' en la tabla rutas. SQL: ALTER TABLE rutas ADD COLUMN penalizacion text;");
+          console.warn("SQL:\nALTER TABLE rutas ADD COLUMN penalizacion text;");
+        }
+      } catch {}
+    }
+  };
+
+  const saveRecolecciones = async (rutaIdx, value) => {
+    const v = Math.max(0, parseInt(value) || 0);
+    const updated = [...rutas];
+    updated[rutaIdx] = { ...updated[rutaIdx], recolecciones: v };
+    setRutas(updated);
+    const r = updated[rutaIdx];
+    if (r.id) await supabase.from("rutas").update({ recolecciones: v }).eq("id", r.id);
   };
 
   const loadRutas = async () => {
@@ -589,6 +675,7 @@ function ModuleEnvios() {
         intercambios: r.intercambios || 0, tipoRuta: r.tipo_ruta || "Última milla",
         kmEstimados: r.km_estimados || "—", kmRecorridos: r.km_recorridos || "—",
         tiempoEstimado: r.tiempo_estimado || "—", tiempoReal: r.tiempo_real || "—",
+        penalizacion: r.penalizacion || "",
       })));
     } else {
       setRutas([]);
@@ -683,6 +770,21 @@ function ModuleEnvios() {
   const costoUM = costosData.filter(r => r.tipo === "Última milla").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
   const costoHM = costosData.filter(r => r.tipo === "Half mile").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
   const costoPorPaquete = totalEntregados > 0 ? (costoTotalPeriodo / totalEntregados).toFixed(2) : 0;
+
+  // NEW: Real cost calculations from rutas × asistencia × carriers
+  const rutaCosto = rutas.map(r => {
+    const info = getCostoInfo(r);
+    const pen = evalFormula(r.penalizacion, info.baseCost);
+    const penVal = isNaN(pen) ? 0 : pen;
+    const costoNuevo = info.baseCost - penVal;
+    const divisor = isCrossdock(r) ? r.recolecciones : r.entregados;
+    return { r, info, baseCost: info.baseCost, penVal, costoNuevo, divisor, costoPorPaq: divisor > 0 ? costoNuevo / divisor : null };
+  });
+  const costoTotalDiaNuevo = rutaCosto.reduce((s, x) => s + x.costoNuevo, 0);
+  const entregadosTotal = rutas.reduce((s, r) => s + (r.entregados || 0), 0);
+  const costoPorPaqGlobal = entregadosTotal > 0 ? (costoTotalDiaNuevo / entregadosTotal) : 0;
+  const sinAsistencia = rutaCosto.filter(x => x.info.missing).length;
+  const crossSinRecol = rutaCosto.filter(x => isCrossdock(x.r) && (!x.r.recolecciones || x.r.recolecciones === 0)).length;
 
   // Cost by carrier
   const costosPorCarrier = {};
@@ -834,6 +936,16 @@ function ModuleEnvios() {
         <StatCard label="% Entrega general" value={pctGeneral + "%"} subvalue={`${totalEntregados} / ${totalPaquetes} paquetes`} icon={<IC.BarChart />} color={C.accent} />
       </div>
 
+      {/* Costo real calculado (rutas × asistencia × carriers) */}
+      {rutas.length > 0 && (
+        <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+          <StatCard label="Costo total del día" value={"$" + costoTotalDiaNuevo.toLocaleString(undefined, {maximumFractionDigits:0})} subvalue={"incluye última milla + crossdock"} icon={<IC.Dollar />} color={C.accent} />
+          <StatCard label="Costo / paquete entregado" value={entregadosTotal>0 ? "$" + costoPorPaqGlobal.toFixed(2) : "—"} subvalue={entregadosTotal + " paquetes entregados"} icon={<IC.Package />} color={C.green} />
+          <StatCard label="Rutas sin asistencia" value={sinAsistencia.toString()} subvalue={sinAsistencia>0 ? "operador no registrado" : "todos registrados"} icon={<IC.Users />} color={sinAsistencia>0?C.red:C.textMuted} />
+          <StatCard label="Crossdock sin recolecciones" value={crossSinRecol.toString()} subvalue={crossSinRecol>0 ? "corregir manualmente" : "OK"} icon={<IC.Map />} color={crossSinRecol>0?C.yellow:C.textMuted} />
+        </div>
+      )}
+
       {/* Cost StatCards */}
       {costoTotalPeriodo > 0 && (
         <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
@@ -953,6 +1065,10 @@ function ModuleEnvios() {
               <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Estatus</th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Transportista</th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Tipo de ruta</th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Costo unidad</th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Penalties</th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Costo real</th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>$/Paq</th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Intercambios</th>
               <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Fechas</th>
               <th style={{ width: 40, padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted }}>Ver más</th>
@@ -1002,6 +1118,68 @@ function ModuleEnvios() {
                     <option value="Half mile">Half mile</option>
                   </select>
                 </td>
+                {/* Costo unidad (desde asistencia × carriers) */}
+                {(() => {
+                  const info = getCostoInfo(r);
+                  const pen = evalFormula(r.penalizacion, info.baseCost);
+                  const penVal = isNaN(pen) ? 0 : pen;
+                  const costoNuevo = info.baseCost - penVal;
+                  const cross = isCrossdock(r);
+                  const divisor = cross ? r.recolecciones : r.entregados;
+                  const cpp = divisor > 0 ? costoNuevo / divisor : null;
+                  const crossSinRec = cross && (!r.recolecciones || r.recolecciones === 0);
+                  const penInvalid = (r.penalizacion || "").trim() && isNaN(evalFormula(r.penalizacion, info.baseCost));
+                  return <>
+                    <td style={{ padding: "10px 12px" }}>
+                      {info.missing ? (
+                        <div title="Operador no encontrado en Registro Diario (solo check-in automático)" style={{ fontSize: 12, color: C.red, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+                          <span>⚠</span><span>$0</span>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 13, fontWeight: 700, color: C.green }}>
+                          ${info.baseCost.toLocaleString()}
+                          <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>{info.tipo_unidad}</div>
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ padding: "8px 10px" }}>
+                      <input type="text" defaultValue={r.penalizacion || ""}
+                        onBlur={e => { if (e.target.value !== (r.penalizacion || "")) savePenalizacion(rutas.indexOf(r), e.target.value); }}
+                        placeholder="ej: costo*0.5"
+                        title="Fórmula descuento. Variable 'costo' = costo base. Ej: costo*0.5, 250, 0.1*costo"
+                        style={{ width: 100, padding: "5px 7px", borderRadius: 5, border: "1px solid " + (penInvalid ? C.red : C.border), fontSize: 11, fontFamily: "monospace", backgroundColor: penInvalid ? C.redBg : C.white }} />
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      {info.missing ? (
+                        <span style={{ fontSize: 12, color: C.textMuted }}>—</span>
+                      ) : (
+                        <div style={{ fontSize: 13, fontWeight: 800, color: penVal > 0 ? C.accent : C.text }}>
+                          ${costoNuevo.toLocaleString()}
+                          {penVal !== 0 && <div style={{ fontSize: 9, fontWeight: 600, color: C.red }}>-${penVal.toLocaleString()}</div>}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      {crossSinRec ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <span title="Crossdock sin recolecciones" style={{ color: C.yellow, fontSize: 14 }}>⚠</span>
+                          <input type="number" min="0" defaultValue={r.recolecciones || 0}
+                            onBlur={e => { const v = parseInt(e.target.value) || 0; if (v !== (r.recolecciones || 0)) saveRecolecciones(rutas.indexOf(r), v); }}
+                            placeholder="Recol."
+                            title="Recolecciones (crossdock) — ingrese manualmente"
+                            style={{ width: 60, padding: "4px 6px", borderRadius: 5, border: "1px solid " + C.yellow, fontSize: 11, textAlign: "center" }} />
+                        </div>
+                      ) : cpp !== null ? (
+                        <div style={{ fontSize: 13, fontWeight: 800, color: C.accent }}>
+                          ${cpp.toFixed(2)}
+                          <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>/{cross ? "recol" : "entr"}</div>
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: 12, color: C.textMuted }}>—</span>
+                      )}
+                    </td>
+                  </>;
+                })()}
                 {/* Intercambios */}
                 <td style={{ padding: "14px 12px", fontSize: 13, fontWeight: 600, color: r.intercambios > 0 ? C.blue : C.textMuted }}>
                   {r.intercambios > 0 ? `+ ${r.intercambios}` : "—"}
