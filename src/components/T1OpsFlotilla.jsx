@@ -636,6 +636,33 @@ function ModuleEnvios() {
     return { value: costoNuevo / divisor, divisor };
   };
 
+  // Etiquetas que hacen permisible la falta de registro automático
+  const ETIQUETAS = [
+    { value: "", label: "—", color: null, bg: null },
+    { value: "Foráneo Puebla", label: "Foráneo Puebla", color: "#7C3AED", bg: "#EDE9FE" },
+    { value: "Foráneo Monterrey", label: "Foráneo MTY", color: "#7C3AED", bg: "#EDE9FE" },
+    { value: "Foráneo GDL", label: "Foráneo GDL", color: "#7C3AED", bg: "#EDE9FE" },
+    { value: "PETCO", label: "PETCO", color: "#0284C7", bg: "#E0F2FE" },
+    { value: "HalfMile", label: "HalfMile", color: "#DB2777", bg: "#FCE7F3" },
+  ];
+  const esPermisible = r => !!(r.etiqueta && r.etiqueta !== "");
+
+  const saveEtiqueta = async (rutaIdx, value) => {
+    const updated = [...rutas];
+    updated[rutaIdx] = { ...updated[rutaIdx], etiqueta: value };
+    setRutas(updated);
+    const r = updated[rutaIdx];
+    if (r.id) {
+      try {
+        const { error } = await supabase.from("rutas").update({ etiqueta: value }).eq("id", r.id);
+        if (error && /does not exist|schema cache/i.test(error.message)) {
+          alert("⚠ Falta agregar la columna 'etiqueta' en la tabla rutas.\n\nSQL:\nALTER TABLE rutas ADD COLUMN etiqueta text;");
+          console.warn("SQL:\nALTER TABLE rutas ADD COLUMN etiqueta text;");
+        }
+      } catch {}
+    }
+  };
+
   const savePenalizacion = async (rutaIdx, value) => {
     const updated = [...rutas];
     updated[rutaIdx] = { ...updated[rutaIdx], penalizacion: value };
@@ -690,7 +717,7 @@ function ModuleEnvios() {
         intercambios: r.intercambios || 0, tipoRuta: r.tipo_ruta || "Última milla",
         kmEstimados: r.km_estimados || "—", kmRecorridos: r.km_recorridos || "—",
         tiempoEstimado: r.tiempo_estimado || "—", tiempoReal: r.tiempo_real || "—",
-        penalizacion: r.penalizacion || "",
+        penalizacion: r.penalizacion || "", etiqueta: r.etiqueta || "",
       })));
     } else {
       setRutas([]);
@@ -799,7 +826,8 @@ function ModuleEnvios() {
   const costoTotalDiaNuevo = rutaCosto.reduce((s, x) => s + x.costoNuevo, 0);
   const entregadosTotal = rutas.reduce((s, r) => s + (r.entregados || 0), 0);
   const costoPorPaqGlobal = entregadosTotal > 0 ? (costoTotalDiaNuevo / entregadosTotal) : 0;
-  const sinAsistencia = rutaCosto.filter(x => x.info.missing).length;
+  const sinAsistencia = rutaCosto.filter(x => x.info.missing && !esPermisible(x.r)).length;
+  const sinAsistenciaPermisible = rutaCosto.filter(x => x.info.missing && esPermisible(x.r)).length;
   const crossSinRecol = rutaCosto.filter(x => isCrossdock(x.r) && (!x.r.recolecciones || x.r.recolecciones === 0)).length;
 
   // Cost by carrier
@@ -957,7 +985,7 @@ function ModuleEnvios() {
         <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
           <StatCard label="Costo total del día" value={"$" + costoTotalDiaNuevo.toLocaleString(undefined, {maximumFractionDigits:0})} subvalue={"incluye última milla + crossdock"} icon={<IC.Dollar />} color={C.accent} />
           <StatCard label="Costo / paquete entregado" value={entregadosTotal>0 ? "$" + costoPorPaqGlobal.toFixed(2) : "—"} subvalue={entregadosTotal + " paquetes entregados"} icon={<IC.Package />} color={C.green} />
-          <StatCard label="Rutas sin asistencia" value={sinAsistencia.toString()} subvalue={sinAsistencia>0 ? "operador no registrado" : "todos registrados"} icon={<IC.Users />} color={sinAsistencia>0?C.red:C.textMuted} />
+          <StatCard label="Rutas sin asistencia" value={sinAsistencia.toString()} subvalue={sinAsistenciaPermisible>0 ? "+"+sinAsistenciaPermisible+" permisibles (foráneo/PETCO)" : sinAsistencia>0 ? "operador no registrado" : "todos registrados"} icon={<IC.Users />} color={sinAsistencia>0?C.red:C.textMuted} />
           <StatCard label="Crossdock sin recolecciones" value={crossSinRecol.toString()} subvalue={crossSinRecol>0 ? "corregir manualmente" : "OK"} icon={<IC.Map />} color={crossSinRecol>0?C.yellow:C.textMuted} />
         </div>
       )}
@@ -1082,6 +1110,7 @@ function ModuleEnvios() {
               <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", minWidth: 180, whiteSpace: "nowrap" }}>Estatus</th>
               <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", minWidth: 130, whiteSpace: "nowrap" }}>Transportista</th>
               <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Tipo ruta</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Etiqueta</th>
               <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Costo unidad</th>
               <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Penalties</th>
               <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Costo real</th>
@@ -1127,13 +1156,31 @@ function ModuleEnvios() {
                 {/* Transportista */}
                 <td style={{ padding: "14px 12px", fontSize: 12, fontWeight: 600, color: C.text }}>{r.carrier}</td>
                 {/* Tipo ruta - editable dropdown */}
-                <td style={{ padding: "10px 12px" }}>
+                <td style={{ padding: "10px 8px" }}>
                   <select value={r.tipoRuta} onChange={e => updateRuta(rutas.indexOf(r), "tipoRuta", e.target.value)} style={{
                     fontSize: 12, padding: "4px 8px", borderRadius: 6, border: `1px solid ${C.border}`, backgroundColor: C.white, color: C.text, cursor: "pointer", fontWeight: 500,
                   }}>
                     <option value="Última milla">Última milla</option>
                     <option value="Half mile">Half mile</option>
                   </select>
+                </td>
+                {/* Etiqueta */}
+                <td style={{ padding: "10px 8px" }}>
+                  {(() => {
+                    const et = ETIQUETAS.find(e => e.value === (r.etiqueta || "")) || ETIQUETAS[0];
+                    return (
+                      <select value={r.etiqueta || ""} onChange={e => saveEtiqueta(rutas.indexOf(r), e.target.value)}
+                        title="Etiqueta adicional. Si se establece, la ruta puede no tener registro automático de operador (foráneo/PETCO/HalfMile)."
+                        style={{
+                          fontSize: 11, padding: "4px 8px", borderRadius: 6,
+                          border: "1px solid " + (et.color || C.border),
+                          backgroundColor: et.bg || C.white,
+                          color: et.color || C.textMuted, cursor: "pointer", fontWeight: 700,
+                        }}>
+                        {ETIQUETAS.map(e => <option key={e.value} value={e.value}>{e.label}</option>)}
+                      </select>
+                    );
+                  })()}
                 </td>
                 {/* Costo unidad (desde asistencia × carriers) */}
                 {(() => {
@@ -1150,9 +1197,16 @@ function ModuleEnvios() {
                   return <>
                     <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {info.missing ? (
-                        <div title="Operador no encontrado en Registro Diario (solo check-in automático)" style={{ fontSize: 12, color: C.red, fontWeight: 700, display: "flex", alignItems: "center", gap: 3 }}>
-                          <span>⚠</span><span>$0</span>
-                        </div>
+                        esPermisible(r) ? (
+                          <div title={"Sin registro de operador (permisible: " + r.etiqueta + ")"} style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, lineHeight: 1.2 }}>
+                            <span style={{ color: "#7C3AED" }}>●</span> Permisible
+                            <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>{r.etiqueta}</div>
+                          </div>
+                        ) : (
+                          <div title="Operador no encontrado en Registro Diario (solo check-in automático). Si es foráneo, PETCO o HalfMile, selecciona la etiqueta correspondiente." style={{ fontSize: 12, color: C.red, fontWeight: 700, display: "flex", alignItems: "center", gap: 3 }}>
+                            <span>⚠</span><span>$0</span>
+                          </div>
+                        )
                       ) : (
                         <div style={{ fontSize: 12, fontWeight: 700, color: C.green, lineHeight: 1.2 }}>
                           ${info.baseCost.toLocaleString()}
