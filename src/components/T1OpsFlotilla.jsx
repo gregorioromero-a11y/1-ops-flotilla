@@ -554,8 +554,9 @@ function ModuleEnvios() {
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
-  const [fechaDesde, setFechaDesde] = useState("2026-02-26");
-  const [fechaHasta, setFechaHasta] = useState("2026-02-26");
+  const [fechaDesde, setFechaDesde] = useState("2020-01-01");
+  const [fechaHasta, setFechaHasta] = useState("2099-12-31");
+  const [fechasIniciadas, setFechasIniciadas] = useState(false);
   const [openMenu, setOpenMenu] = useState(null);
   const [selectedRows, setSelectedRows] = useState(new Set());
   const [loading, setLoading] = useState(true);
@@ -659,6 +660,15 @@ function ModuleEnvios() {
     setLoading(true);
     const { data } = await supabase.from("rutas").select("*").order("created_at", { ascending: false });
     if (data && data.length > 0) {
+      // First load: auto-adjust date range to the min/max of available data
+      if (!fechasIniciadas) {
+        const fechas = data.map(r => (r.fecha_salida || r.fecha_registro || "").substring(0, 10)).filter(f => f.length === 10).sort();
+        if (fechas.length > 0) {
+          setFechaDesde(fechas[0]);
+          setFechaHasta(fechas[fechas.length - 1]);
+        }
+        setFechasIniciadas(true);
+      }
       const filtered_by_date = data.filter(r => {
         const salida = r.fecha_salida || r.fecha_registro || "";
         const fecha = salida.substring(0, 10);
