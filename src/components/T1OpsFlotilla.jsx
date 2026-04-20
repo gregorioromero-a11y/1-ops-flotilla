@@ -1065,23 +1065,24 @@ function ModuleEnvios() {
 
       {/* Table */}
       <div style={{ backgroundColor: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1400 }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>
-              <th style={{ width: 30, padding: "10px 8px" }}>
+              <th style={{ width: 30, padding: "10px 6px" }}>
                 <input type="checkbox" checked={selectedRows.size === filtered.length && filtered.length > 0} onChange={toggleAll} style={{ cursor: "pointer", accentColor: C.accent }} />
               </th>
-              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Empleado</th>
-              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Estatus</th>
-              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Transportista</th>
-              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Tipo de ruta</th>
-              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Costo unidad</th>
-              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Penalties</th>
-              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Costo real</th>
-              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>$/Paq</th>
-              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Intercambios</th>
-              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Fechas</th>
-              <th style={{ width: 40, padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted }}>Ver más</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", minWidth: 140, whiteSpace: "nowrap" }}>Empleado</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", minWidth: 180, whiteSpace: "nowrap" }}>Estatus</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", minWidth: 130, whiteSpace: "nowrap" }}>Transportista</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Tipo ruta</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Costo unidad</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Penalties</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Costo real</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>$/Paq</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Inter.</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap", minWidth: 140 }}>Fecha despacho</th>
+              <th style={{ width: 40, padding: "10px 6px", textAlign: "center", fontSize: 10, fontWeight: 700, color: C.textMuted, whiteSpace: "nowrap" }}>⋯</th>
             </tr>
           </thead>
           <tbody>
@@ -1140,47 +1141,47 @@ function ModuleEnvios() {
                   const crossSinRec = cross && (!r.recolecciones || r.recolecciones === 0);
                   const penInvalid = (r.penalizacion || "").trim() && isNaN(evalFormula(r.penalizacion, info.baseCost));
                   return <>
-                    <td style={{ padding: "10px 12px" }}>
+                    <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {info.missing ? (
-                        <div title="Operador no encontrado en Registro Diario (solo check-in automático)" style={{ fontSize: 12, color: C.red, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+                        <div title="Operador no encontrado en Registro Diario (solo check-in automático)" style={{ fontSize: 12, color: C.red, fontWeight: 700, display: "flex", alignItems: "center", gap: 3 }}>
                           <span>⚠</span><span>$0</span>
                         </div>
                       ) : (
-                        <div style={{ fontSize: 13, fontWeight: 700, color: C.green }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: C.green, lineHeight: 1.2 }}>
                           ${info.baseCost.toLocaleString()}
                           <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>{info.tipo_unidad}</div>
                         </div>
                       )}
                     </td>
-                    <td style={{ padding: "8px 10px" }}>
+                    <td style={{ padding: "8px 6px" }}>
                       <input type="text" defaultValue={r.penalizacion || ""}
                         onBlur={e => { if (e.target.value !== (r.penalizacion || "")) savePenalizacion(rutas.indexOf(r), e.target.value); }}
-                        placeholder="ej: costo*0.5"
+                        placeholder="costo*0.5"
                         title="Fórmula descuento. Variable 'costo' = costo base. Ej: costo*0.5, 250, 0.1*costo"
-                        style={{ width: 100, padding: "5px 7px", borderRadius: 5, border: "1px solid " + (penInvalid ? C.red : C.border), fontSize: 11, fontFamily: "monospace", backgroundColor: penInvalid ? C.redBg : C.white }} />
+                        style={{ width: 80, padding: "4px 6px", borderRadius: 5, border: "1px solid " + (penInvalid ? C.red : C.border), fontSize: 11, fontFamily: "monospace", backgroundColor: penInvalid ? C.redBg : C.white }} />
                     </td>
-                    <td style={{ padding: "10px 12px" }}>
+                    <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {info.missing ? (
                         <span style={{ fontSize: 12, color: C.textMuted }}>—</span>
                       ) : (
-                        <div style={{ fontSize: 13, fontWeight: 800, color: penVal > 0 ? C.accent : C.text }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: penVal > 0 ? C.accent : C.text, lineHeight: 1.2 }}>
                           ${costoNuevo.toLocaleString()}
                           {penVal !== 0 && <div style={{ fontSize: 9, fontWeight: 600, color: C.red }}>-${penVal.toLocaleString()}</div>}
                         </div>
                       )}
                     </td>
-                    <td style={{ padding: "10px 12px" }}>
+                    <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {crossSinRec ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                          <span title="Crossdock sin recolecciones" style={{ color: C.yellow, fontSize: 14 }}>⚠</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                          <span title="Crossdock sin recolecciones" style={{ color: C.yellow, fontSize: 13 }}>⚠</span>
                           <input type="number" min="0" defaultValue={r.recolecciones || 0}
                             onBlur={e => { const v = parseInt(e.target.value) || 0; if (v !== (r.recolecciones || 0)) saveRecolecciones(rutas.indexOf(r), v); }}
-                            placeholder="Recol."
+                            placeholder="#"
                             title="Recolecciones (crossdock) — ingrese manualmente"
-                            style={{ width: 60, padding: "4px 6px", borderRadius: 5, border: "1px solid " + C.yellow, fontSize: 11, textAlign: "center" }} />
+                            style={{ width: 50, padding: "3px 5px", borderRadius: 5, border: "1px solid " + C.yellow, fontSize: 11, textAlign: "center" }} />
                         </div>
                       ) : cpp !== null ? (
-                        <div style={{ fontSize: 13, fontWeight: 800, color: C.accent }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: C.accent, lineHeight: 1.2 }}>
                           ${cpp.toFixed(2)}
                           <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>/{cross ? "recol" : "entr"}</div>
                         </div>
@@ -1195,8 +1196,14 @@ function ModuleEnvios() {
                   {r.intercambios > 0 ? `+ ${r.intercambios}` : "—"}
                 </td>
                 {/* Fechas */}
-                <td style={{ padding: "14px 12px", fontSize: 11, color: C.textMuted }}>
-                  {r.salida ? `Desp.: ${r.salida.substring(0, 16)}` : "Sin salida"}
+                <td style={{ padding: "12px 8px", fontSize: 11, color: C.textMuted, whiteSpace: "nowrap" }}>
+                  {r.salida ? (() => {
+                    const [fecha, hora] = r.salida.substring(0, 16).split(" ");
+                    return <div style={{ lineHeight: 1.3 }}>
+                      <div style={{ fontWeight: 600, color: C.text }}>{fecha}</div>
+                      <div style={{ fontSize: 10, color: C.textMuted }}>{hora || ""}</div>
+                    </div>;
+                  })() : "—"}
                 </td>
                 {/* More - action menu */}
                 <td style={{ padding: "14px 8px", textAlign: "center", position: "relative" }}>
@@ -1229,6 +1236,7 @@ function ModuleEnvios() {
             ))}
           </tbody>
         </table>
+        </div>
         {filtered.length === 0 && (
           <div style={{ padding: 48, textAlign: "center" }}>
             <div style={{ fontSize: 36, marginBottom: 10 }}>📦</div>
