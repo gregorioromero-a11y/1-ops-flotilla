@@ -615,12 +615,17 @@ function ModuleEnvios() {
     return t.includes("half") || t.includes("cross");
   };
 
-  // Final cost after penalty discount
+  // Final cost after penalty.
+  // The formula evaluates DIRECTLY to the new cost (costo real final).
+  // The discount is derived: descuento = costo_base - costo_nuevo.
+  // If the formula is empty/invalid, no penalty applies (costo_nuevo = costo_base).
   const getCostoReal = r => {
     const { baseCost } = getCostoInfo(r);
-    const pen = evalFormula(r.penalizacion, baseCost);
-    const penVal = isNaN(pen) ? 0 : pen;
-    return { baseCost, penalizacion: penVal, costoNuevo: baseCost - penVal };
+    const hasFormula = (r.penalizacion || "").trim().length > 0;
+    const evaluated = evalFormula(r.penalizacion, baseCost);
+    const costoNuevo = hasFormula && !isNaN(evaluated) ? evaluated : baseCost;
+    const descuento = baseCost - costoNuevo;
+    return { baseCost, descuento, costoNuevo };
   };
 
   // Cost per package (last mile uses delivered, crossdock uses collected)
@@ -784,11 +789,12 @@ function ModuleEnvios() {
   // NEW: Real cost calculations from rutas × asistencia × carriers
   const rutaCosto = rutas.map(r => {
     const info = getCostoInfo(r);
-    const pen = evalFormula(r.penalizacion, info.baseCost);
-    const penVal = isNaN(pen) ? 0 : pen;
-    const costoNuevo = info.baseCost - penVal;
+    const hasFormula = (r.penalizacion || "").trim().length > 0;
+    const evaluated = evalFormula(r.penalizacion, info.baseCost);
+    const costoNuevo = hasFormula && !isNaN(evaluated) ? evaluated : info.baseCost;
+    const descuento = info.baseCost - costoNuevo;
     const divisor = isCrossdock(r) ? r.recolecciones : r.entregados;
-    return { r, info, baseCost: info.baseCost, penVal, costoNuevo, divisor, costoPorPaq: divisor > 0 ? costoNuevo / divisor : null };
+    return { r, info, baseCost: info.baseCost, descuento, costoNuevo, divisor, costoPorPaq: divisor > 0 ? costoNuevo / divisor : null };
   });
   const costoTotalDiaNuevo = rutaCosto.reduce((s, x) => s + x.costoNuevo, 0);
   const entregadosTotal = rutas.reduce((s, r) => s + (r.entregados || 0), 0);
@@ -1132,14 +1138,15 @@ function ModuleEnvios() {
                 {/* Costo unidad (desde asistencia × carriers) */}
                 {(() => {
                   const info = getCostoInfo(r);
-                  const pen = evalFormula(r.penalizacion, info.baseCost);
-                  const penVal = isNaN(pen) ? 0 : pen;
-                  const costoNuevo = info.baseCost - penVal;
+                  const hasFormula = (r.penalizacion || "").trim().length > 0;
+                  const evaluated = evalFormula(r.penalizacion, info.baseCost);
+                  const costoNuevo = hasFormula && !isNaN(evaluated) ? evaluated : info.baseCost;
+                  const descuento = info.baseCost - costoNuevo;
                   const cross = isCrossdock(r);
                   const divisor = cross ? r.recolecciones : r.entregados;
                   const cpp = divisor > 0 ? costoNuevo / divisor : null;
                   const crossSinRec = cross && (!r.recolecciones || r.recolecciones === 0);
-                  const penInvalid = (r.penalizacion || "").trim() && isNaN(evalFormula(r.penalizacion, info.baseCost));
+                  const penInvalid = hasFormula && isNaN(evaluated);
                   return <>
                     <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {info.missing ? (
@@ -1156,17 +1163,17 @@ function ModuleEnvios() {
                     <td style={{ padding: "8px 6px" }}>
                       <input type="text" defaultValue={r.penalizacion || ""}
                         onBlur={e => { if (e.target.value !== (r.penalizacion || "")) savePenalizacion(rutas.indexOf(r), e.target.value); }}
-                        placeholder="costo*0.5"
-                        title="Fórmula descuento. Variable 'costo' = costo base. Ej: costo*0.5, 250, 0.1*costo"
+                        placeholder="costo*0.86"
+                        title={"Fórmula que evalúa al COSTO REAL FINAL (no al descuento).\nVariable 'costo' = costo base.\nEj: costo*0.86 (paga 86%) · costo-250 (resta $250) · 1161 (costo fijo)"}
                         style={{ width: 80, padding: "4px 6px", borderRadius: 5, border: "1px solid " + (penInvalid ? C.red : C.border), fontSize: 11, fontFamily: "monospace", backgroundColor: penInvalid ? C.redBg : C.white }} />
                     </td>
                     <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {info.missing ? (
                         <span style={{ fontSize: 12, color: C.textMuted }}>—</span>
                       ) : (
-                        <div style={{ fontSize: 12, fontWeight: 800, color: penVal > 0 ? C.accent : C.text, lineHeight: 1.2 }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: descuento > 0 ? C.accent : C.text, lineHeight: 1.2 }}>
                           ${costoNuevo.toLocaleString()}
-                          {penVal !== 0 && <div style={{ fontSize: 9, fontWeight: 600, color: C.red }}>-${penVal.toLocaleString()}</div>}
+                          {descuento !== 0 && <div style={{ fontSize: 9, fontWeight: 600, color: descuento > 0 ? C.red : C.green }}>{descuento > 0 ? "−" : "+"}${Math.abs(descuento).toLocaleString()}</div>}
                         </div>
                       )}
                     </td>
