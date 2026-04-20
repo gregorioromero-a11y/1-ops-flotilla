@@ -1483,6 +1483,24 @@ function ModuleCostos() {
   };
 
   const getCosto = r => parseFloat(carriers.find(c => c.proveedor === r.proveedor && c.tipo_unidad === r.tipo_unidad)?.costo_unidad) || 0;
+
+  // Safe arithmetic formula evaluator. Supports +, -, *, /, parentheses,
+  // decimal numbers, and the variable `costo`. Rejects any other character.
+  const evalFormula = (expr, costo) => {
+    if (!expr || !String(expr).trim()) return 0;
+    let s = String(expr).replace(/costo/gi, "(" + (parseFloat(costo) || 0) + ")");
+    if (!/^[\d+\-*/().\s]*$/.test(s)) return NaN; // reject any unsafe char
+    try {
+      // eslint-disable-next-line no-new-func
+      const result = Function('"use strict"; return (' + s + ')')();
+      return (typeof result === "number" && isFinite(result)) ? result : NaN;
+    } catch { return NaN; }
+  };
+  const getPenalizacion = r => {
+    const v = evalFormula(r.penalizacion, getCosto(r));
+    return isNaN(v) ? 0 : v;
+  };
+  const getCostoFinal = r => getCosto(r) + getPenalizacion(r);
   const proveedores = [...new Set(carriers.map(c => c.proveedor))];
   const tiposDisponibles = carriers.filter(c => c.proveedor === form.proveedor);
   const getCarrierForLine = l => carriers.find(c => c.proveedor === form.proveedor && c.tipo_unidad === l.tipo_unidad);
@@ -1499,16 +1517,19 @@ function ModuleCostos() {
   });
 
   const totalCosto = filtrados.reduce((s, r) => s + getCosto(r), 0);
-  const totalUM = filtrados.filter(r => r.tipo_operacion === "Última Milla").reduce((s, r) => s + getCosto(r), 0);
-  const totalCD = filtrados.filter(r => r.tipo_operacion === "CrossDock").reduce((s, r) => s + getCosto(r), 0);
-  const totalLI = filtrados.filter(r => r.tipo_operacion === "Logística Inversa").reduce((s, r) => s + getCosto(r), 0);
+  const totalPenal = filtrados.reduce((s, r) => s + getPenalizacion(r), 0);
+  const totalReal = totalCosto + totalPenal;
+  const totalUM = filtrados.filter(r => r.tipo_operacion === "Última Milla").reduce((s, r) => s + getCostoFinal(r), 0);
+  const totalCD = filtrados.filter(r => r.tipo_operacion === "CrossDock").reduce((s, r) => s + getCostoFinal(r), 0);
+  const totalLI = filtrados.filter(r => r.tipo_operacion === "Logística Inversa").reduce((s, r) => s + getCostoFinal(r), 0);
 
   const resumen = {};
   filtrados.forEach(r => {
     const key = r.fecha + "|" + r.proveedor;
-    if (!resumen[key]) resumen[key] = { fecha: r.fecha, proveedor: r.proveedor, ops: 0, costo: 0, tipos: {} };
+    if (!resumen[key]) resumen[key] = { fecha: r.fecha, proveedor: r.proveedor, ops: 0, costo: 0, penal: 0, tipos: {} };
     resumen[key].ops += 1;
     resumen[key].costo += getCosto(r);
+    resumen[key].penal += getPenalizacion(r);
     resumen[key].tipos[r.tipo_unidad] = (resumen[key].tipos[r.tipo_unidad] || 0) + 1;
   });
   const resumenList = Object.values(resumen).sort((a, b) => b.fecha.localeCompare(a.fecha) || a.proveedor.localeCompare(b.proveedor));
@@ -1542,6 +1563,144 @@ function ModuleCostos() {
     loadData();
   };
 
+  const savePenalizacion = async (id, value) => {
+    setAsistencia(prev => prev.map(r => r.id === id ? { ...r, penalizacion: value } : r));
+    try {
+      const { error } = await supabase.from("asistencia").update({ penalizacion: value }).eq("id", id);
+      if (error) throw error;
+    } catch (err) {
+      const msg = err?.message || String(err);
+      if (/does not exist|schema cache/i.test(msg)) {
+        setSaveMsg("⚠ Falta agregar la columna 'penalizacion' en la tabla asistencia. Ver consola para SQL.");
+        console.warn("Ejecuta este SQL en Supabase:\n\nALTER TABLE asistencia ADD COLUMN penalizacion text;");
+        setTimeout(() => setSaveMsg(""), 8000);
+      }
+    }
+  };
+
+  const exportarReporteCostos = () => {
+    if (filtrados.length === 0) { alert("No hay registros en el rango seleccionado"); return; }
+    const fechaStr = new Date().toLocaleString("es-MX", { dateStyle: "long", timeStyle: "short" });
+    const periodo = filtroDesde === filtroHasta ? filtroDesde : `${filtroDesde} al ${filtroHasta}`;
+
+    // Group by day
+    const porDia = {};
+    filtrados.forEach(r => {
+      const d = (r.fecha || "").substring(0, 10);
+      if (!porDia[d]) porDia[d] = { fecha: d, registros: [], costo: 0, penal: 0 };
+      porDia[d].registros.push(r);
+      porDia[d].costo += getCosto(r);
+      porDia[d].penal += getPenalizacion(r);
+    });
+    const dias = Object.values(porDia).sort((a, b) => a.fecha.localeCompare(b.fecha));
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Reporte de Costos ${periodo}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'DM Sans',-apple-system,sans-serif;color:#1F2937;padding:12mm 10mm;font-size:9.5pt}
+  .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #FF4500;padding-bottom:8px;margin-bottom:12px}
+  .title{font-size:18pt;font-weight:800}
+  .subtitle{font-size:9pt;color:#7C8495;margin-top:2px}
+  .meta{font-size:8.5pt;color:#7C8495;text-align:right;line-height:1.5}
+  .meta b{color:#1F2937}
+  .stats{display:flex;gap:6px;margin-bottom:12px}
+  .stat{flex:1;border:1px solid #E5E7EB;border-radius:6px;padding:7px 9px}
+  .stat-label{font-size:7pt;font-weight:700;color:#7C8495;text-transform:uppercase}
+  .stat-value{font-size:13pt;font-weight:800;margin-top:2px}
+  h2{font-size:11pt;font-weight:700;margin:14px 0 6px}
+  .day-header{background:#FFF4EF;padding:6px 10px;font-weight:700;font-size:10pt;color:#FF4500;border-radius:5px;margin-top:10px}
+  table{width:100%;border-collapse:collapse;font-size:8.5pt;margin-top:4px}
+  th{background:#F3F4F6;padding:5px 7px;text-align:left;font-size:7pt;font-weight:700;color:#7C8495;text-transform:uppercase;border-bottom:1px solid #E5E7EB}
+  td{padding:5px 7px;border-bottom:1px solid #F1F5F9}
+  .right{text-align:right}
+  .day-total{background:#FAFBFF;font-weight:700}
+  .day-total td{border-top:2px solid #D1D5DB;padding:6px 7px}
+  .grand-total{margin-top:14px;border:2px solid #FF4500;border-radius:8px;padding:10px 14px;background:#FFF4EF;display:flex;justify-content:space-between;align-items:center;font-size:11pt;font-weight:800}
+  .footer{margin-top:16px;padding-top:8px;border-top:1px solid #E5E7EB;font-size:7.5pt;color:#7C8495;text-align:center}
+</style></head><body>
+  <div class="header">
+    <div>
+      <div class="title">Reporte de Costos Reales</div>
+      <div class="subtitle">Asistencia de operadores · Costos + Penalizaciones</div>
+    </div>
+    <div class="meta">
+      <div><b>Periodo:</b> ${periodo}</div>
+      <div><b>Proveedor:</b> ${filtroProv}</div>
+      <div><b>Generado:</b> ${fechaStr}</div>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Operadores</div><div class="stat-value">${filtrados.length}</div></div>
+    <div class="stat"><div class="stat-label">Costo base</div><div class="stat-value" style="color:#16A34A">$${totalCosto.toLocaleString()}</div></div>
+    <div class="stat"><div class="stat-label">Penalizaciones</div><div class="stat-value" style="color:${totalPenal>=0?"#DC2626":"#16A34A"}">${totalPenal>=0?"+":""}$${totalPenal.toLocaleString()}</div></div>
+    <div class="stat"><div class="stat-label">Total real</div><div class="stat-value" style="color:#FF4500">$${totalReal.toLocaleString()}</div></div>
+  </div>
+
+  ${dias.map(d => `
+    <div class="day-header">${new Date(d.fecha + "T00:00:00").toLocaleDateString("es-MX", {weekday:"long", day:"2-digit", month:"long", year:"numeric"})} · ${d.registros.length} operadores</div>
+    <table>
+      <thead><tr>
+        <th>Operador</th><th>Hora</th><th>Proveedor</th><th>Unidad</th><th>Operación</th>
+        <th class="right">Costo base</th><th>Penalización</th><th class="right">Penal. calc.</th><th class="right">Costo real</th>
+      </tr></thead>
+      <tbody>
+        ${d.registros.map(r => {
+          const co = getCosto(r);
+          const pe = getPenalizacion(r);
+          const tot = co + pe;
+          const peStr = (r.penalizacion || "").trim();
+          return `<tr>
+            <td><b>${r.nombre_operador === "Registro manual" ? "(Manual)" : (r.nombre_operador || "—")}</b></td>
+            <td>${fmt(r.timestamp)}</td>
+            <td>${r.proveedor || "—"}</td>
+            <td>${r.tipo_unidad || "—"}</td>
+            <td>${r.tipo_operacion || "—"}</td>
+            <td class="right">$${co.toLocaleString()}</td>
+            <td style="font-family:monospace;font-size:8pt;color:#7C8495">${peStr || "—"}</td>
+            <td class="right" style="color:${pe>0?"#DC2626":pe<0?"#16A34A":"#7C8495"}">${pe!==0?(pe>0?"+":"")+"$"+pe.toLocaleString():"—"}</td>
+            <td class="right" style="font-weight:700;color:#1F2937">$${tot.toLocaleString()}</td>
+          </tr>`;
+        }).join("")}
+        <tr class="day-total">
+          <td colspan="5">Subtotal día</td>
+          <td class="right">$${d.costo.toLocaleString()}</td>
+          <td></td>
+          <td class="right">${d.penal!==0?(d.penal>0?"+":"")+"$"+d.penal.toLocaleString():"$0"}</td>
+          <td class="right" style="color:#FF4500">$${(d.costo+d.penal).toLocaleString()}</td>
+        </tr>
+      </tbody>
+    </table>
+  `).join("")}
+
+  <div class="grand-total">
+    <span>TOTAL GENERAL DEL PERIODO</span>
+    <span>$${totalReal.toLocaleString()}</span>
+  </div>
+
+  <div class="footer">T1 OPS Envíos · Flotilla Propia · Los costos incluyen penalizaciones evaluadas de fórmulas</div>
+</body></html>`;
+
+    const w = window.open("", "_blank", "width=900,height=700");
+    if (!w) { alert("Permite ventanas emergentes para descargar el PDF"); return; }
+    w.document.write(html);
+    w.document.close();
+    const script = w.document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.2/html2pdf.bundle.min.js";
+    script.onload = () => {
+      setTimeout(() => {
+        w.html2pdf().set({
+          margin: [8, 8, 8, 8],
+          filename: `Reporte_Costos_${filtroDesde}_${filtroHasta}.pdf`,
+          image: { type: "jpeg", quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true },
+          jsPDF: { unit: "mm", format: "letter", orientation: "landscape" },
+        }).from(w.document.body).save().then(() => { setTimeout(() => w.close(), 500); });
+      }, 600);
+    };
+    w.document.head.appendChild(script);
+  };
+
   const fmtMoney = n => "$" + (n >= 1000000 ? (n/1000000).toFixed(1)+"M" : n >= 1000 ? (n/1000).toFixed(0)+"K" : n.toLocaleString());
 
   return (
@@ -1552,7 +1711,10 @@ function ModuleCostos() {
           <h1 style={{ fontSize:24, fontWeight:800, margin:0 }}>Registro Diario</h1>
           <p style={{ color:C.textMuted, fontSize:13, marginTop:2 }}>Asistencia de operadores · Costos por operación</p>
         </div>
-        <div style={{ display:"flex", gap:8 }}>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button onClick={exportarReporteCostos} style={{ padding:"9px 16px", borderRadius:8, border:"none", backgroundColor:C.green, color:"white", fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}>
+            <IC.Download /> Descargar reporte
+          </button>
           <button onClick={() => setShowForm(!showForm)} style={{ padding:"9px 16px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:showForm?C.textMuted:C.white, color:showForm?"white":C.text, fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}>
             {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Registro manual</>}
           </button>
@@ -1588,7 +1750,9 @@ function ModuleCostos() {
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(145px,1fr))", gap:14, marginBottom:20 }}>
         {[
           { label:"Operadores registrados", value:filtrados.length, color:C.blue },
-          { label:"Costo total", value:fmtMoney(totalCosto), color:C.purple },
+          { label:"Costo base", value:fmtMoney(totalCosto), color:C.green },
+          { label:"Penalizaciones", value:(totalPenal>=0?"+":"")+fmtMoney(Math.abs(totalPenal)), color:totalPenal>0?C.red:totalPenal<0?C.green:C.textMuted },
+          { label:"Costo real", value:fmtMoney(totalReal), color:C.accent },
           { label:"Última Milla", value:fmtMoney(totalUM), color:C.accent },
           { label:"CrossDock", value:fmtMoney(totalCD), color:C.blue },
           { label:"Logística Inversa", value:fmtMoney(totalLI), color:C.purple },
@@ -1815,7 +1979,7 @@ function ModuleCostos() {
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
               <thead>
                 <tr style={{ backgroundColor:C.bg }}>
-                  {["Fecha","Hora","Operador","Proveedor","Unidad","Operación","Costo",""].map(h => (
+                  {["Fecha","Hora","Operador","Proveedor","Unidad","Operación","Costo","Penalización","Costo real",""].map(h => (
                     <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -1823,7 +1987,11 @@ function ModuleCostos() {
               <tbody>
                 {filtrados.map((r, i) => {
                   const costo = getCosto(r);
+                  const penal = getPenalizacion(r);
+                  const costoReal = costo + penal;
                   const tc = tipoColors[r.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"};
+                  const penalStr = r.penalizacion || "";
+                  const penalInvalid = penalStr.trim() && isNaN(evalFormula(penalStr, costo));
                   return (
                     <tr key={r.id} style={{ borderTop:"1px solid "+C.border }}
                       onMouseEnter={ev=>ev.currentTarget.style.backgroundColor="#FAFBFF"}
@@ -1844,6 +2012,17 @@ function ModuleCostos() {
                       </td>
                       <td style={{ padding:"10px 14px", fontWeight:700, color:costo>0?C.green:C.textMuted }}>
                         {costo > 0 ? "$"+costo.toLocaleString() : "—"}
+                      </td>
+                      <td style={{ padding:"8px 10px" }}>
+                        <input type="text" defaultValue={penalStr}
+                          onBlur={e => { if (e.target.value !== penalStr) savePenalizacion(r.id, e.target.value); }}
+                          placeholder="ej: costo*0.1"
+                          title="Fórmula: puedes usar 'costo' y operadores + - * / y paréntesis. Ej: costo*0.1, -50, 100+25"
+                          style={{ width:120, padding:"5px 8px", borderRadius:5, border:"1px solid "+(penalInvalid?C.red:C.border), fontSize:11, fontFamily:"monospace", backgroundColor:penalInvalid?C.redBg:C.white }} />
+                      </td>
+                      <td style={{ padding:"10px 14px", fontWeight:800, color:penal!==0?(penal>0?C.red:C.green):C.text }}>
+                        ${costoReal.toLocaleString()}
+                        {penal!==0 && <div style={{fontSize:9,fontWeight:600,color:penal>0?C.red:C.green}}>{penal>0?"+":""}${penal.toLocaleString()}</div>}
                       </td>
                       <td style={{ padding:"10px 14px" }}>
                         <button onClick={() => deleteRegistro(r.id)} style={{ padding:"3px 7px", borderRadius:4, border:"none", backgroundColor:C.redBg, cursor:"pointer", color:C.red }}><IC.Trash /></button>
