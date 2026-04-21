@@ -563,6 +563,17 @@ function ModuleEnvios() {
   const [fechaDesde, setFechaDesde] = useState(ayerStr);
   const [fechaHasta, setFechaHasta] = useState(ayerStr);
   const [fechasIniciadas, setFechasIniciadas] = useState(true);
+  const [modoRango, setModoRango] = useState(false);
+
+  const shiftDay = (delta) => {
+    const [y, m, d] = fechaDesde.split("-").map(Number);
+    const date = new Date(y, m - 1, d);
+    date.setDate(date.getDate() + delta);
+    const nueva = date.toISOString().split("T")[0];
+    setFechaDesde(nueva);
+    setFechaHasta(nueva);
+    setModoRango(false);
+  };
   const [openMenu, setOpenMenu] = useState(null);
   const [selectedRows, setSelectedRows] = useState(new Set());
   const [loading, setLoading] = useState(true);
@@ -1042,21 +1053,49 @@ function ModuleEnvios() {
 
       {/* Date + Filter bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Periodo:</span>
-            <input type="date" value={fechaDesde} onChange={e => { setFechaDesde(e.target.value); if (e.target.value > fechaHasta) setFechaHasta(e.target.value); }} style={{ padding: "6px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
-            <span style={{ fontSize: 12, color: C.textMuted }}>al</span>
-            <input type="date" value={fechaHasta} onChange={e => { if (e.target.value >= fechaDesde) setFechaHasta(e.target.value); }} style={{ padding: "6px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
-          </div>
-          <button onClick={() => { setFechaDesde(ayerStr); setFechaHasta(ayerStr); }}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Día:</span>
+          {/* Flecha día anterior */}
+          <button onClick={() => shiftDay(-1)} title="Día anterior"
+            style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, color: C.text, fontSize: 15, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            ‹
+          </button>
+          {/* Input fecha (un solo toque por default) */}
+          <input type="date" value={fechaDesde}
+            onChange={e => {
+              setFechaDesde(e.target.value);
+              if (!modoRango) setFechaHasta(e.target.value);
+              else if (e.target.value > fechaHasta) setFechaHasta(e.target.value);
+            }}
+            style={{ padding: "6px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
+          {modoRango && (
+            <>
+              <span style={{ fontSize: 12, color: C.textMuted }}>al</span>
+              <input type="date" value={fechaHasta}
+                onChange={e => { if (e.target.value >= fechaDesde) setFechaHasta(e.target.value); }}
+                style={{ padding: "6px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
+            </>
+          )}
+          {/* Flecha día siguiente */}
+          <button onClick={() => shiftDay(1)} title="Día siguiente"
+            style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, color: C.text, fontSize: 15, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            ›
+          </button>
+          {/* Botón Ayer */}
+          <button onClick={() => { setFechaDesde(ayerStr); setFechaHasta(ayerStr); setModoRango(false); }}
             title="Ayer (día vencido)"
-            style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, color: C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, color: C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
             Ayer
           </button>
-          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
+          {/* Toggle modo rango */}
+          <button onClick={() => { setModoRango(!modoRango); if (modoRango) setFechaHasta(fechaDesde); }}
+            title={modoRango ? "Volver a un solo día" : "Filtrar rango de días"}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid " + (modoRango ? C.accent : C.border), backgroundColor: modoRango ? C.accentLight : C.white, color: modoRango ? C.accent : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            {modoRango ? "Un día" : "Rango"}
+          </button>
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.text, marginLeft: 4 }}>
             {fechaDesde === fechaHasta
-              ? new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
+              ? new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { weekday: "short", day: "numeric", month: "short", year: "numeric" })
               : new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" }) + " — " + new Date(fechaHasta + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
             }
             <span style={{ marginLeft: 6, fontSize: 12, color: C.textMuted, fontWeight: 500 }}>({filtered.length} rutas)</span>
