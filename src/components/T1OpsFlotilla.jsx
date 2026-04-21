@@ -597,7 +597,7 @@ function ModuleEnvios() {
     const pageSize = 1000;
     let from = 0;
     while (true) {
-      const { data: chunk } = await supabase.from("asistencia").select("*").order("fecha", { ascending: false }).range(from, from + pageSize - 1);
+      const { data: chunk } = await supabase.from("asistencia").select("*").order("fecha", { ascending: false }).order("id", { ascending: false }).range(from, from + pageSize - 1);
       if (!chunk || chunk.length === 0) break;
       allAsistencia = allAsistencia.concat(chunk);
       if (chunk.length < pageSize) break;
@@ -752,7 +752,11 @@ function ModuleEnvios() {
     const pageSize = 1000;
     let from = 0;
     while (true) {
-      const { data: chunk } = await supabase.from("rutas").select("*").order("created_at", { ascending: false }).range(from, from + pageSize - 1);
+      // Tie-break on `id` so paginación es estable: varios rutas comparten
+      // created_at exacto (bulk upload), y sin tie-breaker Postgres devuelve
+      // orden indeterminado entre páginas — algunos registros se duplicaban
+      // y otros se perdían en la grieta entre chunks.
+      const { data: chunk } = await supabase.from("rutas").select("*").order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, from + pageSize - 1);
       if (!chunk || chunk.length === 0) break;
       data = data.concat(chunk);
       if (chunk.length < pageSize) break;
@@ -1903,7 +1907,7 @@ function ModuleCostos() {
       const pageSize = 1000;
       let from = 0;
       while (true) {
-        const { data: chunk } = await supabase.from("asistencia").select("*").order("timestamp", { ascending: false }).range(from, from + pageSize - 1);
+        const { data: chunk } = await supabase.from("asistencia").select("*").order("timestamp", { ascending: false }).order("id", { ascending: false }).range(from, from + pageSize - 1);
         if (!chunk || chunk.length === 0) break;
         all = all.concat(chunk);
         if (chunk.length < pageSize) break;
@@ -4386,7 +4390,7 @@ function ModuleManifiesto() {
       const pageSize = 1000;
       let from = 0;
       while (true) {
-        const { data: chunk } = await supabase.from("asistencia").select("*").order("timestamp", { ascending: false }).range(from, from + pageSize - 1);
+        const { data: chunk } = await supabase.from("asistencia").select("*").order("timestamp", { ascending: false }).order("id", { ascending: false }).range(from, from + pageSize - 1);
         if (!chunk || chunk.length === 0) break;
         all = all.concat(chunk);
         if (chunk.length < pageSize) break;
