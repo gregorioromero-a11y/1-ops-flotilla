@@ -616,7 +616,15 @@ function ModuleEnvios() {
 
   // Lookup unit + provider + base cost for a ruta based on matching automatic asistencia
   // record (same day + same operator name) joined with carriers catalog.
+  // Special case: "PETCO Monterrey" uses a flat rate of $50 per package operated,
+  // bypassing the asistencia lookup entirely.
   const getCostoInfo = r => {
+    // PETCO Monterrey: flat $50 per package operated (delivered or collected)
+    if (r.tipoRuta === "PETCO Monterrey") {
+      const paqOperados = (parseInt(r.entregados) || 0) + (isCrossdock(r) ? (parseInt(r.recolecciones) || 0) : 0);
+      const baseCost = PETCO_MTY_RATE * paqOperados;
+      return { baseCost, proveedor: "PETCO Monterrey", tipo_unidad: "Tarifa fija", missing: false, flatRate: true, paqOperados };
+    }
     const fecha = (r.salida || "").substring(0, 10);
     if (!fecha || !r.operador) return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
     const matches = asistencia.filter(a => (a.fecha || "").substring(0, 10) === fecha && norm(a.nombre_operador) === norm(r.operador));
@@ -654,8 +662,9 @@ function ModuleEnvios() {
   };
 
   // Tipos de ruta donde es permisible no tener registro automático de operador
-  const TIPOS_PERMISIBLES = new Set(["Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "PETCO", "HalfMile"]);
+  const TIPOS_PERMISIBLES = new Set(["Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "PETCO", "PETCO Monterrey", "HalfMile"]);
   const esPermisible = r => TIPOS_PERMISIBLES.has(r.tipoRuta);
+  const PETCO_MTY_RATE = 50; // costo fijo por paquete operado
 
   const savePenalizacion = async (rutaIdx, value) => {
     const updated = [...rutas];
@@ -1201,6 +1210,7 @@ function ModuleEnvios() {
                         <option value="Última milla">Última milla</option>
                         <option value="HalfMile">HalfMile</option>
                         <option value="PETCO">PETCO</option>
+                        <option value="PETCO Monterrey">PETCO Monterrey</option>
                         <option value="Foráneo Puebla">Foráneo Puebla</option>
                         <option value="Foráneo Monterrey">Foráneo MTY</option>
                         <option value="Foráneo GDL">Foráneo GDL</option>
@@ -1222,7 +1232,12 @@ function ModuleEnvios() {
                   const penInvalid = hasFormula && isNaN(evaluated);
                   return <>
                     <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
-                      {info.missing ? (
+                      {info.flatRate ? (
+                        <div title={"Tarifa fija PETCO Monterrey: $" + PETCO_MTY_RATE + " × " + info.paqOperados + " paquetes"} style={{ fontSize: 12, fontWeight: 700, color: "#0284C7", lineHeight: 1.2 }}>
+                          ${info.baseCost.toLocaleString()}
+                          <div style={{ fontSize: 9, color: "#0284C7", fontWeight: 600 }}>${PETCO_MTY_RATE}/paq × {info.paqOperados}</div>
+                        </div>
+                      ) : info.missing ? (
                         esPermisible(r) ? (
                           <div title={"Sin registro de operador (permisible: " + r.tipoRuta + ")"} style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, lineHeight: 1.2 }}>
                             <span style={{ color: "#7C3AED" }}>●</span> Permisible
