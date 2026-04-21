@@ -580,6 +580,7 @@ function ModuleEnvios() {
   const [costosData, setCostosData] = useState([]);
   const [asistencia, setAsistencia] = useState([]);
   const [carriers, setCarriers] = useState([]);
+  const [confirmModal, setConfirmModal] = useState(null);
 
   // Load rutas and costos when date changes
   useEffect(() => { loadRutas(); loadCostos(); loadAsistenciaCarriers(); }, [fechaDesde, fechaHasta]);
@@ -808,11 +809,20 @@ function ModuleEnvios() {
     }
   };
 
-  const deleteRuta = async (index) => {
+  const deleteRuta = (index) => {
     const r = rutas[index];
-    if (r.id) { await supabase.from("rutas").delete().eq("id", r.id); }
-    setRutas(rutas.filter((_, i) => i !== index));
+    if (!r) return;
     setOpenMenu(null);
+    setConfirmModal({
+      message: `¿Eliminar la ruta de ${r.operador || "operador desconocido"}?`,
+      onConfirm: async () => {
+        if (r.id) {
+          const { error } = await supabase.from("rutas").delete().eq("id", r.id);
+          if (error) { alert("Error al eliminar: " + error.message); return; }
+        }
+        await loadRutas();
+      },
+    });
   };
 
   const toggleRow = (idx) => {
@@ -847,22 +857,27 @@ function ModuleEnvios() {
     setSelectedRows(new Set());
   };
 
-  const bulkDelete = async () => {
-    if (!confirm("¿Eliminar " + selectedRows.size + " rutas seleccionadas?")) return;
-    const toDelete = [...selectedRows].map(idx => filtered[idx]).filter(r => r && r.id);
-    const ids = toDelete.map(r => r.id);
+  const bulkDelete = () => {
+    // Custom modal — window.confirm() can be permanently suppressed by the
+    // browser if the user unchecked "show again" on a prior prompt, which
+    // made the native dialog return false without asking.
+    const ids = [...selectedRows].map(idx => filtered[idx]).filter(r => r && r.id).map(r => r.id);
     if (ids.length === 0) { setSelectedRows(new Set()); return; }
-    // Supabase caps .in() at ~500 values in URL; chunk to be safe.
-    const chunkSize = 200;
-    let failed = 0;
-    for (let i = 0; i < ids.length; i += chunkSize) {
-      const slice = ids.slice(i, i + chunkSize);
-      const { error } = await supabase.from("rutas").delete().in("id", slice);
-      if (error) { console.error("bulkDelete error:", error); failed += slice.length; }
-    }
-    if (failed > 0) alert(`No se pudieron eliminar ${failed} de ${ids.length} rutas. Revisa la consola.`);
-    setSelectedRows(new Set());
-    await loadRutas();
+    setConfirmModal({
+      message: `¿Eliminar ${ids.length} ruta${ids.length === 1 ? "" : "s"} seleccionada${ids.length === 1 ? "" : "s"}? Esta acción no se puede deshacer.`,
+      onConfirm: async () => {
+        const chunkSize = 200;
+        let failed = 0;
+        for (let i = 0; i < ids.length; i += chunkSize) {
+          const slice = ids.slice(i, i + chunkSize);
+          const { error } = await supabase.from("rutas").delete().in("id", slice);
+          if (error) { console.error("bulkDelete error:", error); failed += slice.length; }
+        }
+        if (failed > 0) alert(`No se pudieron eliminar ${failed} de ${ids.length} rutas. Revisa la consola.`);
+        setSelectedRows(new Set());
+        await loadRutas();
+      },
+    });
   };
 
   const getRisk = (r) => {
@@ -1484,6 +1499,21 @@ function ModuleEnvios() {
           </div>
         )}
       </div>
+
+      {/* Confirm modal — replaces window.confirm() which can be permanently disabled by the browser */}
+      {confirmModal && (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(12,20,37,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 }}
+          onClick={() => setConfirmModal(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ backgroundColor: C.white, borderRadius: 12, padding: 28, width: 440, maxWidth: "90vw", boxShadow: "0 12px 48px rgba(0,0,0,0.25)" }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: C.text, marginBottom: 10 }}>Confirmar eliminación</div>
+            <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 22, lineHeight: 1.5 }}>{confirmModal.message}</div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => setConfirmModal(null)} style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 13, fontWeight: 600, cursor: "pointer", color: C.text }}>Cancelar</button>
+              <button onClick={async () => { const fn = confirmModal.onConfirm; setConfirmModal(null); try { await fn(); } catch (e) { console.error(e); alert("Error: " + e.message); } }} style={{ padding: "9px 22px", borderRadius: 8, border: "none", backgroundColor: C.red, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Eliminar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
