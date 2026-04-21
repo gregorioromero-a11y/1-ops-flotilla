@@ -631,11 +631,12 @@ function ModuleEnvios() {
   //     asistencia, fallback to the operator's most-recent asistencia to
   //     resolve the unit, then pull cost from carriers catalog.
   const getCostoInfo = r => {
-    // PETCO Monterrey: flat $50 per package operated (delivered or collected)
-    if (r.tipoRuta === "PETCO Monterrey") {
+    // Flat-rate tipos (per-package): bypass asistencia lookup entirely
+    const rateFija = TARIFAS_FIJAS[r.tipoRuta];
+    if (rateFija != null) {
       const paqOperados = (parseInt(r.entregados) || 0) + (isCrossdock(r) ? (parseInt(r.recolecciones) || 0) : 0);
-      const baseCost = PETCO_MTY_RATE * paqOperados;
-      return { baseCost, proveedor: "PETCO Monterrey", tipo_unidad: "Tarifa fija", missing: false, flatRate: true, paqOperados };
+      const baseCost = rateFija * paqOperados;
+      return { baseCost, proveedor: r.tipoRuta, tipo_unidad: "Tarifa fija", missing: false, flatRate: true, flatRateValue: rateFija, paqOperados };
     }
     const fecha = (r.salida || "").substring(0, 10);
     if (!fecha || !r.operador) return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
@@ -710,7 +711,12 @@ function ModuleEnvios() {
   // Tipos de ruta donde es permisible no tener registro automático de operador
   const TIPOS_PERMISIBLES = new Set(["Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "PETCO", "PETCO Monterrey", "HalfMile"]);
   const esPermisible = r => TIPOS_PERMISIBLES.has(r.tipoRuta);
-  const PETCO_MTY_RATE = 50; // costo fijo por paquete operado
+  // Tipos de tarifa fija: { tipo: $ por paquete operado }
+  const TARIFAS_FIJAS = {
+    "PETCO Monterrey": 50,
+    "Foráneo Monterrey": 55,
+    "Foráneo GDL": 55,
+  };
 
   const savePenalizacion = async (rutaIdx, value) => {
     const updated = [...rutas];
@@ -863,9 +869,9 @@ function ModuleEnvios() {
   const costoPorPaquete = totalEntregados > 0 ? (costoTotalPeriodo / totalEntregados).toFixed(2) : 0;
 
   // Tipos de ruta donde un operador repetido en el mismo día cobra solo una vez
-  // (el costo unitario se comparte y los paquetes se suman). No aplica a
-  // PETCO Monterrey porque ya cobra por paquete (dedup es equivalente).
-  const DEDUP_TIPOS = new Set(["PETCO"]);
+  // (el costo unitario se comparte y los paquetes se suman). No aplica a tipos
+  // de tarifa fija porque ya cobran por paquete (dedup es equivalente).
+  const DEDUP_TIPOS = new Set(["PETCO", "Foráneo Puebla"]);
   const esDedup = r => DEDUP_TIPOS.has(r.tipoRuta);
 
   // Agrupar rutas dedup por (fecha, operador, tipoRuta) para compartir costo
@@ -1326,9 +1332,9 @@ function ModuleEnvios() {
                   return <>
                     <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {info.flatRate ? (
-                        <div title={"Tarifa fija PETCO Monterrey: $" + PETCO_MTY_RATE + " × " + info.paqOperados + " paquetes"} style={{ fontSize: 12, fontWeight: 700, color: "#0284C7", lineHeight: 1.2 }}>
+                        <div title={"Tarifa fija " + r.tipoRuta + ": $" + info.flatRateValue + " × " + info.paqOperados + " paquetes operados"} style={{ fontSize: 12, fontWeight: 700, color: "#0284C7", lineHeight: 1.2 }}>
                           ${info.baseCost.toLocaleString()}
-                          <div style={{ fontSize: 9, color: "#0284C7", fontWeight: 600 }}>${PETCO_MTY_RATE}/paq × {info.paqOperados}</div>
+                          <div style={{ fontSize: 9, color: "#0284C7", fontWeight: 600 }}>${info.flatRateValue}/paq × {info.paqOperados}</div>
                         </div>
                       ) : info.missing ? (
                         esPermisible(r) ? (
