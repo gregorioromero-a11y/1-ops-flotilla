@@ -590,19 +590,20 @@ function ModuleEnvios() {
   };
 
   const loadAsistenciaCarriers = async () => {
-    // Paginated fetch: load ALL asistencia records (no date filter) so that
-    // permissible labels (PETCO, Foráneo, HalfMile) can still resolve the
-    // operator's unit via their most-recent check-in when no same-day match.
-    let allAsistencia = [];
+    // Keyset pagination on id (unique PK) so no duplicates or gaps.
+    const byId = new Map();
     const pageSize = 1000;
-    let from = 0;
+    let cursor = null;
     while (true) {
-      const { data: chunk } = await supabase.from("asistencia").select("*").order("fecha", { ascending: false }).order("id", { ascending: false }).range(from, from + pageSize - 1);
+      let q = supabase.from("asistencia").select("*").order("id", { ascending: false }).limit(pageSize);
+      if (cursor !== null) q = q.lt("id", cursor);
+      const { data: chunk } = await q;
       if (!chunk || chunk.length === 0) break;
-      allAsistencia = allAsistencia.concat(chunk);
+      for (const row of chunk) byId.set(row.id, row);
       if (chunk.length < pageSize) break;
-      from += pageSize;
+      cursor = chunk[chunk.length - 1].id;
     }
+    const allAsistencia = Array.from(byId.values()).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || b.id - a.id);
     const { data: cData } = await supabase.from("carriers").select("*");
     setAsistencia(allAsistencia.filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual"));
     setCarriers(cData || []);
@@ -745,23 +746,23 @@ function ModuleEnvios() {
 
   const loadRutas = async () => {
     setLoading(true);
-    // Paginated fetch: Supabase caps a single select at 1000 rows, so older
-    // dates (e.g., month-old) get silently truncated otherwise — which caused
-    // the "detalle" to show fewer rutas than the "Costo por Carrier" summary.
-    let data = [];
+    // Supabase caps a single select at 1000 rows. Use keyset pagination on
+    // `id` (unique PK, monotonically increasing) instead of offset-based to
+    // guarantee no duplicates or gaps even across concurrent writes. Final
+    // Map-based dedup by id is a belt-and-suspenders safety net.
+    const byId = new Map();
     const pageSize = 1000;
-    let from = 0;
+    let cursor = null;
     while (true) {
-      // Tie-break on `id` so paginación es estable: varios rutas comparten
-      // created_at exacto (bulk upload), y sin tie-breaker Postgres devuelve
-      // orden indeterminado entre páginas — algunos registros se duplicaban
-      // y otros se perdían en la grieta entre chunks.
-      const { data: chunk } = await supabase.from("rutas").select("*").order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, from + pageSize - 1);
+      let q = supabase.from("rutas").select("*").order("id", { ascending: false }).limit(pageSize);
+      if (cursor !== null) q = q.lt("id", cursor);
+      const { data: chunk } = await q;
       if (!chunk || chunk.length === 0) break;
-      data = data.concat(chunk);
+      for (const row of chunk) byId.set(row.id, row);
       if (chunk.length < pageSize) break;
-      from += pageSize;
+      cursor = chunk[chunk.length - 1].id;
     }
+    const data = Array.from(byId.values()).sort((a, b) => (a.created_at || "").localeCompare(b.created_at || "") * -1 || b.id - a.id);
     if (data && data.length > 0) {
       // First load: auto-adjust date range to the min/max of available data
       if (!fechasIniciadas) {
@@ -1899,21 +1900,22 @@ function ModuleCostos() {
 
   const loadData = async () => {
     setLoading(true);
-    // Paginated asistencia fetch: without this, Supabase silently caps at
-    // 1000 rows and older dates lose records — summary and detail then
-    // diverge for carriers like FAST INTEGRAL on month-old days.
+    // Keyset pagination on id (unique PK) so no duplicates or gaps even
+    // when multiple rows share the same timestamp.
     const loadAllAsistencia = async () => {
-      let all = [];
+      const byId = new Map();
       const pageSize = 1000;
-      let from = 0;
+      let cursor = null;
       while (true) {
-        const { data: chunk } = await supabase.from("asistencia").select("*").order("timestamp", { ascending: false }).order("id", { ascending: false }).range(from, from + pageSize - 1);
+        let q = supabase.from("asistencia").select("*").order("id", { ascending: false }).limit(pageSize);
+        if (cursor !== null) q = q.lt("id", cursor);
+        const { data: chunk } = await q;
         if (!chunk || chunk.length === 0) break;
-        all = all.concat(chunk);
+        for (const row of chunk) byId.set(row.id, row);
         if (chunk.length < pageSize) break;
-        from += pageSize;
+        cursor = chunk[chunk.length - 1].id;
       }
-      return all;
+      return Array.from(byId.values()).sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || "") || b.id - a.id);
     };
     const [asiData, { data: carsData }] = await Promise.all([
       loadAllAsistencia(),
@@ -4383,20 +4385,21 @@ function ModuleManifiesto() {
 
   const loadData = async () => {
     setLoading(true);
-    // Paginate asistencia to avoid Supabase's 1000-row default truncating
-    // older operators (manifiesto candidates come from here).
+    // Keyset pagination on id (unique PK) — no duplicates, no gaps.
     const loadAllAsistencia = async () => {
-      let all = [];
+      const byId = new Map();
       const pageSize = 1000;
-      let from = 0;
+      let cursor = null;
       while (true) {
-        const { data: chunk } = await supabase.from("asistencia").select("*").order("timestamp", { ascending: false }).order("id", { ascending: false }).range(from, from + pageSize - 1);
+        let q = supabase.from("asistencia").select("*").order("id", { ascending: false }).limit(pageSize);
+        if (cursor !== null) q = q.lt("id", cursor);
+        const { data: chunk } = await q;
         if (!chunk || chunk.length === 0) break;
-        all = all.concat(chunk);
+        for (const row of chunk) byId.set(row.id, row);
         if (chunk.length < pageSize) break;
-        from += pageSize;
+        cursor = chunk[chunk.length - 1].id;
       }
-      return all;
+      return Array.from(byId.values()).sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || "") || b.id - a.id);
     };
     const [asiData, { data: manData }] = await Promise.all([
       loadAllAsistencia(),
