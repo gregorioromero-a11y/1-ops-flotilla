@@ -745,7 +745,19 @@ function ModuleEnvios() {
 
   const loadRutas = async () => {
     setLoading(true);
-    const { data } = await supabase.from("rutas").select("*").order("created_at", { ascending: false });
+    // Paginated fetch: Supabase caps a single select at 1000 rows, so older
+    // dates (e.g., month-old) get silently truncated otherwise — which caused
+    // the "detalle" to show fewer rutas than the "Costo por Carrier" summary.
+    let data = [];
+    const pageSize = 1000;
+    let from = 0;
+    while (true) {
+      const { data: chunk } = await supabase.from("rutas").select("*").order("created_at", { ascending: false }).range(from, from + pageSize - 1);
+      if (!chunk || chunk.length === 0) break;
+      data = data.concat(chunk);
+      if (chunk.length < pageSize) break;
+      from += pageSize;
+    }
     if (data && data.length > 0) {
       // First load: auto-adjust date range to the min/max of available data
       if (!fechasIniciadas) {
@@ -1883,8 +1895,24 @@ function ModuleCostos() {
 
   const loadData = async () => {
     setLoading(true);
-    const [{ data: asiData }, { data: carsData }] = await Promise.all([
-      supabase.from("asistencia").select("*").order("timestamp", { ascending: false }),
+    // Paginated asistencia fetch: without this, Supabase silently caps at
+    // 1000 rows and older dates lose records — summary and detail then
+    // diverge for carriers like FAST INTEGRAL on month-old days.
+    const loadAllAsistencia = async () => {
+      let all = [];
+      const pageSize = 1000;
+      let from = 0;
+      while (true) {
+        const { data: chunk } = await supabase.from("asistencia").select("*").order("timestamp", { ascending: false }).range(from, from + pageSize - 1);
+        if (!chunk || chunk.length === 0) break;
+        all = all.concat(chunk);
+        if (chunk.length < pageSize) break;
+        from += pageSize;
+      }
+      return all;
+    };
+    const [asiData, { data: carsData }] = await Promise.all([
+      loadAllAsistencia(),
       supabase.from("carriers").select("*").order("proveedor"),
     ]);
     setAsistencia(asiData || []);
@@ -4351,8 +4379,23 @@ function ModuleManifiesto() {
 
   const loadData = async () => {
     setLoading(true);
-    const [{ data: asiData }, { data: manData }] = await Promise.all([
-      supabase.from("asistencia").select("*").order("timestamp", { ascending: false }),
+    // Paginate asistencia to avoid Supabase's 1000-row default truncating
+    // older operators (manifiesto candidates come from here).
+    const loadAllAsistencia = async () => {
+      let all = [];
+      const pageSize = 1000;
+      let from = 0;
+      while (true) {
+        const { data: chunk } = await supabase.from("asistencia").select("*").order("timestamp", { ascending: false }).range(from, from + pageSize - 1);
+        if (!chunk || chunk.length === 0) break;
+        all = all.concat(chunk);
+        if (chunk.length < pageSize) break;
+        from += pageSize;
+      }
+      return all;
+    };
+    const [asiData, { data: manData }] = await Promise.all([
+      loadAllAsistencia(),
       supabase.from("manifiestos").select("*").order("created_at", { ascending: false }),
     ]);
     // Unique operators from asistencia
