@@ -554,9 +554,15 @@ function ModuleEnvios() {
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
-  const [fechaDesde, setFechaDesde] = useState("2020-01-01");
-  const [fechaHasta, setFechaHasta] = useState("2099-12-31");
-  const [fechasIniciadas, setFechasIniciadas] = useState(false);
+  // Default: ayer (día vencido)
+  const ayerStr = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split("T")[0];
+  })();
+  const [fechaDesde, setFechaDesde] = useState(ayerStr);
+  const [fechaHasta, setFechaHasta] = useState(ayerStr);
+  const [fechasIniciadas, setFechasIniciadas] = useState(true);
   const [openMenu, setOpenMenu] = useState(null);
   const [selectedRows, setSelectedRows] = useState(new Set());
   const [loading, setLoading] = useState(true);
@@ -935,11 +941,6 @@ function ModuleEnvios() {
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Vista de rutas operativas · Carga masiva desde Excel</p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <input type="date" value={fechaDesde} onChange={e => { setFechaDesde(e.target.value); if (e.target.value > fechaHasta) setFechaHasta(e.target.value); }} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
-            <span style={{ fontSize: 12, color: C.textMuted }}>al</span>
-            <input type="date" value={fechaHasta} onChange={e => { if (e.target.value >= fechaDesde) setFechaHasta(e.target.value); }} style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
-          </div>
           <button onClick={() => setShowUpload(!showUpload)} style={{
             padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showUpload ? C.textMuted : C.accent,
             color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
@@ -1040,13 +1041,26 @@ function ModuleEnvios() {
       )}
 
       {/* Date + Filter bar */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
-          {fechaDesde === fechaHasta
-            ? new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
-            : new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" }) + " — " + new Date(fechaHasta + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
-          }
-          <span style={{ marginLeft: 8, fontSize: 12, color: C.textMuted }}>({filtered.length} rutas)</span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Periodo:</span>
+            <input type="date" value={fechaDesde} onChange={e => { setFechaDesde(e.target.value); if (e.target.value > fechaHasta) setFechaHasta(e.target.value); }} style={{ padding: "6px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
+            <span style={{ fontSize: 12, color: C.textMuted }}>al</span>
+            <input type="date" value={fechaHasta} onChange={e => { if (e.target.value >= fechaDesde) setFechaHasta(e.target.value); }} style={{ padding: "6px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
+          </div>
+          <button onClick={() => { setFechaDesde(ayerStr); setFechaHasta(ayerStr); }}
+            title="Ayer (día vencido)"
+            style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, color: C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            Ayer
+          </button>
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
+            {fechaDesde === fechaHasta
+              ? new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
+              : new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" }) + " — " + new Date(fechaHasta + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })
+            }
+            <span style={{ marginLeft: 6, fontSize: 12, color: C.textMuted, fontWeight: 500 }}>({filtered.length} rutas)</span>
+          </span>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           {["Todas", "En ruta", "En riesgo", "Completadas"].map(f => (
