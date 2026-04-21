@@ -849,12 +849,20 @@ function ModuleEnvios() {
 
   const bulkDelete = async () => {
     if (!confirm("¿Eliminar " + selectedRows.size + " rutas seleccionadas?")) return;
-    const toDelete = [...selectedRows].map(idx => filtered[idx]);
-    for (const r of toDelete) {
-      if (r.id) { await supabase.from("rutas").delete().eq("id", r.id); }
+    const toDelete = [...selectedRows].map(idx => filtered[idx]).filter(r => r && r.id);
+    const ids = toDelete.map(r => r.id);
+    if (ids.length === 0) { setSelectedRows(new Set()); return; }
+    // Supabase caps .in() at ~500 values in URL; chunk to be safe.
+    const chunkSize = 200;
+    let failed = 0;
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const slice = ids.slice(i, i + chunkSize);
+      const { error } = await supabase.from("rutas").delete().in("id", slice);
+      if (error) { console.error("bulkDelete error:", error); failed += slice.length; }
     }
-    setRutas(rutas.filter(r => !toDelete.includes(r)));
+    if (failed > 0) alert(`No se pudieron eliminar ${failed} de ${ids.length} rutas. Revisa la consola.`);
     setSelectedRows(new Set());
+    await loadRutas();
   };
 
   const getRisk = (r) => {
