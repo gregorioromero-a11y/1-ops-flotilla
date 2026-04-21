@@ -846,7 +846,7 @@ function ModuleEnvios() {
     if (filter === "En riesgo") return getRisk(r) === "high" || getRisk(r) === "medium";
     if (filter === "Completadas") return r.status === "Completada";
     return true;
-  });
+  }).slice().sort((a, b) => (a.operador || "").localeCompare(b.operador || "", "es", { sensitivity: "base" }));
 
   const totalRutas = rutas.length;
   const totalEntregados = rutas.reduce((s, r) => s + r.entregados, 0);
