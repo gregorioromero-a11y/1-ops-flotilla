@@ -1146,7 +1146,6 @@ function ModuleEnvios() {
                           cursor: "pointer", fontWeight: isPerm ? 700 : 500,
                         }}>
                         <option value="Última milla">Última milla</option>
-                        <option value="Half mile">Half mile</option>
                         <option value="HalfMile">HalfMile</option>
                         <option value="PETCO">PETCO</option>
                         <option value="Foráneo Puebla">Foráneo Puebla</option>
