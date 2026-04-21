@@ -590,12 +590,21 @@ function ModuleEnvios() {
   };
 
   const loadAsistenciaCarriers = async () => {
-    const [{ data: aData }, { data: cData }] = await Promise.all([
-      supabase.from("asistencia").select("*").gte("fecha", fechaDesde).lte("fecha", fechaHasta),
-      supabase.from("carriers").select("*"),
-    ]);
-    // Keep only automatic records (exclude "Registro manual")
-    setAsistencia((aData || []).filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual"));
+    // Paginated fetch: load ALL asistencia records (no date filter) so that
+    // permissible labels (PETCO, Foráneo, HalfMile) can still resolve the
+    // operator's unit via their most-recent check-in when no same-day match.
+    let allAsistencia = [];
+    const pageSize = 1000;
+    let from = 0;
+    while (true) {
+      const { data: chunk } = await supabase.from("asistencia").select("*").order("fecha", { ascending: false }).range(from, from + pageSize - 1);
+      if (!chunk || chunk.length === 0) break;
+      allAsistencia = allAsistencia.concat(chunk);
+      if (chunk.length < pageSize) break;
+      from += pageSize;
+    }
+    const { data: cData } = await supabase.from("carriers").select("*");
+    setAsistencia(allAsistencia.filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual"));
     setCarriers(cData || []);
   };
 
@@ -616,8 +625,11 @@ function ModuleEnvios() {
 
   // Lookup unit + provider + base cost for a ruta based on matching automatic asistencia
   // record (same day + same operator name) joined with carriers catalog.
-  // Special case: "PETCO Monterrey" uses a flat rate of $50 per package operated,
-  // bypassing the asistencia lookup entirely.
+  // Special cases:
+  //   - "PETCO Monterrey": flat $50 per package operated, bypasses asistencia.
+  //   - Other permissible labels (PETCO, Foráneo, HalfMile): if no same-day
+  //     asistencia, fallback to the operator's most-recent asistencia to
+  //     resolve the unit, then pull cost from carriers catalog.
   const getCostoInfo = r => {
     // PETCO Monterrey: flat $50 per package operated (delivered or collected)
     if (r.tipoRuta === "PETCO Monterrey") {
@@ -627,12 +639,27 @@ function ModuleEnvios() {
     }
     const fecha = (r.salida || "").substring(0, 10);
     if (!fecha || !r.operador) return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
-    const matches = asistencia.filter(a => (a.fecha || "").substring(0, 10) === fecha && norm(a.nombre_operador) === norm(r.operador));
-    if (!matches.length) return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
-    const a = matches[0]; // Single record per day per operator (per user spec)
-    const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
-    const baseCost = parseFloat(car?.costo_unidad) || 0;
-    return { baseCost, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, missing: false, tipo_operacion: a.tipo_operacion };
+    const opNorm = norm(r.operador);
+    // 1) Same-day match (preferred)
+    const sameDay = asistencia.filter(a => (a.fecha || "").substring(0, 10) === fecha && norm(a.nombre_operador) === opNorm);
+    if (sameDay.length) {
+      const a = sameDay[0];
+      const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+      const baseCost = parseFloat(car?.costo_unidad) || 0;
+      return { baseCost, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, missing: false, tipo_operacion: a.tipo_operacion };
+    }
+    // 2) Fallback for permissible labels: most-recent asistencia for this operator
+    if (esPermisible(r)) {
+      const fallback = asistencia.filter(a => norm(a.nombre_operador) === opNorm);
+      if (fallback.length) {
+        // asistencia is already sorted desc by fecha in loadAsistenciaCarriers
+        const a = fallback[0];
+        const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+        const baseCost = parseFloat(car?.costo_unidad) || 0;
+        return { baseCost, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, missing: false, tipo_operacion: a.tipo_operacion, fallback: true };
+      }
+    }
+    return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
   };
 
   const isCrossdock = r => {
@@ -1288,7 +1315,9 @@ function ModuleEnvios() {
                       ) : (
                         <div style={{ fontSize: 12, fontWeight: 700, color: C.green, lineHeight: 1.2 }}>
                           ${info.baseCost.toLocaleString()}
-                          <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>{info.tipo_unidad}</div>
+                          <div style={{ fontSize: 9, color: info.fallback ? "#7C3AED" : C.textMuted, fontWeight: info.fallback ? 600 : 500 }}>
+                            {info.tipo_unidad}{info.fallback ? " · ref." : ""}
+                          </div>
                         </div>
                       )}
                     </td>
