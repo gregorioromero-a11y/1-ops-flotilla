@@ -656,7 +656,26 @@ function ModuleEnvios() {
         const a = fallback[0];
         const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
         const baseCost = parseFloat(car?.costo_unidad) || 0;
-        return { baseCost, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, missing: false, tipo_operacion: a.tipo_operacion, fallback: true };
+        return { baseCost, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, missing: false, tipo_operacion: a.tipo_operacion, fallback: "operador" };
+      }
+      // 3) Last-resort fallback: operator has no asistencia ever. Use the
+      //    carrier from the uploaded route row to pick a default unit
+      //    (prefer Sedan, else the cheapest última-milla option).
+      if (r.carrier && r.carrier !== "—") {
+        const carrierName = norm(r.carrier);
+        const candidates = carriers.filter(c =>
+          norm(c.proveedor) === carrierName
+          && c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—"
+          && (c.operacion || "").toLowerCase().includes("ltima")
+        );
+        if (candidates.length) {
+          const sedan = candidates.find(c => c.tipo_unidad === "Sedan");
+          const chosen = sedan || candidates.slice().sort((a, b) =>
+            (parseFloat(a.costo_unidad) || 0) - (parseFloat(b.costo_unidad) || 0)
+          )[0];
+          const baseCost = parseFloat(chosen.costo_unidad) || 0;
+          return { baseCost, proveedor: chosen.proveedor, tipo_unidad: chosen.tipo_unidad, missing: false, tipo_operacion: chosen.operacion, fallback: "carrier" };
+        }
       }
     }
     return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
@@ -1222,13 +1241,17 @@ function ModuleEnvios() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((r, i) => (
-              <tr key={i} style={{ borderBottom: `1px solid ${C.border}`, position: "relative" }}
-                onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
-                onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
+            {filtered.map((r, i) => {
+              const rutaIdx = rutas.indexOf(r);
+              const dedupRow = getDedupInfo(r, rutaIdx);
+              const bgGrupo = dedupRow ? "#F5F3FF" : "transparent";
+              return (
+              <tr key={i} style={{ borderBottom: `1px solid ${C.border}`, position: "relative", backgroundColor: bgGrupo }}
+                onMouseEnter={ev => { if (!dedupRow) ev.currentTarget.style.backgroundColor = "#FAFBFF"; }}
+                onMouseLeave={ev => { ev.currentTarget.style.backgroundColor = bgGrupo; }}>
                 {/* Color bar */}
                 <td style={{ padding: 0, position: "relative", width: 4 }}>
-                  <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, backgroundColor: getBarColor(r) }} />
+                  <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: dedupRow ? 5 : 4, backgroundColor: dedupRow ? "#7C3AED" : getBarColor(r) }} />
                   <div style={{ paddingLeft: 12 }}>
                     <input type="checkbox" checked={selectedRows.has(i)} onChange={() => toggleRow(i)} style={{ cursor: "pointer", accentColor: C.accent }} />
                   </div>
@@ -1237,6 +1260,12 @@ function ModuleEnvios() {
                 <td style={{ padding: "14px 12px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{r.operador}</span>
+                    {dedupRow && (
+                      <span title={"Forma parte de un grupo de " + dedupRow.groupSize + " rutas del mismo operador hoy"}
+                        style={{ fontSize: 9, fontWeight: 800, color: "#7C3AED", padding: "2px 6px", borderRadius: 10, backgroundColor: "#EDE9FE", letterSpacing: "0.05em" }}>
+                        GRUPO {dedupRow.groupSize}
+                      </span>
+                    )}
                     <RiskIcon level={getRisk(r)} />
                   </div>
                 </td>
@@ -1316,7 +1345,9 @@ function ModuleEnvios() {
                         <div style={{ fontSize: 12, fontWeight: 700, color: C.green, lineHeight: 1.2 }}>
                           ${info.baseCost.toLocaleString()}
                           <div style={{ fontSize: 9, color: info.fallback ? "#7C3AED" : C.textMuted, fontWeight: info.fallback ? 600 : 500 }}>
-                            {info.tipo_unidad}{info.fallback ? " · ref." : ""}
+                            {info.tipo_unidad}
+                            {info.fallback === "operador" && <span title="Costo inferido del último check-in del operador"> · ref.</span>}
+                            {info.fallback === "carrier" && <span title="Operador sin historial. Costo estimado del carrier/transportista"> · est.</span>}
                           </div>
                         </div>
                       )}
@@ -1409,7 +1440,8 @@ function ModuleEnvios() {
                   )}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
         </div>
