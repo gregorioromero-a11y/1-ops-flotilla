@@ -816,17 +816,53 @@ function ModuleEnvios() {
   const costoHM = costosData.filter(r => r.tipo === "Half mile").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
   const costoPorPaquete = totalEntregados > 0 ? (costoTotalPeriodo / totalEntregados).toFixed(2) : 0;
 
+  // Tipos de ruta donde un operador repetido en el mismo día cobra solo una vez
+  // (el costo unitario se comparte y los paquetes se suman). No aplica a
+  // PETCO Monterrey porque ya cobra por paquete (dedup es equivalente).
+  const DEDUP_TIPOS = new Set(["PETCO"]);
+  const esDedup = r => DEDUP_TIPOS.has(r.tipoRuta);
+
+  // Agrupar rutas dedup por (fecha, operador, tipoRuta) para compartir costo
+  const dedupGroups = {};
+  rutas.forEach((r, i) => {
+    if (!esDedup(r)) return;
+    const fecha = (r.salida || "").substring(0, 10);
+    if (!fecha || !r.operador) return;
+    const key = fecha + "|" + norm(r.operador) + "|" + r.tipoRuta;
+    if (!dedupGroups[key]) dedupGroups[key] = [];
+    dedupGroups[key].push(i);
+  });
+  const getDedupInfo = (r, ridx) => {
+    if (!esDedup(r)) return null;
+    const fecha = (r.salida || "").substring(0, 10);
+    const key = fecha + "|" + norm(r.operador) + "|" + r.tipoRuta;
+    const group = dedupGroups[key] || [];
+    if (group.length <= 1) return null;
+    const isPrimary = group[0] === ridx;
+    const sumPaq = group.reduce((s, i) => {
+      const ri = rutas[i];
+      return s + (parseInt(ri.entregados) || 0) + (isCrossdock(ri) ? (parseInt(ri.recolecciones) || 0) : 0);
+    }, 0);
+    return { isPrimary, sumPaq, groupSize: group.length };
+  };
+
   // NEW: Real cost calculations from rutas × asistencia × carriers
-  const rutaCosto = rutas.map(r => {
+  const rutaCosto = rutas.map((r, idx) => {
     const info = getCostoInfo(r);
     const hasFormula = (r.penalizacion || "").trim().length > 0;
     const evaluated = evalFormula(r.penalizacion, info.baseCost);
     const costoNuevo = hasFormula && !isNaN(evaluated) ? evaluated : info.baseCost;
     const descuento = info.baseCost - costoNuevo;
-    const divisor = isCrossdock(r) ? r.recolecciones : r.entregados;
-    return { r, info, baseCost: info.baseCost, descuento, costoNuevo, divisor, costoPorPaq: divisor > 0 ? costoNuevo / divisor : null };
+    const dedup = getDedupInfo(r, idx);
+    // For dedup groups: packages divisor = group sum; cost only counted on primary row
+    const divisor = dedup ? dedup.sumPaq : (isCrossdock(r) ? r.recolecciones : r.entregados);
+    const costoContado = dedup ? (dedup.isPrimary ? costoNuevo : 0) : costoNuevo;
+    const costoPorPaq = dedup
+      ? (dedup.sumPaq > 0 ? costoNuevo / dedup.sumPaq : null)
+      : (divisor > 0 ? costoNuevo / divisor : null);
+    return { r, info, baseCost: info.baseCost, descuento, costoNuevo, divisor, costoPorPaq, dedup, costoContado };
   });
-  const costoTotalDiaNuevo = rutaCosto.reduce((s, x) => s + x.costoNuevo, 0);
+  const costoTotalDiaNuevo = rutaCosto.reduce((s, x) => s + x.costoContado, 0);
   const entregadosTotal = rutas.reduce((s, r) => s + (r.entregados || 0), 0);
   const costoPorPaqGlobal = entregadosTotal > 0 ? (costoTotalDiaNuevo / entregadosTotal) : 0;
   const sinAsistencia = rutaCosto.filter(x => x.info.missing && !esPermisible(x.r)).length;
@@ -1226,7 +1262,8 @@ function ModuleEnvios() {
                   const costoNuevo = hasFormula && !isNaN(evaluated) ? evaluated : info.baseCost;
                   const descuento = info.baseCost - costoNuevo;
                   const cross = isCrossdock(r);
-                  const divisor = cross ? r.recolecciones : r.entregados;
+                  const dedup = getDedupInfo(r, rutas.indexOf(r));
+                  const divisor = dedup ? dedup.sumPaq : (cross ? r.recolecciones : r.entregados);
                   const cpp = divisor > 0 ? costoNuevo / divisor : null;
                   const crossSinRec = cross && (!r.recolecciones || r.recolecciones === 0);
                   const penInvalid = hasFormula && isNaN(evaluated);
@@ -1265,10 +1302,16 @@ function ModuleEnvios() {
                     <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {info.missing ? (
                         <span style={{ fontSize: 12, color: C.textMuted }}>—</span>
+                      ) : dedup && !dedup.isPrimary ? (
+                        <div title={"Costo compartido con la primera ruta del operador (×" + dedup.groupSize + " hoy)"} style={{ fontSize: 11, color: C.textMuted, fontStyle: "italic", lineHeight: 1.2 }}>
+                          Compartido
+                          <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>×{dedup.groupSize} hoy</div>
+                        </div>
                       ) : (
                         <div style={{ fontSize: 12, fontWeight: 800, color: descuento > 0 ? C.accent : C.text, lineHeight: 1.2 }}>
                           ${costoNuevo.toLocaleString()}
                           {descuento !== 0 && <div style={{ fontSize: 9, fontWeight: 600, color: descuento > 0 ? C.red : C.green }}>{descuento > 0 ? "−" : "+"}${Math.abs(descuento).toLocaleString()}</div>}
+                          {dedup && dedup.isPrimary && <div style={{ fontSize: 9, fontWeight: 600, color: "#7C3AED" }}>×{dedup.groupSize} rutas</div>}
                         </div>
                       )}
                     </td>
@@ -1285,7 +1328,9 @@ function ModuleEnvios() {
                       ) : cpp !== null ? (
                         <div style={{ fontSize: 12, fontWeight: 800, color: C.accent, lineHeight: 1.2 }}>
                           ${cpp.toFixed(2)}
-                          <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>/{cross ? "recol" : "entr"}</div>
+                          <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>
+                            {dedup ? "/Σ " + dedup.sumPaq + " paq" : "/" + (cross ? "recol" : "entr")}
+                          </div>
                         </div>
                       ) : (
                         <span style={{ fontSize: 12, color: C.textMuted }}>—</span>
