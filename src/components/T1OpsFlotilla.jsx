@@ -4119,7 +4119,7 @@ function ModuleAsignaciones() {
           })()}
 
           {/* Selector de sesión de ruteo */}
-          <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden", marginBottom:20 }}>
+          <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, marginBottom:20, position:"relative", zIndex:20 }}>
             <div style={{ padding:"13px 18px", borderBottom:"1px solid "+C.border, fontSize:13, fontWeight:700, color:C.text }}>Seleccionar sesión de ruteo</div>
             {historico.length === 0 ? (
               <div style={{ padding:32, textAlign:"center", color:C.textMuted, fontSize:13 }}>No hay sesiones de ruteo guardadas. Crea una en el módulo Ruteo/Clusters.</div>
