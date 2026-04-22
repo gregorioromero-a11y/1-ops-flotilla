@@ -581,6 +581,27 @@ function ModuleEnvios() {
   const [asistencia, setAsistencia] = useState([]);
   const [carriers, setCarriers] = useState([]);
   const [confirmModal, setConfirmModal] = useState(null);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualMsg, setManualMsg] = useState("");
+  const blankManual = () => ({
+    fecha: ayerStr,
+    tipoRuta: "Última milla",
+    carrier: "",
+    operador: "",
+    tipoUnidad: "",
+    costoUnidad: "",
+    total: 0,
+    entregados: 0,
+    intentados: 0,
+    noVisitados: 0,
+    recolecciones: 0,
+    placa: "",
+    correo: "",
+    economico: "",
+    almacen: "T1 ENVIOS",
+  });
+  const [manualForm, setManualForm] = useState(blankManual());
 
   // Load rutas and costos when date changes
   useEffect(() => { loadRutas(); loadCostos(); loadAsistenciaCarriers(); }, [fechaDesde, fechaHasta]);
@@ -880,6 +901,99 @@ function ModuleEnvios() {
     });
   };
 
+  // Operadores únicos por carrier basados en historial de asistencia.
+  // Se usa para sugerir nombres ya registrados al capturar una ruta manual.
+  const operadoresPorCarrier = (() => {
+    const map = {};
+    asistencia.forEach(a => {
+      if (!a.proveedor || !a.nombre_operador) return;
+      if (!map[a.proveedor]) map[a.proveedor] = new Map();
+      const key = norm(a.nombre_operador);
+      if (!map[a.proveedor].has(key)) {
+        map[a.proveedor].set(key, {
+          nombre: a.nombre_operador,
+          tipo_unidad: a.tipo_unidad,
+          placa: a.placa || "",
+          correo: a.correo || "",
+        });
+      }
+    });
+    return map;
+  })();
+
+  // Costo default para (proveedor, tipo_unidad) desde carriers
+  const defaultCostoFor = (proveedor, tipo) => {
+    const c = carriers.find(x => x.proveedor === proveedor && x.tipo_unidad === tipo);
+    return c ? (parseFloat(c.costo_unidad) || 0) : 0;
+  };
+
+  const saveManualRuta = async () => {
+    const f = manualForm;
+    if (!f.fecha || !f.carrier || !f.operador) {
+      setManualMsg("⚠ Faltan campos requeridos: fecha, transportista y operador.");
+      return;
+    }
+    const total = (parseInt(f.entregados) || 0) + (parseInt(f.intentados) || 0) + (parseInt(f.noVisitados) || 0);
+    const entregados = parseInt(f.entregados) || 0;
+    const pct = total > 0 ? Math.round((entregados / total) * 1000) / 10 : 0;
+    setManualSaving(true);
+    setManualMsg("");
+    try {
+      // 1) Insertar ruta
+      const insertRow = {
+        id_ruta: "MAN-" + Date.now(),
+        carrier: f.carrier,
+        operador: f.operador,
+        correo_operador: f.correo || "",
+        placa: f.placa || "",
+        almacen: f.almacen || "T1 ENVIOS",
+        economico: f.economico || "",
+        status: "Completada",
+        total,
+        entregados,
+        recolecciones: parseInt(f.recolecciones) || 0,
+        pct_entrega: pct,
+        intentados: parseInt(f.intentados) || 0,
+        no_visitados: parseInt(f.noVisitados) || 0,
+        fecha_salida: f.fecha + "T08:00:00",
+        intercambios: 0,
+        tipo_ruta: f.tipoRuta,
+        km_estimados: "—",
+        km_recorridos: "—",
+        tiempo_estimado: "—",
+        tiempo_real: "—",
+        fecha_registro: f.fecha,
+      };
+      const { error: e1 } = await supabase.from("rutas").insert([insertRow]);
+      if (e1) throw e1;
+
+      // 2) Asegurar registro en asistencia (mismo día + operador) para que
+      //    getCostoInfo encuentre el match y calcule el costo real.
+      const fechaIso = f.fecha;
+      const yaExiste = asistencia.some(a => (a.fecha || "").substring(0, 10) === fechaIso && norm(a.nombre_operador) === norm(f.operador) && a.proveedor === f.carrier);
+      if (!yaExiste && f.tipoUnidad) {
+        const { error: e2 } = await supabase.from("asistencia").insert([{
+          fecha: fechaIso,
+          nombre_operador: f.operador,
+          proveedor: f.carrier,
+          tipo_unidad: f.tipoUnidad,
+          placa: f.placa || null,
+          correo: f.correo || null,
+          tipo_operacion: f.tipoRuta,
+        }]);
+        if (e2) console.warn("No se pudo registrar asistencia automática:", e2.message);
+      }
+
+      setManualMsg(`✓ Ruta capturada (${entregados} entregados de ${total}).`);
+      setManualForm(blankManual());
+      await Promise.all([loadRutas(), loadAsistenciaCarriers()]);
+      setTimeout(() => { setManualMsg(""); setManualOpen(false); }, 1500);
+    } catch (err) {
+      setManualMsg("Error al guardar: " + (err?.message || err));
+    }
+    setManualSaving(false);
+  };
+
   const getRisk = (r) => {
     if (r.pctEntrega < 50) return "high";
     if (r.pctEntrega < 80 || r.noVisitados > r.total * 0.3) return "medium";
@@ -1089,6 +1203,12 @@ function ModuleEnvios() {
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Vista de rutas operativas · Carga masiva desde Excel</p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button onClick={() => { setManualForm(blankManual()); setManualMsg(""); setManualOpen(true); }} style={{
+            padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight,
+            color: C.accent, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+          }}>
+            <IC.Plus /> Captura manual
+          </button>
           <button onClick={() => setShowUpload(!showUpload)} style={{
             padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showUpload ? C.textMuted : C.accent,
             color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
@@ -1499,6 +1619,184 @@ function ModuleEnvios() {
           </div>
         )}
       </div>
+
+      {/* Manual route capture modal */}
+      {manualOpen && (() => {
+        const carriersUM = (() => {
+          const seen = new Set();
+          carriers.forEach(c => { if (c.proveedor) seen.add(c.proveedor); });
+          asistencia.forEach(a => { if (a.proveedor) seen.add(a.proveedor); });
+          return [...seen].sort();
+        })();
+        const operadoresLista = manualForm.carrier
+          ? Array.from((operadoresPorCarrier[manualForm.carrier] || new Map()).values()).sort((a, b) => a.nombre.localeCompare(b.nombre))
+          : [];
+        const tiposLista = manualForm.carrier
+          ? [...new Set(carriers.filter(c => c.proveedor === manualForm.carrier && c.tipo_unidad && c.tipo_unidad !== "—").map(c => c.tipo_unidad))]
+          : [];
+        const totalCalc = (parseInt(manualForm.entregados) || 0) + (parseInt(manualForm.intentados) || 0) + (parseInt(manualForm.noVisitados) || 0);
+        const isHalfMile = (manualForm.tipoRuta || "").toLowerCase().includes("half") || (manualForm.tipoRuta || "").toLowerCase().includes("cross");
+        const tiposRuta = ["Última milla", "HalfMile", "PETCO", "PETCO Monterrey", "Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL"];
+        return (
+          <div style={{ position:"fixed", inset:0, backgroundColor:"rgba(12,20,37,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:10000, padding:16 }}
+            onClick={() => !manualSaving && setManualOpen(false)}>
+            <div onClick={e => e.stopPropagation()} style={{ backgroundColor:C.white, borderRadius:14, width:780, maxWidth:"96vw", maxHeight:"92vh", overflow:"auto", boxShadow:"0 16px 56px rgba(0,0,0,0.28)" }}>
+              <div style={{ padding:"18px 24px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div>
+                  <div style={{ fontSize:18, fontWeight:800, color:C.text }}>Captura manual de ruta</div>
+                  <div style={{ fontSize:12, color:C.textMuted, marginTop:2 }}>Registra una ruta sin necesidad de cargar el Excel completo</div>
+                </div>
+                <button onClick={() => !manualSaving && setManualOpen(false)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:22, color:C.textMuted, padding:4 }}>×</button>
+              </div>
+              <div style={{ padding:24, display:"grid", gridTemplateColumns:"repeat(2, 1fr)", gap:16 }}>
+                {/* Fecha */}
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Fecha de despacho *</label>
+                  <input type="date" value={manualForm.fecha}
+                    onChange={e => setManualForm(f => ({ ...f, fecha: e.target.value }))}
+                    style={{ width:"100%", padding:"9px 11px", borderRadius:7, border:"1px solid "+C.border, fontSize:13, fontWeight:600, boxSizing:"border-box" }} />
+                </div>
+                {/* Tipo de ruta */}
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Tipo de ruta *</label>
+                  <select value={manualForm.tipoRuta}
+                    onChange={e => setManualForm(f => ({ ...f, tipoRuta: e.target.value }))}
+                    style={{ width:"100%", padding:"9px 11px", borderRadius:7, border:"1px solid "+C.border, fontSize:13, fontWeight:600, boxSizing:"border-box", backgroundColor:C.white }}>
+                    {tiposRuta.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                {/* Transportista */}
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Transportista *</label>
+                  <select value={manualForm.carrier}
+                    onChange={e => {
+                      const carrier = e.target.value;
+                      setManualForm(f => ({ ...f, carrier, operador:"", tipoUnidad:"", costoUnidad:"", placa:"", correo:"" }));
+                    }}
+                    style={{ width:"100%", padding:"9px 11px", borderRadius:7, border:"1px solid "+(manualForm.carrier?C.accent:C.border), fontSize:13, fontWeight:600, boxSizing:"border-box", backgroundColor:C.white }}>
+                    <option value="">— Selecciona transportista —</option>
+                    {carriersUM.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                {/* Operador */}
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>
+                    Operador * <span style={{ fontWeight:500, color:C.textMuted, textTransform:"none" }}>({operadoresLista.length} registrados)</span>
+                  </label>
+                  <select value={manualForm.operador} disabled={!manualForm.carrier}
+                    onChange={e => {
+                      const sel = operadoresLista.find(o => o.nombre === e.target.value);
+                      const tipoUnidad = sel?.tipo_unidad || manualForm.tipoUnidad || (tiposLista[0] || "");
+                      const costo = defaultCostoFor(manualForm.carrier, tipoUnidad);
+                      setManualForm(f => ({
+                        ...f,
+                        operador: e.target.value,
+                        tipoUnidad,
+                        costoUnidad: costo ? String(costo) : f.costoUnidad,
+                        placa: sel?.placa || f.placa,
+                        correo: sel?.correo || f.correo,
+                      }));
+                    }}
+                    style={{ width:"100%", padding:"9px 11px", borderRadius:7, border:"1px solid "+(manualForm.operador?C.accent:C.border), fontSize:13, fontWeight:600, boxSizing:"border-box", backgroundColor:manualForm.carrier?C.white:C.bg, cursor:manualForm.carrier?"pointer":"not-allowed" }}>
+                    <option value="">{manualForm.carrier ? "— Selecciona operador —" : "Primero elige transportista"}</option>
+                    {operadoresLista.map(o => <option key={o.nombre} value={o.nombre}>{o.nombre}{o.tipo_unidad ? ` · ${o.tipo_unidad}` : ""}</option>)}
+                  </select>
+                </div>
+                {/* Tipo de unidad */}
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Tipo de unidad</label>
+                  <select value={manualForm.tipoUnidad} disabled={!manualForm.carrier}
+                    onChange={e => {
+                      const t = e.target.value;
+                      const costo = defaultCostoFor(manualForm.carrier, t);
+                      setManualForm(f => ({ ...f, tipoUnidad: t, costoUnidad: costo ? String(costo) : f.costoUnidad }));
+                    }}
+                    style={{ width:"100%", padding:"9px 11px", borderRadius:7, border:"1px solid "+C.border, fontSize:13, fontWeight:600, boxSizing:"border-box", backgroundColor:manualForm.carrier?C.white:C.bg }}>
+                    <option value="">— Sin especificar —</option>
+                    {tiposLista.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                {/* Costo */}
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>
+                    Costo / unidad <span style={{ fontWeight:500, color:C.textMuted, textTransform:"none" }}>(default desde catálogo)</span>
+                  </label>
+                  <input type="number" min="0" value={manualForm.costoUnidad}
+                    onChange={e => setManualForm(f => ({ ...f, costoUnidad: e.target.value }))}
+                    placeholder="0"
+                    style={{ width:"100%", padding:"9px 11px", borderRadius:7, border:"1px solid "+C.border, fontSize:13, fontWeight:700, color:C.green, boxSizing:"border-box" }} />
+                </div>
+                {/* Entregados / Intentados / No visitados */}
+                <div style={{ gridColumn:"1 / -1", display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:10, padding:"14px 16px", backgroundColor:C.bg, borderRadius:10, border:"1px solid "+C.border }}>
+                  <div>
+                    <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.green, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Entregados</label>
+                    <input type="number" min="0" value={manualForm.entregados}
+                      onChange={e => setManualForm(f => ({ ...f, entregados: e.target.value }))}
+                      style={{ width:"100%", padding:"8px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:14, fontWeight:700, boxSizing:"border-box", textAlign:"center" }} />
+                  </div>
+                  <div>
+                    <label style={{ display:"block", fontSize:11, fontWeight:700, color:"#CA8A04", marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Intentados</label>
+                    <input type="number" min="0" value={manualForm.intentados}
+                      onChange={e => setManualForm(f => ({ ...f, intentados: e.target.value }))}
+                      style={{ width:"100%", padding:"8px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:14, fontWeight:700, boxSizing:"border-box", textAlign:"center" }} />
+                  </div>
+                  <div>
+                    <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.red, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>No visitados</label>
+                    <input type="number" min="0" value={manualForm.noVisitados}
+                      onChange={e => setManualForm(f => ({ ...f, noVisitados: e.target.value }))}
+                      style={{ width:"100%", padding:"8px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:14, fontWeight:700, boxSizing:"border-box", textAlign:"center" }} />
+                  </div>
+                  <div>
+                    <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.text, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Total (auto)</label>
+                    <div style={{ width:"100%", padding:"8px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:16, fontWeight:800, boxSizing:"border-box", textAlign:"center", backgroundColor:C.white, color:C.text }}>{totalCalc}</div>
+                  </div>
+                </div>
+                {/* HalfMile recolecciones */}
+                {isHalfMile && (
+                  <div style={{ gridColumn:"1 / -1", padding:"10px 14px", backgroundColor:C.blueBg, borderRadius:8, border:"1px solid "+C.blue, fontSize:12, color:C.text }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                      <span style={{ fontWeight:700, color:C.blue }}>HalfMile / Crossdock</span>
+                      <span style={{ color:C.textMuted }}>El costo/paq se calcula con los <b>entregados</b> (no se requieren recolecciones).</span>
+                    </div>
+                    <div style={{ marginTop:8 }}>
+                      <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:4, textTransform:"uppercase" }}>Recolecciones (opcional)</label>
+                      <input type="number" min="0" value={manualForm.recolecciones}
+                        onChange={e => setManualForm(f => ({ ...f, recolecciones: e.target.value }))}
+                        style={{ width:160, padding:"7px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:13, fontWeight:700, boxSizing:"border-box", textAlign:"center" }} />
+                    </div>
+                  </div>
+                )}
+                {/* Datos extra del operador (auto-llenos pero editables) */}
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Placa</label>
+                  <input type="text" value={manualForm.placa}
+                    onChange={e => setManualForm(f => ({ ...f, placa: e.target.value }))}
+                    style={{ width:"100%", padding:"9px 11px", borderRadius:7, border:"1px solid "+C.border, fontSize:13, boxSizing:"border-box" }} />
+                </div>
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Correo operador</label>
+                  <input type="email" value={manualForm.correo}
+                    onChange={e => setManualForm(f => ({ ...f, correo: e.target.value }))}
+                    style={{ width:"100%", padding:"9px 11px", borderRadius:7, border:"1px solid "+C.border, fontSize:13, boxSizing:"border-box" }} />
+                </div>
+              </div>
+              <div style={{ padding:"16px 24px", borderTop:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+                <div style={{ fontSize:12, fontWeight:600, color: manualMsg.startsWith("✓") ? C.green : manualMsg.startsWith("⚠") ? "#CA8A04" : C.red, minHeight:18 }}>{manualMsg}</div>
+                <div style={{ display:"flex", gap:10 }}>
+                  <button onClick={() => !manualSaving && setManualOpen(false)} disabled={manualSaving}
+                    style={{ padding:"9px 20px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, color:C.text, fontSize:13, fontWeight:600, cursor:manualSaving?"not-allowed":"pointer" }}>
+                    Cancelar
+                  </button>
+                  <button onClick={saveManualRuta} disabled={manualSaving || !manualForm.carrier || !manualForm.operador || totalCalc === 0}
+                    style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:(manualSaving||!manualForm.carrier||!manualForm.operador||totalCalc===0)?C.textMuted:C.accent, color:"white", fontSize:13, fontWeight:700, cursor:(manualSaving||!manualForm.carrier||!manualForm.operador||totalCalc===0)?"not-allowed":"pointer" }}>
+                    {manualSaving ? "Guardando..." : "Guardar ruta"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Confirm modal — replaces window.confirm() which can be permanently disabled by the browser */}
       {confirmModal && (
