@@ -587,6 +587,7 @@ function ModuleEnvios() {
   const [prefactOpen, setPrefactOpen] = useState(false);
   const [prefactProveedor, setPrefactProveedor] = useState("");
   const [prefactIVA, setPrefactIVA] = useState(true);
+  const [prefactTipos, setPrefactTipos] = useState([]);
   const blankManual = () => ({
     fecha: ayerStr,
     tipoRuta: "Última milla",
@@ -1007,12 +1008,26 @@ function ModuleEnvios() {
     return [...set].sort();
   })();
 
-  const generatePrefactura = (proveedor, conIVA) => {
+  // Tipos de unidad disponibles para un proveedor en el periodo seleccionado
+  const tiposParaProveedor = (proveedor) => {
+    if (!proveedor) return [];
+    const set = new Set();
+    asistencia.forEach(a => {
+      const f = (a.fecha || "").substring(0, 10);
+      if (f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor && a.tipo_unidad) set.add(a.tipo_unidad);
+    });
+    return [...set].sort();
+  };
+
+  const generatePrefactura = (proveedor, conIVA, tiposFiltro) => {
     if (!proveedor) return;
-    // 1) Filtrar asistencia del periodo + proveedor
+    const tiposPermitidos = (tiposFiltro && tiposFiltro.length > 0) ? new Set(tiposFiltro) : null;
+    // 1) Filtrar asistencia del periodo + proveedor (+ tipos seleccionados)
     const filtrada = asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
-      return f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor;
+      if (!(f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor)) return false;
+      if (tiposPermitidos && !tiposPermitidos.has(a.tipo_unidad)) return false;
+      return true;
     });
     // 2) Costo por tipo_unidad desde catálogo carriers
     const costoPorTipo = {};
@@ -1039,14 +1054,15 @@ function ModuleEnvios() {
       if (conteos[f] && a.tipo_unidad) conteos[f][a.tipo_unidad] = (conteos[f][a.tipo_unidad] || 0) + 1;
     });
 
-    // 5) Penalizaciones por fecha (sumadas desde rutas del proveedor en ese día)
+    // 5) Penalizaciones por fecha (sumadas desde rutas del proveedor en ese día,
+    //    filtradas por los tipos seleccionados si aplica)
     const penalPorFecha = {};
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
-      // Identifica proveedor real vía costo info
       const info = getCostoInfo(r);
       if (info.proveedor !== proveedor) return;
+      if (tiposPermitidos && !tiposPermitidos.has(info.tipo_unidad)) return;
       const { baseCost, costoNuevo } = getCostoReal(r);
       const desc = baseCost - costoNuevo;
       if (desc > 0) penalPorFecha[f] = (penalPorFecha[f] || 0) + desc;
@@ -1413,7 +1429,12 @@ function ModuleEnvios() {
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Vista de rutas operativas · Carga masiva desde Excel</p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <button onClick={() => { setPrefactProveedor(proveedoresEnPeriodo[0] || ""); setPrefactOpen(true); }} style={{
+          <button onClick={() => {
+            const p = proveedoresEnPeriodo[0] || "";
+            setPrefactProveedor(p);
+            setPrefactTipos(tiposParaProveedor(p));
+            setPrefactOpen(true);
+          }} style={{
             padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.green, backgroundColor: C.greenBg,
             color: C.green, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
           }}>
@@ -2030,7 +2051,11 @@ function ModuleEnvios() {
             ) : (
               <>
                 <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:6, textTransform:"uppercase", letterSpacing:"0.05em" }}>Proveedor</label>
-                <select value={prefactProveedor} onChange={e => setPrefactProveedor(e.target.value)}
+                <select value={prefactProveedor} onChange={e => {
+                  const p = e.target.value;
+                  setPrefactProveedor(p);
+                  setPrefactTipos(tiposParaProveedor(p));
+                }}
                   style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+C.accent, fontSize:14, fontWeight:700, color:C.text, backgroundColor:C.white, marginBottom:16, boxSizing:"border-box" }}>
                   {proveedoresEnPeriodo.map(p => {
                     const dias = new Set(asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && a.proveedor === p; }).map(a => (a.fecha||"").substring(0,10))).size;
@@ -2038,6 +2063,40 @@ function ModuleEnvios() {
                     return <option key={p} value={p}>{p} — {ops} asistencias en {dias} días</option>;
                   })}
                 </select>
+                {(() => {
+                  const tiposDisp = tiposParaProveedor(prefactProveedor);
+                  if (tiposDisp.length === 0) return null;
+                  const todosSeleccionados = tiposDisp.every(t => prefactTipos.includes(t));
+                  return (
+                    <div style={{ marginBottom:16 }}>
+                      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                        <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em" }}>
+                          Tipos de unidad <span style={{ fontWeight:500, textTransform:"none" }}>({prefactTipos.length}/{tiposDisp.length})</span>
+                        </label>
+                        <button type="button"
+                          onClick={() => setPrefactTipos(todosSeleccionados ? [] : tiposDisp)}
+                          style={{ background:"none", border:"none", cursor:"pointer", padding:0, fontSize:11, fontWeight:700, color:C.accent, textDecoration:"underline" }}>
+                          {todosSeleccionados ? "Quitar todos" : "Seleccionar todos"}
+                        </button>
+                      </div>
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(140px, 1fr))", gap:6, padding:10, backgroundColor:C.bg, borderRadius:8, border:"1px solid "+C.border, maxHeight:180, overflowY:"auto" }}>
+                        {tiposDisp.map(t => {
+                          const sel = prefactTipos.includes(t);
+                          const cuenta = asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && a.proveedor === prefactProveedor && a.tipo_unidad === t; }).length;
+                          return (
+                            <label key={t} style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 8px", borderRadius:6, backgroundColor:sel?C.accentLight:C.white, border:"1px solid "+(sel?C.accent:C.border), cursor:"pointer", fontSize:12 }}>
+                              <input type="checkbox" checked={sel}
+                                onChange={() => setPrefactTipos(prev => sel ? prev.filter(x => x !== t) : [...prev, t])}
+                                style={{ width:14, height:14, cursor:"pointer" }} />
+                              <span style={{ fontWeight:700, color:sel?C.accent:C.text }}>{t}</span>
+                              <span style={{ marginLeft:"auto", fontSize:10, color:C.textMuted, fontWeight:600 }}>{cuenta}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
                 <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:600, color:C.text, marginBottom:20, cursor:"pointer" }}>
                   <input type="checkbox" checked={prefactIVA} onChange={e => setPrefactIVA(e.target.checked)} style={{ width:16, height:16, cursor:"pointer" }} />
                   Incluir IVA (16%)
@@ -2049,9 +2108,9 @@ function ModuleEnvios() {
                 style={{ padding:"9px 20px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, fontSize:13, fontWeight:600, cursor:"pointer", color:C.text }}>
                 Cancelar
               </button>
-              <button onClick={() => { generatePrefactura(prefactProveedor, prefactIVA); setPrefactOpen(false); }}
-                disabled={!prefactProveedor || proveedoresEnPeriodo.length === 0}
-                style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:(!prefactProveedor||proveedoresEnPeriodo.length===0)?C.textMuted:C.green, color:"white", fontSize:13, fontWeight:700, cursor:(!prefactProveedor||proveedoresEnPeriodo.length===0)?"not-allowed":"pointer" }}>
+              <button onClick={() => { generatePrefactura(prefactProveedor, prefactIVA, prefactTipos); setPrefactOpen(false); }}
+                disabled={!prefactProveedor || proveedoresEnPeriodo.length === 0 || prefactTipos.length === 0}
+                style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:(!prefactProveedor||proveedoresEnPeriodo.length===0||prefactTipos.length===0)?C.textMuted:C.green, color:"white", fontSize:13, fontWeight:700, cursor:(!prefactProveedor||proveedoresEnPeriodo.length===0||prefactTipos.length===0)?"not-allowed":"pointer" }}>
                 Generar PDF
               </button>
             </div>
