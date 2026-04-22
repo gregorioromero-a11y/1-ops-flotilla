@@ -3668,6 +3668,8 @@ function ModuleAsignaciones() {
   const [loadingSession, setLoadingSession] = useState(false);
   const [asignacion, setAsignacion] = useState({});
   const [expandedRuta, setExpandedRuta] = useState(null);
+  const [sortBy, setSortBy] = useState(null); // "paquetes" | "costoDia" | "costoPaq"
+  const [sortDir, setSortDir] = useState("desc"); // "desc" | "asc"
 
   const COSTO_IDEAL = 40;
   const COSTO_MAX = 45;
@@ -4114,13 +4116,51 @@ function ModuleAsignaciones() {
                   <table style={{ width:"100%", borderCollapse:"collapse" }}>
                     <thead>
                       <tr style={{ backgroundColor:C.bg }}>
-                        {["","Ruta","Paquetes","Proveedor asignado","Tipo","Unidades","Costo/Día","Costo/Paq","Estado"].map(h => (
-                          <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>{h}</th>
-                        ))}
+                        {(() => {
+                          const toggle = key => {
+                            if (sortBy !== key) { setSortBy(key); setSortDir("desc"); }
+                            else if (sortDir === "desc") setSortDir("asc");
+                            else { setSortBy(null); setSortDir("desc"); }
+                          };
+                          const arrow = key => sortBy !== key ? <span style={{ color:C.border, marginLeft:4 }}>↕</span> : <span style={{ color:C.accent, marginLeft:4, fontWeight:800 }}>{sortDir === "desc" ? "↓" : "↑"}</span>;
+                          const sortable = (label, key) => (
+                            <th key={label} onClick={() => toggle(key)} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:sortBy===key?C.accent:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap", cursor:"pointer", userSelect:"none" }}>
+                              {label}{arrow(key)}
+                            </th>
+                          );
+                          const plain = label => (
+                            <th key={label} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>{label}</th>
+                          );
+                          return [
+                            plain(""),
+                            plain("Ruta"),
+                            sortable("Paquetes", "paquetes"),
+                            plain("Proveedor asignado"),
+                            plain("Tipo"),
+                            plain("Unidades"),
+                            sortable("Costo/Día", "costoDia"),
+                            sortable("Costo/Paq", "costoPaq"),
+                            plain("Estado"),
+                          ];
+                        })()}
                       </tr>
                     </thead>
                     <tbody>
-                      {rutas.map((ruta, idx) => {
+                      {(() => {
+                        if (!sortBy) return rutas;
+                        const compute = ruta => {
+                          if (sortBy === "paquetes") return ruta.paquetes;
+                          const a = asignacion[ruta.nombre];
+                          if (!a || a.noAsignar) return sortDir === "desc" ? -Infinity : Infinity;
+                          const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+                          const costoTotal = (parseFloat(car?.costo_unidad) || 0) * (a.unidades || 1);
+                          if (sortBy === "costoDia") return costoTotal;
+                          if (sortBy === "costoPaq") return ruta.paquetes > 0 ? costoTotal / ruta.paquetes : (sortDir === "desc" ? -Infinity : Infinity);
+                          return 0;
+                        };
+                        const sign = sortDir === "desc" ? -1 : 1;
+                        return [...rutas].sort((x, y) => sign * (compute(x) - compute(y)));
+                      })().map((ruta, idx) => {
                         const a = asignacion[ruta.nombre];
                         const noAsignar = a && a.noAsignar;
                         const opciones = getRecomendacion(ruta.paquetes);
