@@ -3698,6 +3698,14 @@ function ModuleAsignaciones() {
   const [sesionDropdownOpen, setSesionDropdownOpen] = useState(false);
   const sesionDropdownRef = useRef(null);
   const sesionListRef = useRef(null);
+  const [capacidad, setCapacidad] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("t1_capacidad_v1") || "{}"); } catch { return {}; }
+  });
+  const [capacidadOpen, setCapacidadOpen] = useState(false);
+  const persistCapacidad = (next) => {
+    setCapacidad(next);
+    try { localStorage.setItem("t1_capacidad_v1", JSON.stringify(next)); } catch {}
+  };
 
   // Close on outside click
   useEffect(() => {
@@ -3916,6 +3924,48 @@ function ModuleAsignaciones() {
 
   const tipoColors = { Moto:{bg:"#FEF3C7",c:"#D97706"}, Sedan:{bg:"#DBEAFE",c:"#2563EB"}, SmallVan:{bg:"#EDE9FE",c:"#7C3AED"}, Van:{bg:"#EDE9FE",c:"#7C3AED"}, "1.5":{bg:"#FEF9C3",c:"#CA8A04"}, "3.5":{bg:"#FFEDD5",c:"#C2410C"}, Rabon:{bg:"#FFEDD5",c:"#EA580C"}, Torton:{bg:"#FEE2E2",c:"#DC2626"}, Tracto:{bg:"#F1F5F9",c:"#475569"} };
 
+  // Auto-asignación respetando capacidad disponible.
+  // Estrategia: rutas más pequeñas primero — así reciben los proveedores más baratos
+  // (en rutas chicas su costo/paq pega más). Las rutas grandes pueden absorber
+  // proveedores más caros porque diluyen el costo por paquete.
+  const sugerirAsignacion = () => {
+    if (!rutas.length || !carriers.length) return;
+    const cap = { ...capacidad };
+    const sorted = [...rutas].sort((a, b) => a.paquetes - b.paquetes);
+    const next = {};
+    for (const ruta of sorted) {
+      const opciones = carriers.map(c => {
+        const costo = parseFloat(c.costo_unidad) || 0;
+        const minP = Math.ceil(costo / COSTO_MAX);
+        const key = c.proveedor + "|" + c.tipo_unidad;
+        const restante = Number(cap[key] || 0);
+        return { proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, costo, key, viable: ruta.paquetes >= minP, disponible: restante > 0 };
+      }).filter(o => o.viable && o.disponible).sort((a, b) => a.costo - b.costo);
+      if (opciones.length > 0) {
+        const sel = opciones[0];
+        next[ruta.nombre] = { proveedor: sel.proveedor, tipo_unidad: sel.tipo_unidad, unidades: 1 };
+        cap[sel.key] = Number(cap[sel.key] || 0) - 1;
+      } else {
+        next[ruta.nombre] = { noAsignar: true };
+      }
+    }
+    setAsignacion(next);
+    setSaveMsg("✓ Sugerencia generada respetando capacidad. Revisa y edita lo que necesites.");
+    setTimeout(() => setSaveMsg(""), 5000);
+  };
+
+  // Capacidad usada actualmente por la asignación vigente
+  const capacidadUsada = (() => {
+    const usada = {};
+    rutas.forEach(r => {
+      const a = asignacion[r.nombre];
+      if (!a || a.noAsignar) return;
+      const key = a.proveedor + "|" + a.tipo_unidad;
+      usada[key] = (usada[key] || 0) + (a.unidades || 1);
+    });
+    return usada;
+  })();
+
   const exportarPDF = () => {
     if (!sesionId || rutas.length === 0) return;
     const fechaStr = new Date().toLocaleString("es-MX", { dateStyle: "long", timeStyle: "short" });
@@ -4130,6 +4180,95 @@ function ModuleAsignaciones() {
                   </table>
                 </div>
                 {carriers.length === 0 && <div style={{ padding:32, textAlign:"center", color:C.textMuted, fontSize:13 }}>No hay carriers con operación "Última milla" configurados.</div>}
+              </div>
+            );
+          })()}
+
+          {/* Capacidad disponible por proveedor */}
+          {carriers.length > 0 && (() => {
+            const provs = [...new Set(carriers.map(c => c.proveedor))].sort();
+            const tipos = [...new Set(carriers.map(c => c.tipo_unidad))];
+            const tipoOrder = ["Moto","Sedan","SmallVan","Van","1.5","3.5","Rabon","Torton","Tracto"];
+            tipos.sort((a, b) => (tipoOrder.indexOf(a) === -1 ? 99 : tipoOrder.indexOf(a)) - (tipoOrder.indexOf(b) === -1 ? 99 : tipoOrder.indexOf(b)));
+            const has = (p, t) => carriers.some(x => x.proveedor === p && x.tipo_unidad === t);
+            const totalDisp = Object.values(capacidad).reduce((s, v) => s + (Number(v) || 0), 0);
+            const totalUsada = Object.values(capacidadUsada).reduce((s, v) => s + v, 0);
+            return (
+              <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden", marginBottom:20 }}>
+                <div style={{ padding:"13px 18px", borderBottom: capacidadOpen ? "1px solid "+C.border : "none", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <button onClick={() => setCapacidadOpen(o => !o)} type="button" style={{ background:"none", border:"none", cursor:"pointer", padding:0, fontSize:13, fontWeight:700, color:C.text, display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ display:"inline-block", transform:capacidadOpen?"rotate(90deg)":"none", transition:"transform 0.15s", color:C.textMuted }}>▶</span>
+                      Capacidad disponible por proveedor
+                    </button>
+                    <span style={{ fontSize:11, color:C.textMuted }}>
+                      Total disponible: <b style={{ color:C.text }}>{totalDisp}</b>
+                      {rutas.length > 0 && <> · usadas: <b style={{ color:totalUsada>totalDisp?C.red:C.green }}>{totalUsada}</b></>}
+                    </span>
+                  </div>
+                  <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                    {sesionId && rutas.length > 0 && (
+                      <button onClick={sugerirAsignacion} disabled={totalDisp === 0}
+                        title={totalDisp === 0 ? "Define al menos una unidad disponible" : "Asigna automáticamente las rutas a los proveedores más baratos respetando la capacidad"}
+                        style={{ padding:"7px 14px", borderRadius:8, border:"1px solid "+C.accent, backgroundColor:totalDisp===0?C.bg:C.accent, color:totalDisp===0?C.textMuted:"white", fontSize:12, fontWeight:700, cursor:totalDisp===0?"not-allowed":"pointer" }}>
+                        ⚡ Sugerir asignación óptima
+                      </button>
+                    )}
+                    <button onClick={() => persistCapacidad({})} disabled={totalDisp === 0}
+                      style={{ padding:"7px 12px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, color:totalDisp===0?C.textMuted:C.text, fontSize:11, fontWeight:600, cursor:totalDisp===0?"not-allowed":"pointer" }}>
+                      Limpiar
+                    </button>
+                  </div>
+                </div>
+                {capacidadOpen && (
+                  <div style={{ overflowX:"auto" }}>
+                    <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                      <thead>
+                        <tr style={{ backgroundColor:C.bg }}>
+                          <th style={{ padding:"10px 16px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", position:"sticky", left:0, backgroundColor:C.bg, zIndex:1 }}>Proveedor</th>
+                          {tipos.map(t => {
+                            const tc = tipoColors[t] || {bg:"#F3F4F6",c:"#7C8495"};
+                            return <th key={t} style={{ padding:"10px 14px", textAlign:"center", fontSize:10, fontWeight:700, minWidth:100 }}>
+                              <span style={{ padding:"3px 10px", borderRadius:5, backgroundColor:tc.bg, color:tc.c, fontWeight:700 }}>{t}</span>
+                            </th>;
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {provs.map(prov => (
+                          <tr key={prov} style={{ borderTop:"1px solid "+C.border }}>
+                            <td style={{ padding:"10px 16px", fontSize:13, fontWeight:700, color:C.text, whiteSpace:"nowrap", position:"sticky", left:0, backgroundColor:C.white, zIndex:1 }}>{prov}</td>
+                            {tipos.map(t => {
+                              if (!has(prov, t)) return <td key={t} style={{ padding:"8px 10px", textAlign:"center", color:C.border, fontSize:12 }}>—</td>;
+                              const key = prov + "|" + t;
+                              const val = capacidad[key] || "";
+                              const usada = capacidadUsada[key] || 0;
+                              const disp = Number(val) || 0;
+                              const exceso = usada > disp && disp > 0;
+                              return (
+                                <td key={t} style={{ padding:"6px 8px", textAlign:"center" }}>
+                                  <input type="number" min="0" value={val}
+                                    onChange={e => {
+                                      const v = e.target.value;
+                                      const next = { ...capacidad };
+                                      if (v === "" || v === "0") delete next[key]; else next[key] = parseInt(v, 10) || 0;
+                                      persistCapacidad(next);
+                                    }}
+                                    style={{ width:64, padding:"6px 4px", borderRadius:6, border:"1px solid "+(exceso?C.red:disp>0?C.accent:C.border), fontSize:14, fontWeight:700, textAlign:"center", boxSizing:"border-box", backgroundColor:disp>0?C.accentLight:C.white, color:disp>0?C.accent:C.textMuted }} />
+                                  {rutas.length > 0 && disp > 0 && (
+                                    <div style={{ fontSize:9, marginTop:3, color:exceso?C.red:usada===disp?C.green:C.textMuted, fontWeight:700 }}>
+                                      uso {usada}/{disp}
+                                    </div>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             );
           })()}
