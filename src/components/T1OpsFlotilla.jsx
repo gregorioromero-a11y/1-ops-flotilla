@@ -3780,7 +3780,12 @@ function ModuleAsignaciones() {
         grouped[r.sesion].puntos += 1;
         grouped[r.sesion].rutas.add(r.cluster);
       });
-      setHistorico(Object.values(grouped).map(g => ({ ...g, rutas: g.rutas.size })).sort((a, b) => b.fecha.localeCompare(a.fecha)));
+      const sorted = Object.values(grouped).map(g => ({ ...g, rutas: g.rutas.size })).sort((a, b) => b.fecha.localeCompare(a.fecha));
+      setHistorico(sorted);
+      // Auto-carga la sesión más reciente para que aparezca pre-seleccionada en azul
+      if (sorted.length > 0 && !sesionId) {
+        loadSesion(sorted[0].sesion);
+      }
     }
     setLoading(false);
   };
