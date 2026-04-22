@@ -3173,7 +3173,10 @@ function ModuleRuteo() {
   const handleFile = async e => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setLoading(true); setMsg(""); setPuntos([]); setAsignaciones([]); setRawRows([]); setFileInfo(null);
+    // Reset sesionId too — without this, the next "Generar rutas" call on the
+    // new file would reuse the old session id and either overwrite the
+    // previous session's data or create duplicates depending on the path.
+    setLoading(true); setMsg(""); setPuntos([]); setAsignaciones([]); setRawRows([]); setFileInfo(null); setSesionId("");
     try {
       let rows = [];
       // Use XLSX for both CSV and Excel for robust parsing
@@ -3211,14 +3214,24 @@ function ModuleRuteo() {
       const assigns = kMeans(pts, k);
       setPuntos(pts);
       setAsignaciones(assigns);
-      const sid = "S" + Date.now();
-      setSesionId(sid);
+      // Reuse the existing sesionId when the loaded points match rawRows
+      // exactly (clicking "Generar" twice on the same file). Without this
+      // every click created an orphan duplicate session in the historico.
+      const reuse = !!sesionId && puntos.length === pts.length && puntos.length > 0;
+      let sid;
+      if (reuse) {
+        sid = sesionId;
+        await supabase.from("ruteo_puntos").delete().eq("sesion", sid);
+      } else {
+        sid = "S" + Date.now();
+        setSesionId(sid);
+      }
       const dbRows = pts.map((p, i) => ({ sesion: sid, indice: i, latitud: p.lat, longitud: p.lng, cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1), datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k)))) }));
       // Chunked insert (500 rows/batch) to avoid payload size issues
       for (let bi = 0; bi < dbRows.length; bi += 500) {
         await supabase.from("ruteo_puntos").insert(dbRows.slice(bi, bi + 500));
       }
-      setMsg(`✓ ${pts.length} puntos clusterizados en ${k} rutas.`);
+      setMsg(`✓ ${pts.length} puntos clusterizados en ${k} rutas${reuse ? " (sesión actualizada)" : ""}.`);
     } catch (err) { setMsg("Error: " + err.message); }
     setLoading(false);
   };
@@ -3670,9 +3683,35 @@ function ModuleAsignaciones() {
   const [expandedRuta, setExpandedRuta] = useState(null);
   const [sortBy, setSortBy] = useState(null); // "paquetes" | "costoDia" | "costoPaq"
   const [sortDir, setSortDir] = useState("desc"); // "desc" | "asc"
+  const [confirmModal, setConfirmModal] = useState(null);
+  const [deletingSesion, setDeletingSesion] = useState(false);
 
   const COSTO_IDEAL = 40;
   const COSTO_MAX = 45;
+
+  const eliminarSesion = (sid) => {
+    const sel = historico.find(h => h.sesion === sid);
+    if (!sel) return;
+    const dateStr = new Date(sel.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+    setConfirmModal({
+      message: `¿Eliminar sesión ${sid.substring(0,10)} (${dateStr}, ${sel.puntos} puntos, ${sel.rutas} rutas)? Se borran sus puntos y asignaciones de Supabase. No se puede deshacer.`,
+      onConfirm: async () => {
+        setDeletingSesion(true);
+        try {
+          const [{ error: e1 }, { error: e2 }] = await Promise.all([
+            supabase.from("ruteo_puntos").delete().eq("sesion", sid),
+            supabase.from("asignaciones_sesion").delete().eq("sesion", sid).then(r => r).catch(e => ({ error: e })),
+          ]);
+          if (e1) throw e1;
+          setHistorico(prev => prev.filter(h => h.sesion !== sid));
+          if (sesionId === sid) { setSesionId(null); setRutas([]); setAsignacion({}); }
+        } catch (err) {
+          alert("Error al eliminar sesión: " + (err?.message || err));
+        }
+        setDeletingSesion(false);
+      },
+    });
+  };
 
   useEffect(() => { loadData(); }, []);
 
@@ -4072,6 +4111,11 @@ function ModuleAsignaciones() {
                       <span style={{ fontWeight:600, color:C.text }}>{dateStr}</span>
                       <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.blueBg, color:C.blue, fontWeight:700 }}>{sel.puntos} puntos</span>
                       <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.purpleBg, color:C.purple, fontWeight:700 }}>{sel.rutas} rutas</span>
+                      <button onClick={() => eliminarSesion(sesionId)} disabled={deletingSesion}
+                        title="Eliminar esta sesión (puntos + asignaciones guardadas) — útil para limpiar duplicados"
+                        style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:6, border:"1px solid "+C.red, backgroundColor:C.redBg, color:C.red, fontSize:11, fontWeight:700, cursor:deletingSesion?"not-allowed":"pointer", opacity:deletingSesion?0.6:1 }}>
+                        <IC.Trash /> Eliminar sesión
+                      </button>
                     </div>
                   );
                 })()}
@@ -4380,6 +4424,21 @@ function ModuleAsignaciones() {
             <div style={{ padding:32, textAlign:"center", color:C.textMuted, fontSize:13 }}>No se encontraron rutas en esta sesión.</div>
           )}
         </>
+      )}
+
+      {/* Confirm modal — for session deletion (window.confirm() can be browser-suppressed) */}
+      {confirmModal && (
+        <div style={{ position:"fixed", inset:0, backgroundColor:"rgba(12,20,37,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:10000 }}
+          onClick={() => setConfirmModal(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ backgroundColor:C.white, borderRadius:12, padding:28, width:480, maxWidth:"90vw", boxShadow:"0 12px 48px rgba(0,0,0,0.25)" }}>
+            <div style={{ fontSize:17, fontWeight:800, color:C.text, marginBottom:10 }}>Confirmar eliminación</div>
+            <div style={{ fontSize:13, color:C.textMuted, marginBottom:22, lineHeight:1.5 }}>{confirmModal.message}</div>
+            <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+              <button onClick={() => setConfirmModal(null)} style={{ padding:"9px 20px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, fontSize:13, fontWeight:600, cursor:"pointer", color:C.text }}>Cancelar</button>
+              <button onClick={async () => { const fn = confirmModal.onConfirm; setConfirmModal(null); try { await fn(); } catch (e) { console.error(e); alert("Error: " + e.message); } }} style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:C.red, color:"white", fontSize:13, fontWeight:700, cursor:"pointer" }}>Eliminar</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
