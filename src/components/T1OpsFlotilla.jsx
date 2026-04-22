@@ -3701,10 +3701,24 @@ function ModuleAsignaciones() {
 
   // When opened, scroll to bottom (most recent session is the last item)
   useEffect(() => {
-    if (sesionDropdownOpen && sesionListRef.current) {
-      sesionListRef.current.scrollTop = sesionListRef.current.scrollHeight;
-    }
-  }, [sesionDropdownOpen]);
+    if (!sesionDropdownOpen) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const el = sesionListRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    });
+    const t = setTimeout(() => {
+      const el = sesionListRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }, 60);
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+      clearTimeout(t);
+    };
+  }, [sesionDropdownOpen, historico.length]);
 
   const COSTO_IDEAL = 40;
   const COSTO_MAX = 45;
