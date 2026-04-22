@@ -4051,25 +4051,30 @@ function ModuleAsignaciones() {
             {historico.length === 0 ? (
               <div style={{ padding:32, textAlign:"center", color:C.textMuted, fontSize:13 }}>No hay sesiones de ruteo guardadas. Crea una en el módulo Ruteo/Clusters.</div>
             ) : (
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(220px,1fr))", gap:12, padding:16 }}>
-                {historico.map(h => {
-                  const isSelected = sesionId === h.sesion;
-                  const dateStr = new Date(h.fecha).toLocaleDateString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+              <div style={{ padding:16, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+                <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em" }}>Sesión:</label>
+                <select
+                  value={sesionId || ""}
+                  onChange={e => { if (e.target.value) loadSesion(e.target.value); }}
+                  style={{ flex:"1 1 420px", maxWidth:600, padding:"10px 12px", borderRadius:8, border:"1px solid "+(sesionId?C.accent:C.border), fontSize:13, fontWeight:600, color:C.text, cursor:"pointer", backgroundColor:sesionId?C.accentLight:C.white }}>
+                  <option value="">— Selecciona una sesión —</option>
+                  {historico.map(h => {
+                    const dateStr = new Date(h.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+                    return <option key={h.sesion} value={h.sesion}>{dateStr} · {h.puntos} puntos · {h.rutas} rutas · {h.sesion.substring(0,10)}</option>;
+                  })}
+                </select>
+                {sesionId && (() => {
+                  const sel = historico.find(h => h.sesion === sesionId);
+                  if (!sel) return null;
+                  const dateStr = new Date(sel.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
                   return (
-                    <button key={h.sesion} onClick={() => loadSesion(h.sesion)} style={{
-                      padding:"14px 16px", borderRadius:10, border:"2px solid "+(isSelected?C.accent:C.border),
-                      backgroundColor:isSelected?C.accentLight:C.white, cursor:"pointer", textAlign:"left",
-                      transition:"all 0.15s"
-                    }}>
-                      <div style={{ fontSize:12, fontWeight:700, color:isSelected?C.accent:C.text, marginBottom:4 }}>{h.sesion.substring(0,10)}</div>
-                      <div style={{ fontSize:11, color:C.textMuted }}>{dateStr}</div>
-                      <div style={{ display:"flex", gap:12, marginTop:8 }}>
-                        <span style={{ fontSize:11, fontWeight:600, color:C.blue }}>{h.puntos} puntos</span>
-                        <span style={{ fontSize:11, fontWeight:600, color:C.purple }}>{h.rutas} rutas</span>
-                      </div>
-                    </button>
+                    <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:11, color:C.textMuted }}>
+                      <span style={{ fontWeight:600, color:C.text }}>{dateStr}</span>
+                      <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.blueBg, color:C.blue, fontWeight:700 }}>{sel.puntos} puntos</span>
+                      <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.purpleBg, color:C.purple, fontWeight:700 }}>{sel.rutas} rutas</span>
+                    </div>
                   );
-                })}
+                })()}
               </div>
             )}
           </div>
