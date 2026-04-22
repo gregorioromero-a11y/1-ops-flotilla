@@ -1053,11 +1053,6 @@ function ModuleEnvios() {
     });
 
     // 6) Renderizar HTML
-    const dayName = isoDate => {
-      const d = new Date(isoDate + "T12:00:00");
-      const names = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
-      return names[d.getDay()];
-    };
     const fmtFecha = isoDate => {
       const [y, m, d] = isoDate.split("-");
       return `${parseInt(d)}-${parseInt(m)}-${y.substring(2)}`;
@@ -1188,8 +1183,8 @@ function ModuleEnvios() {
   </div>
   <div class="footer">
     <div class="easy">¡Enviar nunca fue tan fácil!</div>
-    <div class="contact">Eduardo Neri Gonzalez / eduardo.gonzalez@T1envios.com / Cel 5535668113</div>
-    <div class="brand">Claro Shop.com</div>
+    <div class="contact">Eduardo Neri Gonzalez / eduardo.gonzalez@t1.com / Cel 5535668113</div>
+    <div class="brand">T1.com</div>
     <div class="fiscal">
       <div class="h">RFC</div>
       <div class="h">REGIMEN FISCAL</div>
