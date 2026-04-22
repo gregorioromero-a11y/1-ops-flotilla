@@ -3685,6 +3685,26 @@ function ModuleAsignaciones() {
   const [sortDir, setSortDir] = useState("desc"); // "desc" | "asc"
   const [confirmModal, setConfirmModal] = useState(null);
   const [deletingSesion, setDeletingSesion] = useState(false);
+  const [sesionDropdownOpen, setSesionDropdownOpen] = useState(false);
+  const sesionDropdownRef = useRef(null);
+  const sesionListRef = useRef(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!sesionDropdownOpen) return;
+    const onClick = (e) => {
+      if (sesionDropdownRef.current && !sesionDropdownRef.current.contains(e.target)) setSesionDropdownOpen(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [sesionDropdownOpen]);
+
+  // When opened, scroll to bottom (most recent session is the last item)
+  useEffect(() => {
+    if (sesionDropdownOpen && sesionListRef.current) {
+      sesionListRef.current.scrollTop = sesionListRef.current.scrollHeight;
+    }
+  }, [sesionDropdownOpen]);
 
   const COSTO_IDEAL = 40;
   const COSTO_MAX = 45;
@@ -4092,16 +4112,37 @@ function ModuleAsignaciones() {
             ) : (
               <div style={{ padding:16, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
                 <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em" }}>Sesión:</label>
-                <select
-                  value={sesionId || ""}
-                  onChange={e => { if (e.target.value) loadSesion(e.target.value); }}
-                  style={{ flex:"1 1 420px", maxWidth:600, padding:"10px 12px", borderRadius:8, border:"1px solid "+(sesionId?C.accent:C.border), fontSize:13, fontWeight:600, color:C.text, cursor:"pointer", backgroundColor:sesionId?C.accentLight:C.white }}>
-                  <option value="">— Selecciona una sesión —</option>
-                  {[...historico].reverse().map(h => {
-                    const dateStr = new Date(h.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
-                    return <option key={h.sesion} value={h.sesion}>{dateStr} · {h.puntos} puntos · {h.rutas} rutas · {h.sesion.substring(0,10)}</option>;
-                  })}
-                </select>
+                {/* Custom dropdown — native <select> can't scroll to bottom on open */}
+                <div ref={sesionDropdownRef} style={{ position:"relative", flex:"1 1 420px", maxWidth:600 }}>
+                  <button onClick={() => setSesionDropdownOpen(o => !o)} type="button"
+                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+(sesionId?C.accent:C.border), fontSize:13, fontWeight:600, color:C.text, cursor:"pointer", backgroundColor:sesionId?C.accentLight:C.white, textAlign:"left", display:"flex", justifyContent:"space-between", alignItems:"center", gap:10 }}>
+                    <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {sesionId ? (() => {
+                        const sel = historico.find(h => h.sesion === sesionId);
+                        if (!sel) return sesionId;
+                        const dateStr = new Date(sel.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+                        return `${dateStr} · ${sel.puntos} puntos · ${sel.rutas} rutas · ${sesionId.substring(0,10)}`;
+                      })() : "— Selecciona una sesión —"}
+                    </span>
+                    <span style={{ color:C.textMuted, transform:sesionDropdownOpen?"rotate(180deg)":"none", transition:"transform 0.15s" }}>▾</span>
+                  </button>
+                  {sesionDropdownOpen && (
+                    <div ref={sesionListRef} style={{ position:"absolute", top:"calc(100% + 4px)", left:0, right:0, maxHeight:340, overflowY:"auto", backgroundColor:C.white, border:"1px solid "+C.border, borderRadius:8, boxShadow:"0 8px 24px rgba(0,0,0,0.12)", zIndex:50 }}>
+                      {[...historico].reverse().map(h => {
+                        const dateStr = new Date(h.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+                        const isSel = sesionId === h.sesion;
+                        return (
+                          <button key={h.sesion} onClick={() => { loadSesion(h.sesion); setSesionDropdownOpen(false); }}
+                            style={{ display:"block", width:"100%", padding:"9px 14px", textAlign:"left", border:"none", borderBottom:"1px solid "+C.border, backgroundColor:isSel?C.accentLight:C.white, color:isSel?C.accent:C.text, fontSize:13, fontWeight:isSel?700:500, cursor:"pointer" }}
+                            onMouseEnter={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = "#FAFBFF"; }}
+                            onMouseLeave={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = C.white; }}>
+                            {dateStr} · {h.puntos} puntos · {h.rutas} rutas · {h.sesion.substring(0,10)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
                 {sesionId && (() => {
                   const sel = historico.find(h => h.sesion === sesionId);
                   if (!sel) return null;
