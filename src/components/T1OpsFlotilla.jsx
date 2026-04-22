@@ -2753,6 +2753,7 @@ function ModuleRuteo() {
   const [asignaciones, setAsignaciones] = useState([]);
   const [numClusters, setNumClusters] = useState(5);
   const [sesionId, setSesionId] = useState("");
+  const [sesionNombre, setSesionNombre] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [leafletLoaded, setLeafletLoaded] = useState(false);
@@ -3176,7 +3177,7 @@ function ModuleRuteo() {
     // Reset sesionId too — without this, the next "Generar rutas" call on the
     // new file would reuse the old session id and either overwrite the
     // previous session's data or create duplicates depending on the path.
-    setLoading(true); setMsg(""); setPuntos([]); setAsignaciones([]); setRawRows([]); setFileInfo(null); setSesionId("");
+    setLoading(true); setMsg(""); setPuntos([]); setAsignaciones([]); setRawRows([]); setFileInfo(null); setSesionId(""); setSesionNombre("");
     try {
       let rows = [];
       // Use XLSX for both CSV and Excel for robust parsing
@@ -3226,12 +3227,13 @@ function ModuleRuteo() {
         sid = "S" + Date.now();
         setSesionId(sid);
       }
-      const dbRows = pts.map((p, i) => ({ sesion: sid, indice: i, latitud: p.lat, longitud: p.lng, cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1), datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k)))) }));
+      const nombreTrim = (sesionNombre || "").trim() || null;
+      const dbRows = pts.map((p, i) => ({ sesion: sid, nombre: nombreTrim, indice: i, latitud: p.lat, longitud: p.lng, cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1), datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k)))) }));
       // Chunked insert (500 rows/batch) to avoid payload size issues
       for (let bi = 0; bi < dbRows.length; bi += 500) {
         await supabase.from("ruteo_puntos").insert(dbRows.slice(bi, bi + 500));
       }
-      setMsg(`✓ ${pts.length} puntos clusterizados en ${k} rutas${reuse ? " (sesión actualizada)" : ""}.`);
+      setMsg(`✓ ${pts.length} puntos clusterizados en ${k} rutas${reuse ? " (sesión actualizada)" : ""}${nombreTrim ? ` · "${nombreTrim}"` : ""}.`);
     } catch (err) { setMsg("Error: " + err.message); }
     setLoading(false);
   };
@@ -3245,8 +3247,9 @@ function ModuleRuteo() {
     // Persist to DB: delete old rows and re-insert with new clusters
     if (sesionId) {
       await supabase.from("ruteo_puntos").delete().eq("sesion", sesionId);
+      const nombreTrim = (sesionNombre || "").trim() || null;
       const dbRows = puntos.map((p, i) => ({
-        sesion: sesionId, indice: i, latitud: p.lat, longitud: p.lng,
+        sesion: sesionId, nombre: nombreTrim, indice: i, latitud: p.lat, longitud: p.lng,
         cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1),
         datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k))))
       }));
@@ -3275,13 +3278,14 @@ function ModuleRuteo() {
 
   const loadHistorico = async () => {
     setLoadingHist(true);
-    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("sesion, created_at, cluster").order("created_at", { ascending: false }));
+    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("sesion, created_at, cluster, nombre").order("created_at", { ascending: false }));
     if (data && data.length > 0) {
       const grouped = {};
       data.forEach(r => {
-        if (!grouped[r.sesion]) grouped[r.sesion] = { sesion: r.sesion, fecha: r.created_at, puntos: 0, rutas: new Set() };
+        if (!grouped[r.sesion]) grouped[r.sesion] = { sesion: r.sesion, fecha: r.created_at, nombre: r.nombre || null, puntos: 0, rutas: new Set() };
         grouped[r.sesion].puntos += 1;
         grouped[r.sesion].rutas.add(r.cluster);
+        if (!grouped[r.sesion].nombre && r.nombre) grouped[r.sesion].nombre = r.nombre;
       });
       setHistorico(Object.values(grouped).map(g => ({ ...g, rutas: g.rutas.size })).sort((a, b) => b.fecha.localeCompare(a.fecha)));
     }
@@ -3307,6 +3311,7 @@ function ModuleRuteo() {
       setAsignaciones(assigns);
       setNumClusters(maxCluster);
       setSesionId(sid);
+      setSesionNombre(data[0]?.nombre || "");
       setFileInfo({ count: pts.length, name: "Sesión " + sid.substring(0, 10) });
       setMsg(`✓ Sesión ${sid.substring(0, 10)} cargada — ${pts.length} puntos, ${maxCluster} rutas.`);
       setShowHistorico(false);
@@ -3466,6 +3471,10 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
               <div>
                 <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Número de rutas (k)</label>
                 <input type="number" min="2" value={numClusters} onChange={e => setNumClusters(Math.max(2, parseInt(e.target.value) || 2))} style={{ width: 90, padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 16, fontWeight: 700, boxSizing: "border-box", textAlign: "center" }} />
+              </div>
+              <div style={{ flex: "1 1 240px", minWidth: 200 }}>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Nombre de la sesión (opcional)</label>
+                <input type="text" value={sesionNombre} onChange={e => setSesionNombre(e.target.value)} placeholder="ej: Ruteo CDMX Norte - Lunes" maxLength={80} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
               </div>
               <button onClick={generateRoutes} disabled={loading} style={{ padding: "10px 24px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 14, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, whiteSpace: "nowrap" }}>
                 🗺️ Generar rutas
@@ -3635,7 +3644,7 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "2px solid " + C.border }}>
-                  {["Sesión", "Fecha", "Puntos", "Rutas", "Acciones"].map(h => (
+                  {["Sesión", "Nombre", "Fecha", "Puntos", "Rutas", "Acciones"].map(h => (
                     <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                   ))}
                 </tr>
@@ -3646,6 +3655,7 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                     onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#FAFBFF"}
                     onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
                     <td style={{ padding: "12px 14px", fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{h.sesion.substring(0, 14)}</td>
+                    <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: h.nombre ? C.text : C.textMuted, fontStyle: h.nombre ? "normal" : "italic" }}>{h.nombre || "—"}</td>
                     <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{new Date(h.fecha).toLocaleString("es-MX", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
                     <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700 }}>{h.puntos}</td>
                     <td style={{ padding: "12px 14px" }}>
@@ -3769,16 +3779,17 @@ function ModuleAsignaciones() {
     setLoading(true);
     const [{ data: cData }, rData] = await Promise.all([
       supabase.from("carriers").select("*").order("proveedor"),
-      fetchAllPaginated(() => supabase.from("ruteo_puntos").select("sesion, created_at, cluster").order("created_at", { ascending: false })),
+      fetchAllPaginated(() => supabase.from("ruteo_puntos").select("sesion, created_at, cluster, nombre").order("created_at", { ascending: false })),
     ]);
     const umCarriers = (cData || []).filter(c => c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—" && (c.operacion || "").toLowerCase().includes("ltima"));
     setCarriers(umCarriers);
     if (rData && rData.length > 0) {
       const grouped = {};
       rData.forEach(r => {
-        if (!grouped[r.sesion]) grouped[r.sesion] = { sesion: r.sesion, fecha: r.created_at, puntos: 0, rutas: new Set() };
+        if (!grouped[r.sesion]) grouped[r.sesion] = { sesion: r.sesion, fecha: r.created_at, nombre: r.nombre || null, puntos: 0, rutas: new Set() };
         grouped[r.sesion].puntos += 1;
         grouped[r.sesion].rutas.add(r.cluster);
+        if (!grouped[r.sesion].nombre && r.nombre) grouped[r.sesion].nombre = r.nombre;
       });
       const sorted = Object.values(grouped).map(g => ({ ...g, rutas: g.rutas.size })).sort((a, b) => b.fecha.localeCompare(a.fecha));
       setHistorico(sorted);
@@ -4140,7 +4151,8 @@ function ModuleAsignaciones() {
                         const sel = historico.find(h => h.sesion === sesionId);
                         if (!sel) return sesionId;
                         const dateStr = new Date(sel.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
-                        return `${dateStr} · ${sel.puntos} puntos · ${sel.rutas} rutas · ${sesionId.substring(0,10)}`;
+                        const prefix = sel.nombre ? `${sel.nombre} · ` : "";
+                        return `${prefix}${dateStr} · ${sel.puntos} puntos · ${sel.rutas} rutas · ${sesionId.substring(0,10)}`;
                       })() : "— Selecciona una sesión —"}
                     </span>
                     <span style={{ color:C.textMuted, transform:sesionDropdownOpen?"rotate(180deg)":"none", transition:"transform 0.15s" }}>▾</span>
@@ -4155,7 +4167,7 @@ function ModuleAsignaciones() {
                             style={{ display:"block", width:"100%", padding:"9px 14px", textAlign:"left", border:"none", borderBottom:"1px solid "+C.border, backgroundColor:isSel?C.accentLight:C.white, color:isSel?C.accent:C.text, fontSize:13, fontWeight:isSel?700:500, cursor:"pointer" }}
                             onMouseEnter={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = "#FAFBFF"; }}
                             onMouseLeave={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = C.white; }}>
-                            {dateStr} · {h.puntos} puntos · {h.rutas} rutas · {h.sesion.substring(0,10)}
+                            {h.nombre && <span style={{ fontWeight:700, color:isSel?C.accent:C.text }}>{h.nombre} · </span>}{dateStr} · {h.puntos} puntos · {h.rutas} rutas · {h.sesion.substring(0,10)}
                           </button>
                         );
                       })}
@@ -4167,7 +4179,8 @@ function ModuleAsignaciones() {
                   if (!sel) return null;
                   const dateStr = new Date(sel.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
                   return (
-                    <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:11, color:C.textMuted }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:11, color:C.textMuted, flexWrap:"wrap" }}>
+                      {sel.nombre && <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.accentLight, color:C.accent, fontWeight:700, fontSize:12 }}>{sel.nombre}</span>}
                       <span style={{ fontWeight:600, color:C.text }}>{dateStr}</span>
                       <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.blueBg, color:C.blue, fontWeight:700 }}>{sel.puntos} puntos</span>
                       <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.purpleBg, color:C.purple, fontWeight:700 }}>{sel.rutas} rutas</span>
