@@ -584,6 +584,9 @@ function ModuleEnvios() {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualSaving, setManualSaving] = useState(false);
   const [manualMsg, setManualMsg] = useState("");
+  const [prefactOpen, setPrefactOpen] = useState(false);
+  const [prefactProveedor, setPrefactProveedor] = useState("");
+  const [prefactIVA, setPrefactIVA] = useState(true);
   const blankManual = () => ({
     fecha: ayerStr,
     tipoRuta: "Última milla",
@@ -994,6 +997,218 @@ function ModuleEnvios() {
     setManualSaving(false);
   };
 
+  // Lista de proveedores disponibles para prefactura (con asistencia en el periodo)
+  const proveedoresEnPeriodo = (() => {
+    const set = new Set();
+    asistencia.forEach(a => {
+      const f = (a.fecha || "").substring(0, 10);
+      if (f >= fechaDesde && f <= fechaHasta && a.proveedor) set.add(a.proveedor);
+    });
+    return [...set].sort();
+  })();
+
+  const generatePrefactura = (proveedor, conIVA) => {
+    if (!proveedor) return;
+    // 1) Filtrar asistencia del periodo + proveedor
+    const filtrada = asistencia.filter(a => {
+      const f = (a.fecha || "").substring(0, 10);
+      return f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor;
+    });
+    // 2) Costo por tipo_unidad desde catálogo carriers
+    const costoPorTipo = {};
+    const tiposSet = new Set();
+    filtrada.forEach(a => { if (a.tipo_unidad) tiposSet.add(a.tipo_unidad); });
+    tiposSet.forEach(t => {
+      const car = carriers.find(c => c.proveedor === proveedor && c.tipo_unidad === t);
+      costoPorTipo[t] = car ? (parseFloat(car.costo_unidad) || 0) : 0;
+    });
+    const tipos = [...tiposSet].sort();
+
+    // 3) Construir lista de fechas del rango (incluye días sin asistencia)
+    const fechas = [];
+    const start = new Date(fechaDesde + "T12:00:00");
+    const end = new Date(fechaHasta + "T12:00:00");
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      fechas.push(d.toISOString().substring(0, 10));
+    }
+    // 4) Conteos por (fecha, tipo)
+    const conteos = {};
+    fechas.forEach(f => { conteos[f] = {}; tipos.forEach(t => { conteos[f][t] = 0; }); });
+    filtrada.forEach(a => {
+      const f = (a.fecha || "").substring(0, 10);
+      if (conteos[f] && a.tipo_unidad) conteos[f][a.tipo_unidad] = (conteos[f][a.tipo_unidad] || 0) + 1;
+    });
+
+    // 5) Penalizaciones por fecha (sumadas desde rutas del proveedor en ese día)
+    const penalPorFecha = {};
+    rutas.forEach(r => {
+      const f = (r.salida || "").substring(0, 10);
+      if (!f || f < fechaDesde || f > fechaHasta) return;
+      // Identifica proveedor real vía costo info
+      const info = getCostoInfo(r);
+      if (info.proveedor !== proveedor) return;
+      const { baseCost, costoNuevo } = getCostoReal(r);
+      const desc = baseCost - costoNuevo;
+      if (desc > 0) penalPorFecha[f] = (penalPorFecha[f] || 0) + desc;
+    });
+
+    // 6) Renderizar HTML
+    const dayName = isoDate => {
+      const d = new Date(isoDate + "T12:00:00");
+      const names = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+      return names[d.getDay()];
+    };
+    const fmtFecha = isoDate => {
+      const [y, m, d] = isoDate.split("-");
+      return `${parseInt(d)}-${parseInt(m)}-${y.substring(2)}`;
+    };
+    const fmtRangoTitulo = () => {
+      const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+      const a = new Date(fechaDesde + "T12:00:00");
+      const b = new Date(fechaHasta + "T12:00:00");
+      return `DEL ${a.getDate()} DE ${meses[a.getMonth()].toUpperCase()} AL ${b.getDate()} DE ${meses[b.getMonth()].toUpperCase()}`;
+    };
+
+    let totalUnidades = 0;
+    let subtotal = 0;
+    const filasHtml = fechas.map(f => {
+      const esDomingo = new Date(f + "T12:00:00").getDay() === 0;
+      const cuentas = conteos[f];
+      const sumaUnidades = tipos.reduce((s, t) => s + (cuentas[t] || 0), 0);
+      const importeFila = tipos.reduce((s, t) => s + (cuentas[t] || 0) * (costoPorTipo[t] || 0), 0);
+      totalUnidades += sumaUnidades;
+      subtotal += importeFila;
+      const desc = penalPorFecha[f] || 0;
+      const comentarios = esDomingo && sumaUnidades === 0 ? "Domingo" : "";
+      const bg = esDomingo ? "#FEF3C7" : "#FFFFFF";
+      const tdsTipos = tipos.map(t => `<td class="num" style="background:${bg}">${cuentas[t] || ""}</td>`).join("");
+      return `<tr style="background:${bg}">
+        <td class="fecha">${fmtFecha(f)}</td>
+        ${tdsTipos}
+        <td class="importe">${importeFila > 0 ? "$ " + importeFila.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2}) : "$ -"}</td>
+        <td class="coment">${comentarios}</td>
+        <td class="desc">${desc > 0 ? "-$ " + desc.toLocaleString("en-US", {minimumFractionDigits: 2}) : ""}</td>
+      </tr>`;
+    }).join("");
+
+    const totalDescuento = Object.values(penalPorFecha).reduce((s, v) => s + v, 0);
+    const subtotalNeto = subtotal - totalDescuento;
+    const ivaMonto = conIVA ? subtotalNeto * 0.16 : 0;
+    const totalFinal = subtotalNeto + ivaMonto;
+
+    const totalesUnidadesPorTipo = tipos.map(t => {
+      return fechas.reduce((s, f) => s + (conteos[f][t] || 0), 0);
+    });
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Prefactura ${proveedor} ${fechaDesde} a ${fechaHasta}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI', Arial, sans-serif}
+  body{padding:18mm 14mm;color:#1F2937;font-size:10pt}
+  .header{display:flex;align-items:flex-start;gap:16px;margin-bottom:14px}
+  .logoLeft{width:120px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:6px}
+  .logoLeft .t1{font-size:34pt;font-weight:900;color:#E63B2E;letter-spacing:-2px;line-height:1}
+  .logoLeft .t1 span{color:#1F2937}
+  .logoLeft .label{font-size:8pt;font-weight:700;color:#7C8495;margin-top:8px;letter-spacing:0.06em}
+  .titleBlock{flex:1;text-align:center;padding-top:4px}
+  .titleBlock .h1{font-size:24pt;font-weight:900;color:#000;letter-spacing:-0.5px}
+  .titleBlock .h2{font-size:13pt;font-weight:800;color:#000;margin-top:4px}
+  .logoRight{width:130px;flex-shrink:0;border:2px solid #1F4E8A;padding:6px;text-align:center;font-size:11pt;font-weight:800;color:#1F4E8A;display:flex;align-items:center;justify-content:center;min-height:60px}
+  .provBar{background:#1F2A40;color:#FFFFFF;font-size:18pt;font-weight:800;text-align:center;padding:8px;letter-spacing:0.04em;margin-bottom:0}
+  .subTitle{text-align:center;font-size:13pt;font-weight:800;padding:8px 0;color:#000}
+  table{width:100%;border-collapse:collapse;font-size:9.5pt}
+  th{background:#FFFFFF;color:#1F2937;font-weight:700;border:1px solid #1F2937;padding:6px 8px;text-align:center;font-size:9pt}
+  td{border:1px solid #1F2937;padding:5px 8px;text-align:center}
+  td.fecha{font-weight:600}
+  td.num{font-weight:700}
+  td.importe{text-align:right;font-family:'Consolas','Courier New',monospace}
+  td.coment{text-align:center;font-weight:700;color:#000}
+  td.desc{text-align:right;font-family:'Consolas','Courier New',monospace}
+  .totalRow td{background:#FFFFFF;font-weight:800}
+  .totalLabel{color:#E63B2E;font-size:14pt;font-weight:800}
+  .totalNum{color:#E63B2E;font-size:14pt;font-weight:800}
+  .summary{margin-top:0;display:flex;justify-content:flex-end}
+  .summary table{width:60%}
+  .summary td{padding:5px 10px}
+  .summary .lbl{font-weight:700;text-align:left;background:#FFFFFF}
+  .summary .val{text-align:right;font-family:'Consolas','Courier New',monospace}
+  .footer{margin-top:24px;padding-top:8px;text-align:center}
+  .footer .easy{background:#FFF8C5;padding:8px;font-size:13pt;font-weight:800;color:#000;margin-bottom:6px}
+  .footer .contact{font-size:11pt;color:#1F4E8A;font-weight:600;margin-bottom:14px}
+  .footer .brand{font-size:18pt;font-weight:800;color:#000;border-top:1px solid #000;border-bottom:1px solid #000;padding:6px 0;margin-bottom:14px}
+  .fiscal{display:grid;grid-template-columns:1fr 2fr 2fr;font-size:8.5pt;border:1px solid #1F2937}
+  .fiscal > div{padding:6px;border-right:1px solid #1F2937}
+  .fiscal > div:last-child{border-right:none}
+  .fiscal .h{background:#FFFFFF;font-weight:800;text-align:center;border-bottom:1px solid #1F2937}
+  .nota{font-size:8pt;color:#7C8495;text-align:center;margin-top:10px;line-height:1.4}
+  @media print { body{padding:14mm 10mm} .pageBreak{page-break-after:always} }
+</style></head><body>
+  <div class="header">
+    <div class="logoLeft">
+      <div class="t1">T<span>1</span></div>
+      <div class="label">PROVEEDOR</div>
+    </div>
+    <div class="titleBlock">
+      <div class="h1">SOLICITUD DE FACTURA</div>
+      <div class="h2">SOLICITUD DE FACTURA ${fmtRangoTitulo()}</div>
+    </div>
+    <div class="logoRight">${proveedor}</div>
+  </div>
+  <div class="provBar">${proveedor}</div>
+  <div class="subTitle">ASISTENCIA DE OPERADORES ¨LM¨</div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:90px">FECHA</th>
+        ${tipos.map(t => `<th style="width:120px">${t.toUpperCase()} ($${(costoPorTipo[t]||0).toLocaleString()})</th>`).join("")}
+        <th style="width:130px">Importe</th>
+        <th>Comentarios</th>
+        <th style="width:130px">Descuento</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${filasHtml}
+      <tr class="totalRow">
+        <td class="totalLabel">TOTAL</td>
+        ${totalesUnidadesPorTipo.map(n => `<td class="totalNum">${n}</td>`).join("")}
+        <td class="importe" style="font-weight:800">$ ${subtotal.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+        <td></td>
+        <td class="desc" style="font-weight:800">${totalDescuento > 0 ? "-$ " + totalDescuento.toLocaleString("en-US", {minimumFractionDigits: 2}) : ""}</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="summary">
+    <table>
+      <tr><td class="val">$ ${subtotal.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">SUBTOTAL</td></tr>
+      <tr><td class="val">${totalDescuento > 0 ? "-$ " + totalDescuento.toLocaleString("en-US", {minimumFractionDigits: 2}) : "$ -"}</td><td class="lbl">DESCUENTO</td></tr>
+      <tr><td class="val">$ ${subtotalNeto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">SUBTOTAL</td></tr>
+      ${conIVA ? `<tr><td class="val">$ ${ivaMonto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">IVA</td></tr>` : ""}
+      <tr><td class="val" style="font-weight:800">$ ${totalFinal.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">TOTAL</td></tr>
+    </table>
+  </div>
+  <div class="footer">
+    <div class="easy">¡Enviar nunca fue tan fácil!</div>
+    <div class="contact">Eduardo Neri Gonzalez / eduardo.gonzalez@T1envios.com / Cel 5535668113</div>
+    <div class="brand">Claro Shop.com</div>
+    <div class="fiscal">
+      <div class="h">RFC</div>
+      <div class="h">REGIMEN FISCAL</div>
+      <div class="h">Metodo de Pago - PPD</div>
+      <div></div>
+      <div></div>
+      <div>Forma de pago - 99 por definir</div>
+    </div>
+    <div class="nota">Generado automáticamente desde T1 Ops Flotilla · ${new Date().toLocaleString("es-MX")}</div>
+  </div>
+  <script>setTimeout(() => window.print(), 400);</script>
+</body></html>`;
+
+    const w = window.open("", "_blank");
+    if (!w) { alert("Permite las ventanas emergentes para descargar la prefactura."); return; }
+    w.document.write(html);
+    w.document.close();
+  };
+
   const getRisk = (r) => {
     if (r.pctEntrega < 50) return "high";
     if (r.pctEntrega < 80 || r.noVisitados > r.total * 0.3) return "medium";
@@ -1203,6 +1418,12 @@ function ModuleEnvios() {
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Vista de rutas operativas · Carga masiva desde Excel</p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button onClick={() => { setPrefactProveedor(proveedoresEnPeriodo[0] || ""); setPrefactOpen(true); }} style={{
+            padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.green, backgroundColor: C.greenBg,
+            color: C.green, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+          }}>
+            <IC.Download /> Descargar prefactura
+          </button>
           <button onClick={() => { setManualForm(blankManual()); setManualMsg(""); setManualOpen(true); }} style={{
             padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight,
             color: C.accent, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
@@ -1797,6 +2018,51 @@ function ModuleEnvios() {
           </div>
         );
       })()}
+
+      {/* Prefactura provider selection modal */}
+      {prefactOpen && (
+        <div style={{ position:"fixed", inset:0, backgroundColor:"rgba(12,20,37,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:10000 }}
+          onClick={() => setPrefactOpen(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ backgroundColor:C.white, borderRadius:14, padding:28, width:480, maxWidth:"92vw", boxShadow:"0 16px 48px rgba(0,0,0,0.28)" }}>
+            <div style={{ fontSize:18, fontWeight:800, color:C.text, marginBottom:6 }}>Descargar prefactura</div>
+            <div style={{ fontSize:12, color:C.textMuted, marginBottom:20 }}>
+              Periodo: <b style={{ color:C.text }}>{new Date(fechaDesde+"T12:00:00").toLocaleDateString("es-MX",{day:"numeric",month:"short",year:"numeric"})} — {new Date(fechaHasta+"T12:00:00").toLocaleDateString("es-MX",{day:"numeric",month:"short",year:"numeric"})}</b>
+            </div>
+            {proveedoresEnPeriodo.length === 0 ? (
+              <div style={{ padding:18, backgroundColor:C.bg, borderRadius:8, fontSize:13, color:C.textMuted, textAlign:"center", marginBottom:18 }}>
+                Sin asistencia registrada en este periodo. Ajusta las fechas o registra asistencia primero.
+              </div>
+            ) : (
+              <>
+                <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:6, textTransform:"uppercase", letterSpacing:"0.05em" }}>Proveedor</label>
+                <select value={prefactProveedor} onChange={e => setPrefactProveedor(e.target.value)}
+                  style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+C.accent, fontSize:14, fontWeight:700, color:C.text, backgroundColor:C.white, marginBottom:16, boxSizing:"border-box" }}>
+                  {proveedoresEnPeriodo.map(p => {
+                    const dias = new Set(asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && a.proveedor === p; }).map(a => (a.fecha||"").substring(0,10))).size;
+                    const ops = asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && a.proveedor === p; }).length;
+                    return <option key={p} value={p}>{p} — {ops} asistencias en {dias} días</option>;
+                  })}
+                </select>
+                <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:600, color:C.text, marginBottom:20, cursor:"pointer" }}>
+                  <input type="checkbox" checked={prefactIVA} onChange={e => setPrefactIVA(e.target.checked)} style={{ width:16, height:16, cursor:"pointer" }} />
+                  Incluir IVA (16%)
+                </label>
+              </>
+            )}
+            <div style={{ display:"flex", justifyContent:"flex-end", gap:10 }}>
+              <button onClick={() => setPrefactOpen(false)}
+                style={{ padding:"9px 20px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, fontSize:13, fontWeight:600, cursor:"pointer", color:C.text }}>
+                Cancelar
+              </button>
+              <button onClick={() => { generatePrefactura(prefactProveedor, prefactIVA); setPrefactOpen(false); }}
+                disabled={!prefactProveedor || proveedoresEnPeriodo.length === 0}
+                style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:(!prefactProveedor||proveedoresEnPeriodo.length===0)?C.textMuted:C.green, color:"white", fontSize:13, fontWeight:700, cursor:(!prefactProveedor||proveedoresEnPeriodo.length===0)?"not-allowed":"pointer" }}>
+                Generar PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirm modal — replaces window.confirm() which can be permanently disabled by the browser */}
       {confirmModal && (
