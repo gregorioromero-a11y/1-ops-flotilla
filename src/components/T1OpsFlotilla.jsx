@@ -4058,7 +4058,7 @@ function ModuleAsignaciones() {
                   onChange={e => { if (e.target.value) loadSesion(e.target.value); }}
                   style={{ flex:"1 1 420px", maxWidth:600, padding:"10px 12px", borderRadius:8, border:"1px solid "+(sesionId?C.accent:C.border), fontSize:13, fontWeight:600, color:C.text, cursor:"pointer", backgroundColor:sesionId?C.accentLight:C.white }}>
                   <option value="">— Selecciona una sesión —</option>
-                  {historico.map(h => {
+                  {[...historico].reverse().map(h => {
                     const dateStr = new Date(h.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
                     return <option key={h.sesion} value={h.sesion}>{dateStr} · {h.puntos} puntos · {h.rutas} rutas · {h.sesion.substring(0,10)}</option>;
                   })}
