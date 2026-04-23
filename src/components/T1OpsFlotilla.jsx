@@ -587,7 +587,7 @@ function ModuleEnvios() {
   const [prefactOpen, setPrefactOpen] = useState(false);
   const [prefactProveedor, setPrefactProveedor] = useState("");
   const [prefactIVA, setPrefactIVA] = useState(true);
-  const [prefactTipos, setPrefactTipos] = useState([]);
+  const [prefactOperaciones, setPrefactOperaciones] = useState([]);
   const blankManual = () => ({
     fecha: ayerStr,
     tipoRuta: "Última milla",
@@ -1008,25 +1008,28 @@ function ModuleEnvios() {
     return [...set].sort();
   })();
 
-  // Tipos de unidad disponibles para un proveedor en el periodo seleccionado
-  const tiposParaProveedor = (proveedor) => {
+  // Tipos de operación disponibles para un proveedor en el periodo seleccionado
+  const operacionesParaProveedor = (proveedor) => {
     if (!proveedor) return [];
     const set = new Set();
     asistencia.forEach(a => {
       const f = (a.fecha || "").substring(0, 10);
-      if (f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor && a.tipo_unidad) set.add(a.tipo_unidad);
+      if (f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor) {
+        set.add(a.tipo_operacion || "Sin especificar");
+      }
     });
     return [...set].sort();
   };
 
-  const generatePrefactura = (proveedor, conIVA, tiposFiltro) => {
+  const generatePrefactura = (proveedor, conIVA, operacionesFiltro) => {
     if (!proveedor) return;
-    const tiposPermitidos = (tiposFiltro && tiposFiltro.length > 0) ? new Set(tiposFiltro) : null;
-    // 1) Filtrar asistencia del periodo + proveedor (+ tipos seleccionados)
+    const opsPermitidas = (operacionesFiltro && operacionesFiltro.length > 0) ? new Set(operacionesFiltro) : null;
+    const opMatch = a => opsPermitidas ? opsPermitidas.has(a.tipo_operacion || "Sin especificar") : true;
+    // 1) Filtrar asistencia del periodo + proveedor (+ operaciones seleccionadas)
     const filtrada = asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
       if (!(f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor)) return false;
-      if (tiposPermitidos && !tiposPermitidos.has(a.tipo_unidad)) return false;
+      if (!opMatch(a)) return false;
       return true;
     });
     // 2) Costo por tipo_unidad desde catálogo carriers
@@ -1055,14 +1058,14 @@ function ModuleEnvios() {
     });
 
     // 5) Penalizaciones por fecha (sumadas desde rutas del proveedor en ese día,
-    //    filtradas por los tipos seleccionados si aplica)
+    //    filtradas por las operaciones seleccionadas si aplica)
     const penalPorFecha = {};
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
       const info = getCostoInfo(r);
       if (info.proveedor !== proveedor) return;
-      if (tiposPermitidos && !tiposPermitidos.has(info.tipo_unidad)) return;
+      if (opsPermitidas && !opsPermitidas.has(info.tipo_operacion || "Sin especificar")) return;
       const { baseCost, costoNuevo } = getCostoReal(r);
       const desc = baseCost - costoNuevo;
       if (desc > 0) penalPorFecha[f] = (penalPorFecha[f] || 0) + desc;
@@ -1166,7 +1169,7 @@ function ModuleEnvios() {
     <div class="logoRight">${proveedor}</div>
   </div>
   <div class="provBar">${proveedor}</div>
-  <div class="subTitle">ASISTENCIA DE OPERADORES ¨LM¨</div>
+  <div class="subTitle">ASISTENCIA DE OPERADORES ¨${operacionesFiltro && operacionesFiltro.length > 0 ? operacionesFiltro.join(" + ").toUpperCase() : "LM"}¨</div>
   <table>
     <thead>
       <tr>
@@ -1432,7 +1435,7 @@ function ModuleEnvios() {
           <button onClick={() => {
             const p = proveedoresEnPeriodo[0] || "";
             setPrefactProveedor(p);
-            setPrefactTipos(tiposParaProveedor(p));
+            setPrefactOperaciones(operacionesParaProveedor(p));
             setPrefactOpen(true);
           }} style={{
             padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.green, backgroundColor: C.greenBg,
@@ -2054,7 +2057,7 @@ function ModuleEnvios() {
                 <select value={prefactProveedor} onChange={e => {
                   const p = e.target.value;
                   setPrefactProveedor(p);
-                  setPrefactTipos(tiposParaProveedor(p));
+                  setPrefactOperaciones(operacionesParaProveedor(p));
                 }}
                   style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+C.accent, fontSize:14, fontWeight:700, color:C.text, backgroundColor:C.white, marginBottom:16, boxSizing:"border-box" }}>
                   {proveedoresEnPeriodo.map(p => {
@@ -2064,31 +2067,31 @@ function ModuleEnvios() {
                   })}
                 </select>
                 {(() => {
-                  const tiposDisp = tiposParaProveedor(prefactProveedor);
-                  if (tiposDisp.length === 0) return null;
-                  const todosSeleccionados = tiposDisp.every(t => prefactTipos.includes(t));
+                  const opsDisp = operacionesParaProveedor(prefactProveedor);
+                  if (opsDisp.length === 0) return null;
+                  const todasSeleccionadas = opsDisp.every(o => prefactOperaciones.includes(o));
                   return (
                     <div style={{ marginBottom:16 }}>
                       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
                         <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em" }}>
-                          Tipos de unidad <span style={{ fontWeight:500, textTransform:"none" }}>({prefactTipos.length}/{tiposDisp.length})</span>
+                          Tipo de operación <span style={{ fontWeight:500, textTransform:"none" }}>({prefactOperaciones.length}/{opsDisp.length})</span>
                         </label>
                         <button type="button"
-                          onClick={() => setPrefactTipos(todosSeleccionados ? [] : tiposDisp)}
+                          onClick={() => setPrefactOperaciones(todasSeleccionadas ? [] : opsDisp)}
                           style={{ background:"none", border:"none", cursor:"pointer", padding:0, fontSize:11, fontWeight:700, color:C.accent, textDecoration:"underline" }}>
-                          {todosSeleccionados ? "Quitar todos" : "Seleccionar todos"}
+                          {todasSeleccionadas ? "Quitar todas" : "Seleccionar todas"}
                         </button>
                       </div>
-                      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(140px, 1fr))", gap:6, padding:10, backgroundColor:C.bg, borderRadius:8, border:"1px solid "+C.border, maxHeight:180, overflowY:"auto" }}>
-                        {tiposDisp.map(t => {
-                          const sel = prefactTipos.includes(t);
-                          const cuenta = asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && a.proveedor === prefactProveedor && a.tipo_unidad === t; }).length;
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(180px, 1fr))", gap:6, padding:10, backgroundColor:C.bg, borderRadius:8, border:"1px solid "+C.border, maxHeight:200, overflowY:"auto" }}>
+                        {opsDisp.map(o => {
+                          const sel = prefactOperaciones.includes(o);
+                          const cuenta = asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && a.proveedor === prefactProveedor && (a.tipo_operacion || "Sin especificar") === o; }).length;
                           return (
-                            <label key={t} style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 8px", borderRadius:6, backgroundColor:sel?C.accentLight:C.white, border:"1px solid "+(sel?C.accent:C.border), cursor:"pointer", fontSize:12 }}>
+                            <label key={o} style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px", borderRadius:6, backgroundColor:sel?C.accentLight:C.white, border:"1px solid "+(sel?C.accent:C.border), cursor:"pointer", fontSize:12 }}>
                               <input type="checkbox" checked={sel}
-                                onChange={() => setPrefactTipos(prev => sel ? prev.filter(x => x !== t) : [...prev, t])}
+                                onChange={() => setPrefactOperaciones(prev => sel ? prev.filter(x => x !== o) : [...prev, o])}
                                 style={{ width:14, height:14, cursor:"pointer" }} />
-                              <span style={{ fontWeight:700, color:sel?C.accent:C.text }}>{t}</span>
+                              <span style={{ fontWeight:700, color:sel?C.accent:C.text }}>{o}</span>
                               <span style={{ marginLeft:"auto", fontSize:10, color:C.textMuted, fontWeight:600 }}>{cuenta}</span>
                             </label>
                           );
@@ -2108,9 +2111,9 @@ function ModuleEnvios() {
                 style={{ padding:"9px 20px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, fontSize:13, fontWeight:600, cursor:"pointer", color:C.text }}>
                 Cancelar
               </button>
-              <button onClick={() => { generatePrefactura(prefactProveedor, prefactIVA, prefactTipos); setPrefactOpen(false); }}
-                disabled={!prefactProveedor || proveedoresEnPeriodo.length === 0 || prefactTipos.length === 0}
-                style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:(!prefactProveedor||proveedoresEnPeriodo.length===0||prefactTipos.length===0)?C.textMuted:C.green, color:"white", fontSize:13, fontWeight:700, cursor:(!prefactProveedor||proveedoresEnPeriodo.length===0||prefactTipos.length===0)?"not-allowed":"pointer" }}>
+              <button onClick={() => { generatePrefactura(prefactProveedor, prefactIVA, prefactOperaciones); setPrefactOpen(false); }}
+                disabled={!prefactProveedor || proveedoresEnPeriodo.length === 0 || prefactOperaciones.length === 0}
+                style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:(!prefactProveedor||proveedoresEnPeriodo.length===0||prefactOperaciones.length===0)?C.textMuted:C.green, color:"white", fontSize:13, fontWeight:700, cursor:(!prefactProveedor||proveedoresEnPeriodo.length===0||prefactOperaciones.length===0)?"not-allowed":"pointer" }}>
                 Generar PDF
               </button>
             </div>
