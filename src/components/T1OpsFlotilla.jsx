@@ -1114,6 +1114,21 @@ function ModuleEnvios() {
       return fechas.reduce((s, f) => s + (conteos[f][t] || 0), 0);
     });
 
+    // Logo del proveedor: busca en /public/logos/{slug}.{ext}. Si ninguna
+    // extensión existe, el onerror final esconde la imagen y muestra el
+    // nombre del proveedor como fallback.
+    const logoSlug = String(proveedor || "")
+      .toLowerCase()
+      .normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    const origin = window.location.origin;
+    const logoHtml = `
+      <img class="provLogo" src="${origin}/logos/${logoSlug}.png" alt="${proveedor}"
+        onerror="(function(img){var exts=['jpg','jpeg','svg','webp'],i=0;img.onerror=function(){if(i>=exts.length){img.style.display='none';var fb=img.parentNode.querySelector('.logoFallback');if(fb)fb.style.display='flex';return;}img.src='${origin}/logos/${logoSlug}.'+exts[i++];};})(this)" />
+      <div class="logoFallback">${proveedor}</div>
+    `;
+
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>Prefactura ${proveedor} ${fechaDesde} a ${fechaHasta}</title>
 <style>
@@ -1127,7 +1142,9 @@ function ModuleEnvios() {
   .titleBlock{flex:1;text-align:center;padding-top:4px}
   .titleBlock .h1{font-size:24pt;font-weight:900;color:#000;letter-spacing:-0.5px}
   .titleBlock .h2{font-size:13pt;font-weight:800;color:#000;margin-top:4px}
-  .logoRight{width:130px;flex-shrink:0;border:2px solid #1F4E8A;padding:6px;text-align:center;font-size:11pt;font-weight:800;color:#1F4E8A;display:flex;align-items:center;justify-content:center;min-height:60px}
+  .logoRight{width:140px;flex-shrink:0;border:2px solid #1F4E8A;padding:6px;text-align:center;display:flex;align-items:center;justify-content:center;min-height:60px;position:relative}
+  .logoRight .provLogo{max-width:100%;max-height:64px;object-fit:contain}
+  .logoRight .logoFallback{display:none;align-items:center;justify-content:center;font-size:11pt;font-weight:800;color:#1F4E8A;width:100%;height:100%}
   .provBar{background:#1F2A40;color:#FFFFFF;font-size:18pt;font-weight:800;text-align:center;padding:8px;letter-spacing:0.04em;margin-bottom:0}
   .subTitle{text-align:center;font-size:13pt;font-weight:800;padding:8px 0;color:#000}
   table{width:100%;border-collapse:collapse;font-size:9.5pt}
@@ -1166,7 +1183,7 @@ function ModuleEnvios() {
       <div class="h1">SOLICITUD DE FACTURA</div>
       <div class="h2">SOLICITUD DE FACTURA ${fmtRangoTitulo()}</div>
     </div>
-    <div class="logoRight">${proveedor}</div>
+    <div class="logoRight">${logoHtml}</div>
   </div>
   <div class="provBar">${proveedor}</div>
   <div class="subTitle">ASISTENCIA DE OPERADORES ¨${operacionesFiltro && operacionesFiltro.length > 0 ? operacionesFiltro.join(" + ").toUpperCase() : "LM"}¨</div>
