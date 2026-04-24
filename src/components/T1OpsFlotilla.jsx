@@ -580,6 +580,7 @@ function ModuleEnvios() {
   const [costosData, setCostosData] = useState([]);
   const [asistencia, setAsistencia] = useState([]);
   const [carriers, setCarriers] = useState([]);
+  const [operadoresCatalogo, setOperadoresCatalogo] = useState([]);
   const [confirmModal, setConfirmModal] = useState(null);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualSaving, setManualSaving] = useState(false);
@@ -630,9 +631,13 @@ function ModuleEnvios() {
       cursor = chunk[chunk.length - 1].id;
     }
     const allAsistencia = Array.from(byId.values()).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || b.id - a.id);
-    const { data: cData } = await supabase.from("carriers").select("*");
+    const [{ data: cData }, { data: opsData }] = await Promise.all([
+      supabase.from("carriers").select("*"),
+      supabase.from("operadores").select("nombre, proveedor, tipo_licencia, activo"),
+    ]);
     setAsistencia(allAsistencia.filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual"));
     setCarriers(cData || []);
+    setOperadoresCatalogo((opsData || []).filter(o => o.activo !== false));
   };
 
   // Formula evaluator: supports +, -, *, /, parens, decimals, and `costo` variable
@@ -905,25 +910,40 @@ function ModuleEnvios() {
     });
   };
 
-  // Operadores únicos por carrier basados en historial de asistencia.
-  // Se usa para sugerir nombres ya registrados al capturar una ruta manual.
+  // Operadores únicos por carrier — combina catálogo `operadores` + historial
+  // de `asistencia`. La clave del proveedor se normaliza para que diferencias
+  // de mayúsculas/acentos/espacios entre tablas (ej: "Cotremex" vs "COTREMEX")
+  // no escondan operadores válidos.
   const operadoresPorCarrier = (() => {
     const map = {};
-    asistencia.forEach(a => {
-      if (!a.proveedor || !a.nombre_operador) return;
-      if (!map[a.proveedor]) map[a.proveedor] = new Map();
-      const key = norm(a.nombre_operador);
-      if (!map[a.proveedor].has(key)) {
-        map[a.proveedor].set(key, {
-          nombre: a.nombre_operador,
-          tipo_unidad: a.tipo_unidad,
-          placa: a.placa || "",
-          correo: a.correo || "",
+    const add = (proveedorRaw, info) => {
+      if (!proveedorRaw || !info.nombre) return;
+      const key = norm(proveedorRaw);
+      if (!map[key]) map[key] = new Map();
+      const opKey = norm(info.nombre);
+      const existing = map[key].get(opKey);
+      if (!existing) {
+        map[key].set(opKey, info);
+      } else {
+        // Enriquecer si la fuente nueva trae datos faltantes
+        map[key].set(opKey, {
+          nombre: existing.nombre,
+          tipo_unidad: existing.tipo_unidad || info.tipo_unidad,
+          placa: existing.placa || info.placa,
+          correo: existing.correo || info.correo,
         });
       }
-    });
+    };
+    operadoresCatalogo.forEach(o => add(o.proveedor, {
+      nombre: o.nombre, tipo_unidad: "", placa: "", correo: "",
+    }));
+    asistencia.forEach(a => add(a.proveedor, {
+      nombre: a.nombre_operador, tipo_unidad: a.tipo_unidad || "",
+      placa: a.placa || "", correo: a.correo || "",
+    }));
     return map;
   })();
+  const getOperadoresFor = (proveedor) => operadoresPorCarrier[norm(proveedor)] || new Map();
 
   // Costo default para (proveedor, tipo_unidad) desde carriers
   const defaultCostoFor = (proveedor, tipo) => {
@@ -1886,7 +1906,7 @@ function ModuleEnvios() {
           return [...seen].sort();
         })();
         const operadoresLista = manualForm.carrier
-          ? Array.from((operadoresPorCarrier[manualForm.carrier] || new Map()).values()).sort((a, b) => a.nombre.localeCompare(b.nombre))
+          ? Array.from(getOperadoresFor(manualForm.carrier).values()).sort((a, b) => a.nombre.localeCompare(b.nombre))
           : [];
         const tiposLista = manualForm.carrier
           ? [...new Set(carriers.filter(c => c.proveedor === manualForm.carrier && c.tipo_unidad && c.tipo_unidad !== "—").map(c => c.tipo_unidad))]
