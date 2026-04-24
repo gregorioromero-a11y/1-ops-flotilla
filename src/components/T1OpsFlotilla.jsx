@@ -750,45 +750,37 @@ function ModuleEnvios() {
     "Foráneo GDL": 55,
   };
 
-  const savePenalizacion = async (rutaIdx, value) => {
-    const updated = [...rutas];
-    updated[rutaIdx] = { ...updated[rutaIdx], penalizacion: value };
-    setRutas(updated);
-    const r = updated[rutaIdx];
-    if (r.id) {
-      try {
-        const { error } = await supabase.from("rutas").update({ penalizacion: value }).eq("id", r.id);
-        if (error && /does not exist|schema cache/i.test(error.message)) {
-          alert("⚠ Falta agregar la columna 'penalizacion' en la tabla rutas. SQL: ALTER TABLE rutas ADD COLUMN penalizacion text;");
-          console.warn("SQL:\nALTER TABLE rutas ADD COLUMN penalizacion text;");
-        }
-      } catch {}
-    }
+  // IMPORTANTE: todas las funciones de guardado trabajan por `id` de la ruta
+  // (no por índice), para evitar cualquier race con cambios de filtro/orden.
+  const savePenalizacion = async (id, value) => {
+    if (!id) return;
+    setRutas(prev => prev.map(r => r.id === id ? { ...r, penalizacion: value } : r));
+    try {
+      const { error } = await supabase.from("rutas").update({ penalizacion: value }).eq("id", id);
+      if (error && /does not exist|schema cache/i.test(error.message)) {
+        alert("⚠ Falta agregar la columna 'penalizacion' en la tabla rutas. SQL: ALTER TABLE rutas ADD COLUMN penalizacion text;");
+        console.warn("SQL:\nALTER TABLE rutas ADD COLUMN penalizacion text;");
+      }
+    } catch {}
   };
 
-  const saveRecolecciones = async (rutaIdx, value) => {
+  const saveRecolecciones = async (id, value) => {
+    if (!id) return;
     const v = Math.max(0, parseInt(value) || 0);
-    const updated = [...rutas];
-    updated[rutaIdx] = { ...updated[rutaIdx], recolecciones: v };
-    setRutas(updated);
-    const r = updated[rutaIdx];
-    if (r.id) await supabase.from("rutas").update({ recolecciones: v }).eq("id", r.id);
+    setRutas(prev => prev.map(r => r.id === id ? { ...r, recolecciones: v } : r));
+    await supabase.from("rutas").update({ recolecciones: v }).eq("id", id);
   };
 
-  const saveNota = async (rutaIdx, value) => {
-    const updated = [...rutas];
-    updated[rutaIdx] = { ...updated[rutaIdx], nota: value };
-    setRutas(updated);
-    const r = updated[rutaIdx];
-    if (r.id) {
-      try {
-        const { error } = await supabase.from("rutas").update({ nota: value }).eq("id", r.id);
-        if (error && /does not exist|schema cache/i.test(error.message)) {
-          alert("⚠ Falta agregar la columna 'nota' en la tabla rutas. SQL: ALTER TABLE rutas ADD COLUMN nota text;");
-          console.warn("SQL:\nALTER TABLE rutas ADD COLUMN nota text;");
-        }
-      } catch {}
-    }
+  const saveNota = async (id, value) => {
+    if (!id) return;
+    setRutas(prev => prev.map(r => r.id === id ? { ...r, nota: value } : r));
+    try {
+      const { error } = await supabase.from("rutas").update({ nota: value }).eq("id", id);
+      if (error && /does not exist|schema cache/i.test(error.message)) {
+        alert("⚠ Falta agregar la columna 'nota' en la tabla rutas. SQL: ALTER TABLE rutas ADD COLUMN nota text;");
+        console.warn("SQL:\nALTER TABLE rutas ADD COLUMN nota text;");
+      }
+    } catch {}
   };
 
   const loadRutas = async () => {
@@ -1715,8 +1707,14 @@ function ModuleEnvios() {
               const rutaIdx = rutas.indexOf(r);
               const dedupRow = getDedupInfo(r, rutaIdx);
               const bgGrupo = dedupRow ? "#F5F3FF" : "transparent";
+              // CRÍTICO: key debe ser estable por ruta (r.id). Con key={i} React
+              // reutilizaba el mismo DOM <tr> para rutas distintas cuando cambia
+              // el filtro/orden, y los inputs no controlados (penalización,
+              // nota, recolecciones) retenían el texto tecleado pero con un
+              // handler onBlur que ya apuntaba a OTRO operador — guardando la
+              // edición al operador equivocado.
               return (
-              <tr key={i} style={{ borderBottom: `1px solid ${C.border}`, position: "relative", backgroundColor: bgGrupo }}
+              <tr key={r.id ?? "idx-" + i} style={{ borderBottom: `1px solid ${C.border}`, position: "relative", backgroundColor: bgGrupo }}
                 onMouseEnter={ev => { if (!dedupRow) ev.currentTarget.style.backgroundColor = "#FAFBFF"; }}
                 onMouseLeave={ev => { ev.currentTarget.style.backgroundColor = bgGrupo; }}>
                 {/* Color bar */}
@@ -1823,8 +1821,8 @@ function ModuleEnvios() {
                       )}
                     </td>
                     <td style={{ padding: "8px 6px" }}>
-                      <input type="text" defaultValue={r.penalizacion || ""}
-                        onBlur={e => { if (e.target.value !== (r.penalizacion || "")) savePenalizacion(rutas.indexOf(r), e.target.value); }}
+                      <input key={"pen-" + (r.id ?? i)} type="text" defaultValue={r.penalizacion || ""}
+                        onBlur={e => { if (e.target.value !== (r.penalizacion || "")) savePenalizacion(r.id, e.target.value); }}
                         placeholder="costo*0.86"
                         title={"Fórmula que evalúa al COSTO REAL FINAL (no al descuento).\nVariable 'costo' = costo base.\nEj: costo*0.86 (paga 86%) · costo-250 (resta $250) · 1161 (costo fijo)"}
                         style={{ width: 80, padding: "4px 6px", borderRadius: 5, border: "1px solid " + (penInvalid ? C.red : C.border), fontSize: 11, fontFamily: "monospace", backgroundColor: penInvalid ? C.redBg : C.white }} />
@@ -1849,8 +1847,8 @@ function ModuleEnvios() {
                       {crossSinRec ? (
                         <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
                           <span title="Crossdock sin recolecciones" style={{ color: C.yellow, fontSize: 13 }}>⚠</span>
-                          <input type="number" min="0" defaultValue={r.recolecciones || 0}
-                            onBlur={e => { const v = parseInt(e.target.value) || 0; if (v !== (r.recolecciones || 0)) saveRecolecciones(rutas.indexOf(r), v); }}
+                          <input key={"rec-" + (r.id ?? i)} type="number" min="0" defaultValue={r.recolecciones || 0}
+                            onBlur={e => { const v = parseInt(e.target.value) || 0; if (v !== (r.recolecciones || 0)) saveRecolecciones(r.id, v); }}
                             placeholder="#"
                             title="Recolecciones (crossdock) — ingrese manualmente"
                             style={{ width: 50, padding: "3px 5px", borderRadius: 5, border: "1px solid " + C.yellow, fontSize: 11, textAlign: "center" }} />
@@ -1884,8 +1882,8 @@ function ModuleEnvios() {
                 </td>
                 {/* Nota — se imprime en la prefactura (columna Comentarios) */}
                 <td style={{ padding: "8px 6px" }}>
-                  <input type="text" defaultValue={r.nota || ""}
-                    onBlur={e => { if (e.target.value !== (r.nota || "")) saveNota(rutas.indexOf(r), e.target.value); }}
+                  <input key={"nota-" + (r.id ?? i)} type="text" defaultValue={r.nota || ""}
+                    onBlur={e => { if (e.target.value !== (r.nota || "")) saveNota(r.id, e.target.value); }}
                     placeholder="Nota para prefactura..."
                     title="Esta nota se imprime en la columna Comentarios de la prefactura para el día correspondiente."
                     style={{ width: "100%", minWidth: 140, padding: "5px 8px", borderRadius: 5, border: "1px solid " + (r.nota ? C.accent : C.border), fontSize: 11, backgroundColor: r.nota ? C.accentLight : C.white, color: r.nota ? C.accent : C.text, fontWeight: r.nota ? 600 : 400 }} />
