@@ -775,6 +775,22 @@ function ModuleEnvios() {
     if (r.id) await supabase.from("rutas").update({ recolecciones: v }).eq("id", r.id);
   };
 
+  const saveNota = async (rutaIdx, value) => {
+    const updated = [...rutas];
+    updated[rutaIdx] = { ...updated[rutaIdx], nota: value };
+    setRutas(updated);
+    const r = updated[rutaIdx];
+    if (r.id) {
+      try {
+        const { error } = await supabase.from("rutas").update({ nota: value }).eq("id", r.id);
+        if (error && /does not exist|schema cache/i.test(error.message)) {
+          alert("⚠ Falta agregar la columna 'nota' en la tabla rutas. SQL: ALTER TABLE rutas ADD COLUMN nota text;");
+          console.warn("SQL:\nALTER TABLE rutas ADD COLUMN nota text;");
+        }
+      } catch {}
+    }
+  };
+
   const loadRutas = async () => {
     setLoading(true);
     // Supabase caps a single select at 1000 rows. Use keyset pagination on
@@ -821,6 +837,7 @@ function ModuleEnvios() {
         kmEstimados: r.km_estimados || "—", kmRecorridos: r.km_recorridos || "—",
         tiempoEstimado: r.tiempo_estimado || "—", tiempoReal: r.tiempo_real || "—",
         penalizacion: r.penalizacion || "",
+        nota: r.nota || "",
       })));
     } else {
       setRutas([]);
@@ -1077,9 +1094,10 @@ function ModuleEnvios() {
       if (conteos[f] && a.tipo_unidad) conteos[f][a.tipo_unidad] = (conteos[f][a.tipo_unidad] || 0) + 1;
     });
 
-    // 5) Penalizaciones por fecha (sumadas desde rutas del proveedor en ese día,
+    // 5) Penalizaciones + notas por fecha (rutas del proveedor en ese día,
     //    filtradas por las operaciones seleccionadas si aplica)
     const penalPorFecha = {};
+    const notasPorFecha = {};
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
@@ -1089,6 +1107,12 @@ function ModuleEnvios() {
       const { baseCost, costoNuevo } = getCostoReal(r);
       const desc = baseCost - costoNuevo;
       if (desc > 0) penalPorFecha[f] = (penalPorFecha[f] || 0) + desc;
+      const notaTrim = (r.nota || "").trim();
+      if (notaTrim) {
+        if (!notasPorFecha[f]) notasPorFecha[f] = [];
+        // Evitar duplicados exactos
+        if (!notasPorFecha[f].includes(notaTrim)) notasPorFecha[f].push(notaTrim);
+      }
     });
 
     // 6) Renderizar HTML
@@ -1113,7 +1137,9 @@ function ModuleEnvios() {
       totalUnidades += sumaUnidades;
       subtotal += importeFila;
       const desc = penalPorFecha[f] || 0;
-      const comentarios = esDomingo && sumaUnidades === 0 ? "Domingo" : "";
+      const notas = (notasPorFecha[f] || []).join(" · ");
+      const baseComent = esDomingo && sumaUnidades === 0 ? "Domingo" : "";
+      const comentarios = [baseComent, notas].filter(Boolean).join(" — ");
       const bg = esDomingo ? "#FEF3C7" : "#FFFFFF";
       const tdsTipos = tipos.map(t => `<td class="num" style="background:${bg}">${cuentas[t] || ""}</td>`).join("");
       return `<tr style="background:${bg}">
@@ -1680,6 +1706,7 @@ function ModuleEnvios() {
               <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>$/Paq</th>
               <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Inter.</th>
               <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap", minWidth: 140 }}>Fecha despacho</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap", minWidth: 160 }}>Nota</th>
               <th style={{ width: 40, padding: "10px 6px", textAlign: "center", fontSize: 10, fontWeight: 700, color: C.textMuted, whiteSpace: "nowrap" }}>⋯</th>
             </tr>
           </thead>
@@ -1854,6 +1881,14 @@ function ModuleEnvios() {
                       <div style={{ fontSize: 10, color: C.textMuted }}>{hora || ""}</div>
                     </div>;
                   })() : "—"}
+                </td>
+                {/* Nota — se imprime en la prefactura (columna Comentarios) */}
+                <td style={{ padding: "8px 6px" }}>
+                  <input type="text" defaultValue={r.nota || ""}
+                    onBlur={e => { if (e.target.value !== (r.nota || "")) saveNota(rutas.indexOf(r), e.target.value); }}
+                    placeholder="Nota para prefactura..."
+                    title="Esta nota se imprime en la columna Comentarios de la prefactura para el día correspondiente."
+                    style={{ width: "100%", minWidth: 140, padding: "5px 8px", borderRadius: 5, border: "1px solid " + (r.nota ? C.accent : C.border), fontSize: 11, backgroundColor: r.nota ? C.accentLight : C.white, color: r.nota ? C.accent : C.text, fontWeight: r.nota ? 600 : 400 }} />
                 </td>
                 {/* More - action menu */}
                 <td style={{ padding: "14px 8px", textAlign: "center", position: "relative" }}>
