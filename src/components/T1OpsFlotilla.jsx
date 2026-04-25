@@ -3919,12 +3919,19 @@ function ModuleRuteo() {
         setSesionId(sid);
       }
       const nombreTrim = (sesionNombre || "").trim() || null;
-      const dbRows = pts.map((p, i) => ({ sesion: sid, nombre: nombreTrim, indice: i, latitud: p.lat, longitud: p.lng, cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1), datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k)))) }));
+      // Detecta si la BD tiene la columna `nombre` (sino la quita del payload)
+      const probeNombre = await supabase.from("ruteo_puntos").select("nombre").limit(1);
+      const tieneNombre = !probeNombre.error;
+      const dbRows = pts.map((p, i) => {
+        const row = { sesion: sid, indice: i, latitud: p.lat, longitud: p.lng, cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1), datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k)))) };
+        if (tieneNombre) row.nombre = nombreTrim;
+        return row;
+      });
       // Chunked insert (500 rows/batch) to avoid payload size issues
       for (let bi = 0; bi < dbRows.length; bi += 500) {
         await supabase.from("ruteo_puntos").insert(dbRows.slice(bi, bi + 500));
       }
-      setMsg(`✓ ${pts.length} puntos clusterizados en ${k} rutas${reuse ? " (sesión actualizada)" : ""}${nombreTrim ? ` · "${nombreTrim}"` : ""}.`);
+      setMsg(`✓ ${pts.length} puntos clusterizados en ${k} rutas${reuse ? " (sesión actualizada)" : ""}${nombreTrim && tieneNombre ? ` · "${nombreTrim}"` : ""}${nombreTrim && !tieneNombre ? " · (corre ALTER TABLE ruteo_puntos ADD COLUMN nombre text para guardar el nombre)" : ""}.`);
     } catch (err) { setMsg("Error: " + err.message); }
     setLoading(false);
   };
@@ -3939,11 +3946,17 @@ function ModuleRuteo() {
     if (sesionId) {
       await supabase.from("ruteo_puntos").delete().eq("sesion", sesionId);
       const nombreTrim = (sesionNombre || "").trim() || null;
-      const dbRows = puntos.map((p, i) => ({
-        sesion: sesionId, nombre: nombreTrim, indice: i, latitud: p.lat, longitud: p.lng,
-        cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1),
-        datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k))))
-      }));
+      const probeNombre = await supabase.from("ruteo_puntos").select("nombre").limit(1);
+      const tieneNombre = !probeNombre.error;
+      const dbRows = puntos.map((p, i) => {
+        const row = {
+          sesion: sesionId, indice: i, latitud: p.lat, longitud: p.lng,
+          cluster: assigns[i], ruta: "Ruta " + (assigns[i] + 1),
+          datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k))))
+        };
+        if (tieneNombre) row.nombre = nombreTrim;
+        return row;
+      });
       for (let bi = 0; bi < dbRows.length; bi += 500) {
         await supabase.from("ruteo_puntos").insert(dbRows.slice(bi, bi + 500));
       }
@@ -3969,7 +3982,10 @@ function ModuleRuteo() {
 
   const loadHistorico = async () => {
     setLoadingHist(true);
-    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("sesion, created_at, cluster, nombre").order("created_at", { ascending: false }));
+    // Resiliente a BD vieja sin la columna `nombre` (probe + fallback)
+    const probe = await supabase.from("ruteo_puntos").select("sesion, created_at, cluster, nombre").limit(1);
+    const cols = probe.error ? "sesion, created_at, cluster" : "sesion, created_at, cluster, nombre";
+    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select(cols).order("created_at", { ascending: false }));
     if (data && data.length > 0) {
       const grouped = {};
       data.forEach(r => {
@@ -4474,11 +4490,20 @@ function ModuleAsignaciones() {
     return all;
   };
 
+  // Carga ruteo_puntos resiliente: intenta con la columna `nombre` y si la BD
+  // no la tiene aún (no se corrió el ALTER TABLE), cae al select sin `nombre`.
+  const fetchPuntosResumen = async () => {
+    const probe = await supabase.from("ruteo_puntos").select("sesion, created_at, cluster, nombre").limit(1);
+    const tieneNombre = !probe.error;
+    const cols = tieneNombre ? "sesion, created_at, cluster, nombre" : "sesion, created_at, cluster";
+    return fetchAllPaginated(() => supabase.from("ruteo_puntos").select(cols).order("created_at", { ascending: false }));
+  };
+
   const loadData = async () => {
     setLoading(true);
     const [{ data: cData }, rData] = await Promise.all([
       supabase.from("carriers").select("*").order("proveedor"),
-      fetchAllPaginated(() => supabase.from("ruteo_puntos").select("sesion, created_at, cluster, nombre").order("created_at", { ascending: false })),
+      fetchPuntosResumen(),
     ]);
     const umCarriers = (cData || []).filter(c => c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—" && (c.operacion || "").toLowerCase().includes("ltima"));
     setCarriers(umCarriers);
