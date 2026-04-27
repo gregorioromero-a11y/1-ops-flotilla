@@ -1582,7 +1582,10 @@ function ModuleEnvios() {
     return { r, info, baseCost: info.baseCost, descuento, costoNuevo, divisor, costoPorPaq, dedup, costoContado };
   });
   const costoTotalDiaNuevo = rutaCosto.reduce((s, x) => s + x.costoContado, 0);
-  const entregadosTotal = rutas.reduce((s, r) => s + (r.entregados || 0), 0);
+  // Paquetes entregados para el costo/paquete: TODAS las operaciones EXCEPTO
+  // los entregados de Crossdock/HalfMile (esos son media milla y no suman al
+  // KPI de paquetes entregados al cliente final).
+  const entregadosTotal = rutas.reduce((s, r) => s + (isCrossdock(r) ? 0 : (r.entregados || 0)), 0);
   const costoPorPaqGlobal = entregadosTotal > 0 ? (costoTotalDiaNuevo / entregadosTotal) : 0;
   const sinAsistencia = rutaCosto.filter(x => x.info.missing && !esPermisible(x.r)).length;
   const sinAsistenciaPermisible = rutaCosto.filter(x => x.info.missing && esPermisible(x.r)).length;
@@ -1755,7 +1758,7 @@ function ModuleEnvios() {
       {rutas.length > 0 && (
         <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
           <StatCard label="Costo total del día" value={"$" + costoTotalDiaNuevo.toLocaleString(undefined, {maximumFractionDigits:0})} subvalue={"incluye última milla + crossdock"} icon={<IC.Dollar />} color={C.accent} />
-          <StatCard label="Costo / paquete entregado" value={entregadosTotal>0 ? "$" + costoPorPaqGlobal.toFixed(2) : "—"} subvalue={entregadosTotal + " paquetes entregados"} icon={<IC.Package />} color={C.green} />
+          <StatCard label="Costo / paquete entregado" value={entregadosTotal>0 ? "$" + costoPorPaqGlobal.toFixed(2) : "—"} subvalue={entregadosTotal + " paquetes (excluye crossdock)"} icon={<IC.Package />} color={C.green} />
           <StatCard label="Rutas sin asistencia" value={sinAsistencia.toString()} subvalue={sinAsistenciaPermisible>0 ? "+"+sinAsistenciaPermisible+" permisibles (foráneo/PETCO)" : sinAsistencia>0 ? "operador no registrado" : "todos registrados"} icon={<IC.Users />} color={sinAsistencia>0?C.red:C.textMuted} />
           <StatCard label="Crossdock sin recolecciones" value={crossSinRecol.toString()} subvalue={crossSinRecol>0 ? "corregir manualmente" : "OK"} icon={<IC.Map />} color={crossSinRecol>0?C.yellow:C.textMuted} />
         </div>
