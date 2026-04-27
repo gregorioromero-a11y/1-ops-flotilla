@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ============================================================
@@ -1056,7 +1056,7 @@ function ModuleEnvios() {
   // Lista de proveedores con unidades trabajadas en el periodo (asistencia O rutas)
   const proveedoresEnPeriodo = (() => {
     const set = new Set();
-    construirUnidadesTrabajadas().forEach(u => {
+    unidadesTrabajadas.forEach(u => {
       if (u.fecha >= fechaDesde && u.fecha <= fechaHasta && u.proveedor) set.add(u.proveedor);
     });
     return [...set].sort();
@@ -1098,67 +1098,65 @@ function ModuleEnvios() {
   // para que el usuario vea lo que existe y lo que no.
   const operacionesParaProveedor = () => OPERACIONES_CANONICAS;
 
-  // Construye la lista de "unidades trabajadas" combinando asistencia + rutas.
+  // Memoizada para no recalcular en cada render — cuesta O(rutas × asistencia)
+  // y se llama varias veces por render desde el JSX (proveedoresEnPeriodo,
+  // conteoOperacion × 7 operaciones, etc.).
   //
-  // Por qué necesita ambas fuentes: el módulo /checkin y el de Asistencia
-  // Diaria sólo permiten registrar 3 operaciones (Última Milla, CrossDock,
-  // Logística Inversa). PETCO/Foráneo NUNCA aparecen en asistencia — viven
-  // en la tabla `rutas` como `tipo_ruta`. Sin esta fusión, la prefactura
-  // de PETCO/Foráneo siempre da 0.
-  //
-  // Dedup automático por key = (proveedor_norm, operador, fecha, tipo_unidad,
-  // op_canonica). Misma key = 1 unidad facturable, sin importar fuente o
-  // labels duplicados.
-  const construirUnidadesTrabajadas = () => {
-    const map = new Map();
-    const addRow = ({ proveedor, operador, fecha, tipo_unidad, opCanonica, dedupId }) => {
-      if (!proveedor || !fecha || !opCanonica || opCanonica === "Sin especificar") return;
-      const opKey = operador || `__${dedupId}`;
-      const key = `${norm(proveedor)}|${opKey}|${fecha}|${tipo_unidad || ""}|${opCanonica}`;
-      if (!map.has(key)) {
-        map.set(key, { proveedor, operador: operador || "(sin operador)", fecha, tipo_unidad, opCanonica });
-      }
-    };
+  // Combina asistencia + rutas porque /checkin y Asistencia Diaria sólo
+  // permiten 3 operaciones; PETCO/Foráneo viven SÓLO en rutas.tipo_ruta.
+  const unidadesTrabajadas = useMemo(() => {
+    try {
+      const map = new Map();
+      const addRow = ({ proveedor, operador, fecha, tipo_unidad, opCanonica, dedupId }) => {
+        if (!proveedor || !fecha || !opCanonica || opCanonica === "Sin especificar") return;
+        const opKey = operador || `__${dedupId}`;
+        const key = `${norm(proveedor)}|${opKey}|${fecha}|${tipo_unidad || ""}|${opCanonica}`;
+        if (!map.has(key)) {
+          map.set(key, { proveedor, operador: operador || "(sin operador)", fecha, tipo_unidad, opCanonica });
+        }
+      };
 
-    // Fuente 1: asistencia (incluye check-ins automáticos + Registro Manual)
-    asistencia.forEach(a => {
-      const f = (a.fecha || "").substring(0, 10);
-      const operadorReal = a.nombre_operador && a.nombre_operador !== "Registro manual" ? a.nombre_operador : null;
-      addRow({
-        proveedor: a.proveedor,
-        operador: operadorReal,
-        fecha: f,
-        tipo_unidad: a.tipo_unidad,
-        opCanonica: normalizeOperacion(a.tipo_operacion),
-        dedupId: "asistencia_" + a.id,
+      asistencia.forEach(a => {
+        const f = (a.fecha || "").substring(0, 10);
+        const operadorReal = a.nombre_operador && a.nombre_operador !== "Registro manual" ? a.nombre_operador : null;
+        addRow({
+          proveedor: a.proveedor,
+          operador: operadorReal,
+          fecha: f,
+          tipo_unidad: a.tipo_unidad,
+          opCanonica: normalizeOperacion(a.tipo_operacion),
+          dedupId: "asistencia_" + (a.id ?? Math.random()),
+        });
       });
-    });
 
-    // Fuente 2: rutas (única fuente de PETCO/Foráneo). Infiere proveedor +
-    // tipo_unidad usando getCostoInfo, que ya tiene fallbacks robustos.
-    rutas.forEach(r => {
-      const f = (r.salida || "").substring(0, 10);
-      if (!f) return;
-      const info = getCostoInfo(r);
-      if (!info.proveedor) return;
-      addRow({
-        proveedor: info.proveedor,
-        operador: r.operador,
-        fecha: f,
-        tipo_unidad: info.tipo_unidad || "Sedan",
-        opCanonica: normalizeOperacion(r.tipoRuta), // tipoRuta de la ruta, no de asistencia
-        dedupId: "ruta_" + r.id,
+      rutas.forEach(r => {
+        const f = (r.salida || "").substring(0, 10);
+        if (!f) return;
+        const info = getCostoInfo(r);
+        if (!info || !info.proveedor) return;
+        addRow({
+          proveedor: info.proveedor,
+          operador: r.operador,
+          fecha: f,
+          tipo_unidad: info.tipo_unidad || "Sedan",
+          opCanonica: normalizeOperacion(r.tipoRuta),
+          dedupId: "ruta_" + (r.id ?? Math.random()),
+        });
       });
-    });
 
-    return Array.from(map.values());
-  };
+      return Array.from(map.values());
+    } catch (err) {
+      console.error("[unidadesTrabajadas] error:", err);
+      return [];
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asistencia, rutas, carriers]);
 
   // Cuenta de unidades para (proveedor, operación canónica) en el periodo
   const conteoOperacion = (proveedor, opCanonica) => {
     if (!proveedor || !opCanonica) return 0;
     const provNorm = norm(proveedor);
-    return construirUnidadesTrabajadas().filter(u =>
+    return unidadesTrabajadas.filter(u =>
       norm(u.proveedor) === provNorm &&
       u.opCanonica === opCanonica &&
       u.fecha >= fechaDesde && u.fecha <= fechaHasta
@@ -1171,7 +1169,7 @@ function ModuleEnvios() {
     const provNorm = norm(proveedor);
 
     // 1) Recolectar unidades trabajadas (asistencia + rutas, deduplicadas)
-    const unidades = construirUnidadesTrabajadas().filter(u =>
+    const unidades = unidadesTrabajadas.filter(u =>
       norm(u.proveedor) === provNorm &&
       u.fecha >= fechaDesde && u.fecha <= fechaHasta &&
       (!opsPermitidas || opsPermitidas.has(u.opCanonica))
