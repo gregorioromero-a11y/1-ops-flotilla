@@ -1161,8 +1161,15 @@ function ModuleEnvios() {
   // la prefactura — sólo se usa visualmente en la tabla de Registrar Envíos
   // como "asistencias sin ruta" (filas sintéticas con badge ASISTENCIA),
   // pero la prefactura las ignora por completo.
+  //
+  // Para inferir el tipo_unidad cuando getCostoInfo no lo encuentra (operador
+  // sin asistencia + operación no permisible), busca en el catálogo carriers
+  // del proveedor. Si el proveedor sólo tiene UN tipo en esa operación, usa
+  // ese. Si tiene varios, el más barato. NUNCA hardcodear "Sedan" — ADET por
+  // ejemplo no tiene Sedan, eso creaba columnas fantasma en el PDF.
   const unidadesEnvios = (provNorm, opsPermitidas) => {
     const out = [];
+    const ignoradas = []; // para diagnóstico
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
@@ -1175,9 +1182,38 @@ function ModuleEnvios() {
       if (opCanonica === "Sin especificar") return;
       if (opsPermitidas && !opsPermitidas.has(opCanonica)) return;
       const info = getCostoInfo(r);
-      const tipo_unidad = info.tipo_unidad || "Sedan";
+      let tipo_unidad = info.tipo_unidad;
+      // Fallback al catálogo del proveedor (NUNCA Sedan hardcoded)
+      if (!tipo_unidad) {
+        const opMatchCarrier = (cOp) => {
+          const o = (cOp || "").toLowerCase();
+          if (opCanonica === "Última milla") return o.includes("ltima");
+          if (opCanonica === "Crossdock") return o.includes("cross") || o.includes("inversa") || o.includes("half");
+          if (opCanonica.startsWith("PETCO")) return o.includes("petco");
+          if (opCanonica.startsWith("Foráneo")) return o.includes("foraneo") || o.includes("foráneo") || o.includes("ltima");
+          return true;
+        };
+        const candidates = carriers.filter(c =>
+          norm(c.proveedor) === provNorm
+          && c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—"
+          && opMatchCarrier(c.operacion)
+        );
+        if (candidates.length === 1) tipo_unidad = candidates[0].tipo_unidad;
+        else if (candidates.length > 1) {
+          tipo_unidad = candidates.slice().sort((a, b) =>
+            (parseFloat(a.costo_unidad) || 0) - (parseFloat(b.costo_unidad) || 0)
+          )[0].tipo_unidad;
+        }
+      }
+      if (!tipo_unidad) {
+        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta });
+        return; // No se pudo determinar — no se cuenta
+      }
       out.push({ fecha: f, tipo_unidad, opCanonica });
     });
+    if (ignoradas.length > 0 && typeof window !== "undefined") {
+      console.warn(`[Prefactura] ${ignoradas.length} ruta(s) ignorada(s) por no poder determinar tipo_unidad (operador sin asistencia y proveedor sin catálogo carriers que matchee la operación):`, ignoradas);
+    }
     return out;
   };
 
