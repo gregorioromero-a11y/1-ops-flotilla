@@ -635,7 +635,12 @@ function ModuleEnvios() {
       supabase.from("carriers").select("*"),
       supabase.from("operadores").select("nombre, proveedor, tipo_licencia, activo"),
     ]);
-    setAsistencia(allAsistencia.filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual"));
+    // IMPORTANTE: NO filtrar "Registro manual" aquí — esas filas son
+    // asistencia legítima registrada desde el módulo de Asistencia Diaria
+    // y deben contarse en la prefactura. Los lugares que dependen del
+    // nombre real del operador (cost lookup por operador, dropdown de
+    // captura manual) las descartan inline.
+    setAsistencia(allAsistencia);
     setCarriers(cData || []);
     setOperadoresCatalogo((opsData || []).filter(o => o.activo !== false));
   };
@@ -673,8 +678,9 @@ function ModuleEnvios() {
     const fecha = (r.salida || "").substring(0, 10);
     if (!fecha || !r.operador) return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
     const opNorm = norm(r.operador);
-    // 1) Same-day match (preferred)
-    const sameDay = asistencia.filter(a => (a.fecha || "").substring(0, 10) === fecha && norm(a.nombre_operador) === opNorm);
+    // 1) Same-day match (preferred). Excluye filas "Registro manual" porque
+    // representan asistencia agregada sin operador específico.
+    const sameDay = asistencia.filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual" && (a.fecha || "").substring(0, 10) === fecha && norm(a.nombre_operador) === opNorm);
     if (sameDay.length) {
       const a = sameDay[0];
       const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
@@ -683,7 +689,7 @@ function ModuleEnvios() {
     }
     // 2) Fallback for permissible labels: most-recent asistencia for this operator
     if (esPermisible(r)) {
-      const fallback = asistencia.filter(a => norm(a.nombre_operador) === opNorm);
+      const fallback = asistencia.filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual" && norm(a.nombre_operador) === opNorm);
       if (fallback.length) {
         // asistencia is already sorted desc by fecha in loadAsistenciaCarriers
         const a = fallback[0];
@@ -946,10 +952,14 @@ function ModuleEnvios() {
     operadoresCatalogo.forEach(o => add(o.proveedor, {
       nombre: o.nombre, tipo_unidad: "", placa: "", correo: "",
     }));
-    asistencia.forEach(a => add(a.proveedor, {
-      nombre: a.nombre_operador, tipo_unidad: a.tipo_unidad || "",
-      placa: a.placa || "", correo: a.correo || "",
-    }));
+    asistencia.forEach(a => {
+      // No usar entradas "Registro manual" como nombres de operadores reales
+      if (!a.nombre_operador || a.nombre_operador === "Registro manual") return;
+      add(a.proveedor, {
+        nombre: a.nombre_operador, tipo_unidad: a.tipo_unidad || "",
+        placa: a.placa || "", correo: a.correo || "",
+      });
+    });
     return map;
   })();
   const getOperadoresFor = (proveedor) => operadoresPorCarrier[norm(proveedor)] || new Map();
