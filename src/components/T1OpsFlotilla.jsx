@@ -1757,7 +1757,7 @@ function ModuleEnvios() {
       {/* Costo real calculado (rutas × asistencia × carriers) */}
       {rutas.length > 0 && (
         <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
-          <StatCard label="Costo total del día" value={"$" + costoTotalDiaNuevo.toLocaleString(undefined, {maximumFractionDigits:0})} subvalue={"incluye última milla + crossdock"} icon={<IC.Dollar />} color={C.accent} />
+          <StatCard label="Costo total del día" value={"$" + costoTotalDiaNuevo.toLocaleString(undefined, {maximumFractionDigits:0})} subvalue={"suma de todas las rutas"} icon={<IC.Dollar />} color={C.accent} />
           <StatCard label="Costo / paquete entregado" value={entregadosTotal>0 ? "$" + costoPorPaqGlobal.toFixed(2) : "—"} subvalue={entregadosTotal + " paquetes (excluye crossdock)"} icon={<IC.Package />} color={C.green} />
           <StatCard label="Rutas sin asistencia" value={sinAsistencia.toString()} subvalue={sinAsistenciaPermisible>0 ? "+"+sinAsistenciaPermisible+" permisibles (foráneo/PETCO)" : sinAsistencia>0 ? "operador no registrado" : "todos registrados"} icon={<IC.Users />} color={sinAsistencia>0?C.red:C.textMuted} />
           <StatCard label="Crossdock sin recolecciones" value={crossSinRecol.toString()} subvalue={crossSinRecol>0 ? "corregir manualmente" : "OK"} icon={<IC.Map />} color={crossSinRecol>0?C.yellow:C.textMuted} />
