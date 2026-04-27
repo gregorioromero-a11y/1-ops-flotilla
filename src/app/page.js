@@ -9,8 +9,10 @@ export default function Home() {
   const [authenticated, setAuthenticated] = useState(false);
   const timerRef = useRef(null);
 
+  // Cualquier carga / refresh de la página manda a login. NO se persiste
+  // sesión entre recargas. Limpiamos el flag al montar por si quedó de antes.
   useEffect(() => {
-    if (sessionStorage.getItem("t1_auth") === "1") setAuthenticated(true);
+    try { sessionStorage.removeItem("t1_auth"); } catch {}
   }, []);
 
   // Auto-logout por inactividad (60s sin mouse/teclado/scroll/touch)

@@ -20,7 +20,6 @@ export default function LoginScreen({ onLogin }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (user === "admin" && pass === "almacen2026") {
-      sessionStorage.setItem("t1_auth", "1");
       onLogin();
     } else {
       setError("Usuario o contraseña incorrectos");
