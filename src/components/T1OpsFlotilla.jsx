@@ -2003,6 +2003,17 @@ function ModuleEnvios() {
                         ASISTENCIA
                       </span>
                     )}
+                    {!r._esAsistencia && (String(r.idRuta || "").startsWith("MAN-") ? (
+                      <span title="Ruta capturada manualmente desde el botón Captura manual."
+                        style={{ fontSize: 9, fontWeight: 800, color: "#16A34A", padding: "2px 6px", borderRadius: 10, backgroundColor: "#DCFCE7", letterSpacing: "0.05em" }}>
+                        MANUAL
+                      </span>
+                    ) : (
+                      <span title="Ruta importada automáticamente desde la carga masiva de Excel."
+                        style={{ fontSize: 9, fontWeight: 800, color: "#7C8495", padding: "2px 6px", borderRadius: 10, backgroundColor: "#F1F5F9", letterSpacing: "0.05em" }}>
+                        EXCEL
+                      </span>
+                    ))}
                     {dedupRow && (
                       <span title={"Forma parte de un grupo de " + dedupRow.groupSize + " rutas del mismo operador hoy"}
                         style={{ fontSize: 9, fontWeight: 800, color: "#7C3AED", padding: "2px 6px", borderRadius: 10, backgroundColor: "#EDE9FE", letterSpacing: "0.05em" }}>
@@ -3465,9 +3476,22 @@ function ModuleCostos() {
                       <td style={{ padding:"10px 14px", color:C.textMuted, whiteSpace:"nowrap" }}>{r.fecha}</td>
                       <td style={{ padding:"10px 14px", color:C.textMuted, whiteSpace:"nowrap" }}>{fmt(r.timestamp)}</td>
                       <td style={{ padding:"10px 14px", fontWeight:600, color:C.text }}>
-                        {r.nombre_operador === "Registro manual"
-                          ? <span style={{color:C.textMuted,fontStyle:"italic"}}>Manual</span>
-                          : r.nombre_operador}
+                        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                          {r.nombre_operador === "Registro manual"
+                            ? <span style={{color:C.textMuted,fontStyle:"italic"}}>Manual</span>
+                            : <span>{r.nombre_operador}</span>}
+                          {(r.latitud != null && r.longitud != null) ? (
+                            <span title="Registro automático vía /checkin (con geolocalización)"
+                              style={{ fontSize:9, fontWeight:800, color:"#0284C7", padding:"2px 6px", borderRadius:10, backgroundColor:"#DBEAFE", letterSpacing:"0.05em" }}>
+                              AUTO
+                            </span>
+                          ) : (
+                            <span title="Registro capturado manualmente desde el panel"
+                              style={{ fontSize:9, fontWeight:800, color:"#16A34A", padding:"2px 6px", borderRadius:10, backgroundColor:"#DCFCE7", letterSpacing:"0.05em" }}>
+                              MANUAL
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td style={{ padding:"10px 14px", color:C.text }}>{r.proveedor}</td>
                       <td style={{ padding:"10px 14px" }}>
