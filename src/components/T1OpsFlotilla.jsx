@@ -1076,21 +1076,20 @@ function ModuleEnvios() {
 
   // Mapea variantes de nombres (capitalización, acentos, alias) al canónico.
   // CrossDock + Logística Inversa cuentan como Crossdock.
+  // Reusa `norm` (definida arriba) que usa el rango Unicode correcto
+  // ̀-ͯ para quitar acentos de forma confiable.
   const normalizeOperacion = (raw) => {
     if (!raw) return "Sin especificar";
-    const n = String(raw)
-      .toLowerCase()
-      .normalize("NFD").replace(/[̀-ͯ]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (n.includes("ultima milla") || n === "lm") return "Última milla";
-    if (n.includes("crossdock") || n.includes("cross dock") || n.includes("logistica inversa") || n.includes("logística inversa") || n.includes("halfmile") || n.includes("half mile")) return "Crossdock";
+    const n = norm(raw);
+    if (n.includes("ultima milla") || n === "lm" || n === "um") return "Última milla";
+    if (n.includes("crossdock") || n.includes("cross dock") || n.includes("logistica inversa") || n.includes("halfmile") || n.includes("half mile") || n.includes("logistica") || n.includes("inversa")) return "Crossdock";
     if (n.includes("petco") && n.includes("monterrey")) return "PETCO Monterrey";
-    if (n === "petco" || n.startsWith("petco ")) return "PETCO";
-    if (n.includes("foraneo") || n.includes("foráneo")) {
+    if (n.includes("petco")) return "PETCO";
+    if (n.includes("foraneo")) {
       if (n.includes("monterrey") || n.includes("mty")) return "Foráneo Monterrey";
       if (n.includes("gdl") || n.includes("guadalajara")) return "Foráneo GDL";
       if (n.includes("puebla")) return "Foráneo Puebla";
+      return "Foráneo Puebla"; // default si sólo dice "Foráneo"
     }
     return raw; // mantener cualquier otro tal cual
   };
@@ -1123,12 +1122,15 @@ function ModuleEnvios() {
     return out;
   };
 
-  // Cuenta de asistencias normalizadas + deduplicadas por unidad real
+  // Cuenta de asistencias normalizadas + deduplicadas por unidad real.
+  // Compara proveedor con normalización (case/acento/espacio insensible)
+  // para no perder filas por diferencias de capitalización en BD.
   const conteoOperacion = (proveedor, opCanonica) => {
     if (!proveedor || !opCanonica) return 0;
+    const provNorm = norm(proveedor);
     const candidatas = asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
-      if (!(f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor)) return false;
+      if (!(f >= fechaDesde && f <= fechaHasta && norm(a.proveedor) === provNorm)) return false;
       return normalizeOperacion(a.tipo_operacion) === opCanonica;
     });
     return dedupAsistencia(candidatas).length;
@@ -1144,13 +1146,16 @@ function ModuleEnvios() {
     // 1) Filtrar asistencia del periodo + proveedor (+ operaciones seleccionadas)
     //    Dedup: si la misma unidad (operador real) aparece bajo varios labels
     //    en el mismo día (ej. "CrossDock" + "Logística Inversa"), cuenta UNA vez.
+    //    Compara proveedor con normalización para no perder filas por casing.
+    const provNorm = norm(proveedor);
     const filtradaCruda = asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
-      if (!(f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor)) return false;
+      if (!(f >= fechaDesde && f <= fechaHasta && norm(a.proveedor) === provNorm)) return false;
       if (!opMatch(a)) return false;
       return true;
     });
     const filtrada = dedupAsistencia(filtradaCruda);
+    console.log(`[Prefactura] ${proveedor} ${fechaDesde}→${fechaHasta} ops=[${operacionesFiltro?.join(",")}]: ${filtradaCruda.length} crudas, ${filtrada.length} dedup, tipos=[${[...new Set(filtrada.map(a => a.tipo_unidad))].join(",")}]`);
     // 2) Costo por tipo_unidad desde catálogo carriers
     const costoPorTipo = {};
     const tiposSet = new Set();
