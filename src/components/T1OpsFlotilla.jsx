@@ -1184,14 +1184,17 @@ function ModuleEnvios() {
       if (opsPermitidas && !opsPermitidas.has(opCanonica)) return;
       const info = getCostoInfo(r);
       const baseCost = parseFloat(info.baseCost) || 0;
-      debug.push({ idRuta: r.id, fecha: f, operador: r.operador, carrier: r.carrier, tipoRuta: r.tipoRuta, opCanonica, baseCost_raw: info.baseCost, baseCost_parsed: baseCost, info_proveedor: info.proveedor, info_tipo_unidad: info.tipo_unidad, info_missing: info.missing, info_flatRate: info.flatRate, esPermisible: esPermisible(r) });
-      // REGLA PRIMARIA: si la línea tiene costo 0 (lo que se ve en la tabla
-      // como ⚠ $0), NO se considera en facturación. Punto. NO se hace
-      // fallback al catálogo para "rescatar" el costo — si la tabla dice $0,
-      // la prefactura dice $0. La penalización (si la hay y da descuento)
-      // se aplica por separado en el bloque de descuentos.
-      if (baseCost <= 0) {
-        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: "costo 0 — no cuenta como unidad" });
+      // Costo después de penalización (lo que realmente se factura por esa
+      // línea). Si la fórmula la deja en 0 o negativo, no es facturable.
+      const costoReal = getCostoReal(r);
+      const costoNuevo = parseFloat(costoReal.costoNuevo) || 0;
+      debug.push({ idRuta: r.id, fecha: f, operador: r.operador, baseCost, costoNuevo, info_missing: info.missing });
+      // REGLA: si la línea tiene costo final 0 (sea por baseCost = 0, o por
+      // penalización que lo lleva a 0/negativo), NO se considera como unidad.
+      // El descuento (si hay) se aplica por separado en el bloque de
+      // penalizaciones — sólo el descuento entra al subtotal, sin sumar unidad.
+      if (costoNuevo <= 0) {
+        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: baseCost <= 0 ? "baseCost = 0" : `penalización lleva costoNuevo a ${costoNuevo}` });
         return;
       }
       // Tiene costo > 0. Inferir tipo_unidad si falta (sólo para tipo, NO
