@@ -551,6 +551,9 @@ function RiskIcon({ level }) {
 function ModuleEnvios() {
   const [rutas, setRutas] = useState([]);
   const [filter, setFilter] = useState("Todas");
+  const [filterProveedor, setFilterProveedor] = useState("Todos");
+  const [filterOperador, setFilterOperador] = useState("Todos");
+  const [filterOperacion, setFilterOperacion] = useState("Todas");
   const [showUpload, setShowUpload] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
@@ -1468,12 +1471,56 @@ function ModuleEnvios() {
   };
 
   const filtered = rutas.filter(r => {
-    if (filter === "Todas") return true;
-    if (filter === "En ruta") return r.status === "En curso";
-    if (filter === "En riesgo") return getRisk(r) === "high" || getRisk(r) === "medium";
-    if (filter === "Completadas") return r.status === "Completada";
+    // Status filter (existente)
+    if (filter === "En ruta" && r.status !== "En curso") return false;
+    if (filter === "En riesgo" && !(getRisk(r) === "high" || getRisk(r) === "medium")) return false;
+    if (filter === "Completadas" && r.status !== "Completada") return false;
+    // Proveedor: matchea el carrier de la ruta O el proveedor inferido por asistencia
+    if (filterProveedor !== "Todos") {
+      const provNorm = norm(filterProveedor);
+      const carrierMatch = norm(r.carrier) === provNorm;
+      const info = carrierMatch ? null : getCostoInfo(r);
+      const inferidoMatch = info && info.proveedor && norm(info.proveedor) === provNorm;
+      if (!carrierMatch && !inferidoMatch) return false;
+    }
+    // Operador
+    if (filterOperador !== "Todos" && norm(r.operador) !== norm(filterOperador)) return false;
+    // Tipo operación: usa el tipo_ruta normalizado
+    if (filterOperacion !== "Todas" && normalizeOperacion(r.tipoRuta) !== filterOperacion) return false;
     return true;
   }).slice().sort((a, b) => (a.operador || "").localeCompare(b.operador || "", "es", { sensitivity: "base" }));
+
+  // Listas para los dropdowns de filtro (de las rutas actuales)
+  const proveedoresFiltro = (() => {
+    const set = new Set();
+    rutas.forEach(r => { if (r.carrier && r.carrier !== "—") set.add(r.carrier); });
+    // Dedup case-insensitive: conservar la variante con más apariciones
+    const counts = new Map();
+    rutas.forEach(r => {
+      if (!r.carrier || r.carrier === "—") return;
+      const k = norm(r.carrier);
+      if (!counts.has(k)) counts.set(k, new Map());
+      counts.get(k).set(r.carrier, (counts.get(k).get(r.carrier) || 0) + 1);
+    });
+    const finales = [];
+    counts.forEach(variants => {
+      let best = null, bestCount = -1;
+      variants.forEach((c, n) => { if (c > bestCount) { best = n; bestCount = c; } });
+      if (best) finales.push(best);
+    });
+    return finales.sort();
+  })();
+
+  const operadoresFiltro = (() => {
+    const provNorm = filterProveedor !== "Todos" ? norm(filterProveedor) : null;
+    const set = new Set();
+    rutas.forEach(r => {
+      if (!r.operador || r.operador === "Sin nombre") return;
+      if (provNorm && norm(r.carrier) !== provNorm) return;
+      set.add(r.operador);
+    });
+    return [...set].sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }));
+  })();
 
   const totalRutas = rutas.length;
   const totalEntregados = rutas.reduce((s, r) => s + r.entregados, 0);
@@ -1846,6 +1893,42 @@ function ModuleEnvios() {
             }}>{f}</button>
           ))}
         </div>
+      </div>
+
+      {/* Filtros adicionales: Proveedor / Operador / Tipo de operación */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14, padding: "10px 14px", backgroundColor: C.white, borderRadius: 10, border: "1px solid " + C.border }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>Filtros:</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: C.textMuted }}>Proveedor</label>
+          <select value={filterProveedor} onChange={e => { setFilterProveedor(e.target.value); setFilterOperador("Todos"); }}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid " + (filterProveedor !== "Todos" ? C.accent : C.border), fontSize: 12, fontWeight: 600, backgroundColor: filterProveedor !== "Todos" ? C.accentLight : C.white, color: filterProveedor !== "Todos" ? C.accent : C.text, cursor: "pointer" }}>
+            <option value="Todos">Todos</option>
+            {proveedoresFiltro.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: C.textMuted }}>Operador</label>
+          <select value={filterOperador} onChange={e => setFilterOperador(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid " + (filterOperador !== "Todos" ? C.accent : C.border), fontSize: 12, fontWeight: 600, backgroundColor: filterOperador !== "Todos" ? C.accentLight : C.white, color: filterOperador !== "Todos" ? C.accent : C.text, cursor: "pointer", maxWidth: 240 }}>
+            <option value="Todos">Todos ({operadoresFiltro.length})</option>
+            {operadoresFiltro.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: C.textMuted }}>Tipo operación</label>
+          <select value={filterOperacion} onChange={e => setFilterOperacion(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid " + (filterOperacion !== "Todas" ? C.accent : C.border), fontSize: 12, fontWeight: 600, backgroundColor: filterOperacion !== "Todas" ? C.accentLight : C.white, color: filterOperacion !== "Todas" ? C.accent : C.text, cursor: "pointer" }}>
+            <option value="Todas">Todas</option>
+            {OPERACIONES_CANONICAS.map(op => <option key={op} value={op}>{op}</option>)}
+          </select>
+        </div>
+        {(filterProveedor !== "Todos" || filterOperador !== "Todos" || filterOperacion !== "Todas") && (
+          <button onClick={() => { setFilterProveedor("Todos"); setFilterOperador("Todos"); setFilterOperacion("Todas"); }}
+            style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.red, backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            ✕ Limpiar
+          </button>
+        )}
+        <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: C.textMuted }}>{filtered.length} resultado{filtered.length === 1 ? "" : "s"}</span>
       </div>
 
       {/* Bulk action bar */}
