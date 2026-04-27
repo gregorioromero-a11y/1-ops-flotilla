@@ -1169,7 +1169,8 @@ function ModuleEnvios() {
   // ejemplo no tiene Sedan, eso creaba columnas fantasma en el PDF.
   const unidadesEnvios = (provNorm, opsPermitidas) => {
     const out = [];
-    const ignoradas = []; // para diagnóstico
+    const ignoradas = [];
+    const debug = []; // diagnóstico exhaustivo
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
@@ -1183,6 +1184,7 @@ function ModuleEnvios() {
       if (opsPermitidas && !opsPermitidas.has(opCanonica)) return;
       const info = getCostoInfo(r);
       const baseCost = parseFloat(info.baseCost) || 0;
+      debug.push({ idRuta: r.id, fecha: f, operador: r.operador, carrier: r.carrier, tipoRuta: r.tipoRuta, opCanonica, baseCost_raw: info.baseCost, baseCost_parsed: baseCost, info_proveedor: info.proveedor, info_tipo_unidad: info.tipo_unidad, info_missing: info.missing, info_flatRate: info.flatRate, esPermisible: esPermisible(r) });
       // REGLA PRIMARIA: si la línea tiene costo 0 (lo que se ve en la tabla
       // como ⚠ $0), NO se considera en facturación. Punto. NO se hace
       // fallback al catálogo para "rescatar" el costo — si la tabla dice $0,
@@ -1222,8 +1224,17 @@ function ModuleEnvios() {
       }
       out.push({ fecha: f, tipo_unidad, opCanonica });
     });
-    if (ignoradas.length > 0 && typeof window !== "undefined") {
-      console.warn(`[Prefactura] ${ignoradas.length} ruta(s) ignorada(s) en el conteo de unidades:`, ignoradas);
+    if (typeof window !== "undefined") {
+      // Marcar cada fila del debug con la decisión final
+      const outIds = new Set(debug.map(d => d.idRuta).filter((_, i, arr) => out[i] !== undefined));
+      const decisionados = debug.map(d => {
+        const fueOut = out.some(u => u.fecha === d.fecha && u.tipo_unidad === d.info_tipo_unidad);
+        const fueIgnorada = ignoradas.find(ig => ig.id === d.idRuta);
+        return { ...d, decision: fueIgnorada ? `IGNORADA: ${fueIgnorada.razon}` : "CONTADA" };
+      });
+      console.group(`[Prefactura DEBUG] provNorm="${provNorm}" — ${debug.length} rutas evaluadas, ${out.length} contadas, ${ignoradas.length} ignoradas`);
+      console.table(decisionados);
+      console.groupEnd();
     }
     return out;
   };
