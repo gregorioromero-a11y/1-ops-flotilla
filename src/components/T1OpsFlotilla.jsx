@@ -1240,8 +1240,16 @@ function ModuleEnvios() {
       const key = `${r.operador}|${f}|${tipo_unidad}`;
       if (seen.has(key)) return;
       seen.add(key);
-      extraDeRutas.push({ fecha: f, tipo_unidad });
+      extraDeRutas.push({ fecha: f, tipo_unidad, _debug: { operador: r.operador, tipoRuta: r.tipoRuta, opNorm: opNormR, fromAsistencia: !!a, idRuta: r.id } });
     });
+
+    // DEBUG: imprime cada unidad contada (de asistencia y de rutas)
+    console.group(`[Prefactura DEBUG] ${proveedor} ${fechaDesde}→${fechaHasta} ops=[${operacionesFiltro?.join(",")}]`);
+    console.log(`Asistencia (${filtrada.length}):`);
+    filtrada.forEach(a => console.log(`  ✓ ${(a.fecha||"").substring(0,10)} | ${a.nombre_operador} | ${a.tipo_unidad} | ${a.tipo_operacion} → ${normalizeOperacion(a.tipo_operacion)} | id=${a.id}`));
+    console.log(`Extra de rutas (${extraDeRutas.length}):`);
+    extraDeRutas.forEach(u => console.log(`  + ${u.fecha} | ${u._debug.operador} | ${u.tipo_unidad}${u._debug.fromAsistencia ? "" : " (DEFAULT — operador sin asistencia)"} | tipoRuta="${u._debug.tipoRuta}" → ${u._debug.opNorm} | rutaId=${u._debug.idRuta}`));
+    console.groupEnd();
 
     // 2) Costo por tipo_unidad desde catálogo carriers
     const costoPorTipo = {};
