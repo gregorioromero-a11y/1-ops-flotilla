@@ -1182,10 +1182,20 @@ function ModuleEnvios() {
       if (opCanonica === "Sin especificar") return;
       if (opsPermitidas && !opsPermitidas.has(opCanonica)) return;
       const info = getCostoInfo(r);
+      const baseCost = parseFloat(info.baseCost) || 0;
+      // REGLA PRIMARIA: si la línea tiene costo 0 (lo que se ve en la tabla
+      // como ⚠ $0), NO se considera en facturación. Punto. NO se hace
+      // fallback al catálogo para "rescatar" el costo — si la tabla dice $0,
+      // la prefactura dice $0. La penalización (si la hay y da descuento)
+      // se aplica por separado en el bloque de descuentos.
+      if (baseCost <= 0) {
+        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: "costo 0 — no cuenta como unidad" });
+        return;
+      }
+      // Tiene costo > 0. Inferir tipo_unidad si falta (sólo para tipo, NO
+      // para costo).
       let tipo_unidad = info.tipo_unidad;
-      let baseCost = parseFloat(info.baseCost) || 0;
-      // Fallback al catálogo del proveedor (NUNCA Sedan hardcoded)
-      if (!tipo_unidad || baseCost <= 0) {
+      if (!tipo_unidad) {
         const opMatchCarrier = (cOp) => {
           const o = (cOp || "").toLowerCase();
           if (opCanonica === "Última milla") return o.includes("ltima");
@@ -1199,27 +1209,15 @@ function ModuleEnvios() {
           && c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—"
           && opMatchCarrier(c.operacion)
         );
-        let chosen = null;
-        if (candidates.length === 1) chosen = candidates[0];
+        if (candidates.length === 1) tipo_unidad = candidates[0].tipo_unidad;
         else if (candidates.length > 1) {
-          chosen = candidates.slice().sort((a, b) =>
+          tipo_unidad = candidates.slice().sort((a, b) =>
             (parseFloat(a.costo_unidad) || 0) - (parseFloat(b.costo_unidad) || 0)
-          )[0];
-        }
-        if (chosen) {
-          if (!tipo_unidad) tipo_unidad = chosen.tipo_unidad;
-          if (baseCost <= 0) baseCost = parseFloat(chosen.costo_unidad) || 0;
+          )[0].tipo_unidad;
         }
       }
       if (!tipo_unidad) {
         ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: "sin tipo_unidad" });
-        return;
-      }
-      // REGLA: si la línea tiene costo 0, NO se cuenta como unidad. La
-      // penalización (si la hay) se aplica por separado en el bloque de
-      // descuentos — sólo el descuento entra al subtotal, sin sumar unidad.
-      if (baseCost <= 0) {
-        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: "costo 0 — sólo descuento si tiene penalización" });
         return;
       }
       out.push({ fecha: f, tipo_unidad, opCanonica });
