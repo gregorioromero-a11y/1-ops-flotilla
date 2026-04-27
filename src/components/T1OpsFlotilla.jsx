@@ -3982,10 +3982,24 @@ function ModuleRuteo() {
 
   const loadHistorico = async () => {
     setLoadingHist(true);
-    // Resiliente a BD vieja sin la columna `nombre` (probe + fallback)
+    // Probe nombre + paginación por keyset sobre id (los puntos de una misma
+    // sesión comparten created_at; offset+ORDER BY created_at se salta filas).
     const probe = await supabase.from("ruteo_puntos").select("sesion, created_at, cluster, nombre").limit(1);
-    const cols = probe.error ? "sesion, created_at, cluster" : "sesion, created_at, cluster, nombre";
-    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select(cols).order("created_at", { ascending: false }));
+    const cols = probe.error ? "id, sesion, created_at, cluster" : "id, sesion, created_at, cluster, nombre";
+    const byId = new Map();
+    const pageSize = 1000;
+    let cursor = null;
+    while (true) {
+      let q = supabase.from("ruteo_puntos").select(cols).order("id", { ascending: false }).limit(pageSize);
+      if (cursor !== null) q = q.lt("id", cursor);
+      const { data: chunk, error } = await q;
+      if (error) { console.error("loadHistorico error:", error); break; }
+      if (!chunk || chunk.length === 0) break;
+      for (const row of chunk) byId.set(row.id, row);
+      if (chunk.length < pageSize) break;
+      cursor = chunk[chunk.length - 1].id;
+    }
+    const data = Array.from(byId.values());
     if (data && data.length > 0) {
       const grouped = {};
       data.forEach(r => {
@@ -4492,11 +4506,28 @@ function ModuleAsignaciones() {
 
   // Carga ruteo_puntos resiliente: intenta con la columna `nombre` y si la BD
   // no la tiene aún (no se corrió el ALTER TABLE), cae al select sin `nombre`.
+  // Paginación por keyset sobre `id` (PK único, monotónico) en lugar de offset:
+  // con ORDER BY created_at + offset, las filas que comparten created_at (todos
+  // los puntos de una sesión se insertan al mismo instante) pueden saltarse o
+  // duplicarse, haciendo que la última sesión no aparezca.
   const fetchPuntosResumen = async () => {
     const probe = await supabase.from("ruteo_puntos").select("sesion, created_at, cluster, nombre").limit(1);
     const tieneNombre = !probe.error;
-    const cols = tieneNombre ? "sesion, created_at, cluster, nombre" : "sesion, created_at, cluster";
-    return fetchAllPaginated(() => supabase.from("ruteo_puntos").select(cols).order("created_at", { ascending: false }));
+    const baseCols = tieneNombre ? "id, sesion, created_at, cluster, nombre" : "id, sesion, created_at, cluster";
+    const byId = new Map();
+    const pageSize = 1000;
+    let cursor = null;
+    while (true) {
+      let q = supabase.from("ruteo_puntos").select(baseCols).order("id", { ascending: false }).limit(pageSize);
+      if (cursor !== null) q = q.lt("id", cursor);
+      const { data: chunk, error } = await q;
+      if (error) { console.error("ruteo_puntos load error:", error); break; }
+      if (!chunk || chunk.length === 0) break;
+      for (const row of chunk) byId.set(row.id, row);
+      if (chunk.length < pageSize) break;
+      cursor = chunk[chunk.length - 1].id;
+    }
+    return Array.from(byId.values());
   };
 
   const loadData = async () => {
