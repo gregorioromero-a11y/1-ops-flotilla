@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import LoginScreen from "../components/LoginScreen";
 import T1OpsFlotilla from "../components/T1OpsFlotilla";
 
-const INACTIVITY_MS = 60 * 1000; // 60 segundos sin actividad → logout
+const INACTIVITY_MS = 5 * 60 * 1000; // 5 minutos sin actividad → logout
 
 export default function Home() {
   const [authenticated, setAuthenticated] = useState(false);
