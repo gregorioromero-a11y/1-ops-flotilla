@@ -1151,46 +1151,58 @@ function ModuleEnvios() {
     return out;
   };
 
+  // Set de (operador|fecha) que tienen ruta cargada del proveedor en el periodo.
+  // Cuando un operador tiene ruta, la RUTA es la fuente de verdad para la
+  // operación real (la asistencia es sólo el check-in al llegar al almacén,
+  // que puede estar mal etiquetada). Sin esto, una asistencia mal etiquetada
+  // como "Logística Inversa" + una ruta correcta de "Última Milla" cuentan
+  // al operador en Crossdock y luego el filtrado vuelve a contarlo en UM.
+  const operadoresConRutaPara = (provNorm) => {
+    const set = new Set();
+    rutas.forEach(r => {
+      const f = (r.salida || "").substring(0, 10);
+      if (!f || f < fechaDesde || f > fechaHasta) return;
+      if (norm(r.carrier) !== provNorm) return;
+      if (!r.operador) return;
+      set.add(`${norm(r.operador)}|${f}`);
+    });
+    return set;
+  };
+
   // Cuenta de asistencias normalizadas + deduplicadas por unidad real.
-  // Compara proveedor con normalización (case/acento/espacio insensible)
-  // para no perder filas por diferencias de capitalización en BD.
-  // ADEMÁS: agrega rutas cuyo carrier coincida y cuyo tipo_ruta normalizado
-  // coincida con la operación, dedup contra asistencias ya contadas. Esto
-  // permite contar PETCO/Foráneo (que NO se pueden registrar en /checkin
-  // ni en Asistencia Diaria — viven sólo en rutas).
+  // Reglas:
+  //   - Si el operador tiene RUTA en ese día (mismo proveedor), la asistencia
+  //     se IGNORA — la ruta es la verdad. Esto evita doble conteo y errores
+  //     de etiquetado en /checkin.
+  //   - Para PETCO/Foráneo se agregan las rutas (no aparecen en asistencia).
   const conteoOperacion = (proveedor, opCanonica) => {
     if (!proveedor || !opCanonica) return 0;
     const provNorm = norm(proveedor);
-    // Asistencia
+    const conRuta = operadoresConRutaPara(provNorm);
+    // Asistencia: descarta a operadores con ruta en ese día
     const candidatas = asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
       if (!(f >= fechaDesde && f <= fechaHasta && norm(a.proveedor) === provNorm)) return false;
-      return normalizeOperacion(a.tipo_operacion) === opCanonica;
+      if (normalizeOperacion(a.tipo_operacion) !== opCanonica) return false;
+      if (a.nombre_operador && a.nombre_operador !== "Registro manual" && conRuta.has(`${norm(a.nombre_operador)}|${f}`)) return false;
+      return true;
     });
     const dedupedAsis = dedupAsistencia(candidatas);
-    // Set de claves ya contadas (operador|fecha|tipo_unidad)
-    const seen = new Set();
-    dedupedAsis.forEach(a => {
-      if (a.nombre_operador && a.nombre_operador !== "Registro manual") {
-        const f = (a.fecha || "").substring(0, 10);
-        seen.add(`${a.nombre_operador}|${f}|${a.tipo_unidad || ""}`);
-      }
-    });
-    // Rutas: filtra por carrier match + op normalizada, dedup contra seen
+    // Rutas: cuenta cada ruta del proveedor cuyo tipo_ruta normalizado coincide
     let extraDeRutas = 0;
+    const seenRutas = new Set();
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
       if (norm(r.carrier) !== provNorm) return;
       if (normalizeOperacion(r.tipoRuta) !== opCanonica) return;
       if (!r.operador) return;
-      // Inferir tipo_unidad de la asistencia más reciente del operador (rápido)
-      const opNorm = norm(r.operador);
-      const a = asistencia.find(x => x.nombre_operador && x.nombre_operador !== "Registro manual" && norm(x.nombre_operador) === opNorm);
+      const opNormOp = norm(r.operador);
+      const a = asistencia.find(x => x.nombre_operador && x.nombre_operador !== "Registro manual" && norm(x.nombre_operador) === opNormOp);
       const tipo_unidad = (a && a.tipo_unidad) || "Sedan";
       const key = `${r.operador}|${f}|${tipo_unidad}`;
-      if (seen.has(key)) return;
-      seen.add(key);
+      if (seenRutas.has(key)) return;
+      seenRutas.add(key);
       extraDeRutas += 1;
     });
     return dedupedAsis.length + extraDeRutas;
@@ -1208,25 +1220,23 @@ function ModuleEnvios() {
     //    en el mismo día (ej. "CrossDock" + "Logística Inversa"), cuenta UNA vez.
     //    Compara proveedor con normalización para no perder filas por casing.
     const provNorm = norm(proveedor);
+    // La RUTA es la verdad sobre qué hizo el operador ese día. Si el operador
+    // tiene ruta del proveedor, su asistencia se ignora (puede estar mal
+    // etiquetada en /checkin).
+    const conRuta = operadoresConRutaPara(provNorm);
     const filtradaCruda = asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
       if (!(f >= fechaDesde && f <= fechaHasta && norm(a.proveedor) === provNorm)) return false;
       if (!opMatch(a)) return false;
+      if (a.nombre_operador && a.nombre_operador !== "Registro manual" && conRuta.has(`${norm(a.nombre_operador)}|${f}`)) return false;
       return true;
     });
     const filtrada = dedupAsistencia(filtradaCruda);
 
-    // 1.b) Agregar unidades de RUTAS (PETCO/Foráneo nunca aparecen en
-    //      asistencia porque /checkin sólo permite 3 ops). Dedup contra las
-    //      asistencias ya contadas por (operador, fecha, tipo_unidad).
-    const seen = new Set();
-    filtrada.forEach(a => {
-      if (a.nombre_operador && a.nombre_operador !== "Registro manual") {
-        const f = (a.fecha || "").substring(0, 10);
-        seen.add(`${a.nombre_operador}|${f}|${a.tipo_unidad || ""}`);
-      }
-    });
+    // 1.b) Agregar unidades desde RUTAS — fuente verdadera para PETCO/Foráneo
+    //      y también para Última milla/Crossdock cuando el operador tiene ruta.
     const extraDeRutas = [];
+    const seenRutas = new Set();
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
@@ -1238,18 +1248,10 @@ function ModuleEnvios() {
       const a = asistencia.find(x => x.nombre_operador && x.nombre_operador !== "Registro manual" && norm(x.nombre_operador) === opNormOp);
       const tipo_unidad = (a && a.tipo_unidad) || "Sedan";
       const key = `${r.operador}|${f}|${tipo_unidad}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      extraDeRutas.push({ fecha: f, tipo_unidad, _debug: { operador: r.operador, tipoRuta: r.tipoRuta, opNorm: opNormR, fromAsistencia: !!a, idRuta: r.id } });
+      if (seenRutas.has(key)) return;
+      seenRutas.add(key);
+      extraDeRutas.push({ fecha: f, tipo_unidad });
     });
-
-    // DEBUG: imprime cada unidad contada (de asistencia y de rutas)
-    console.group(`[Prefactura DEBUG] ${proveedor} ${fechaDesde}→${fechaHasta} ops=[${operacionesFiltro?.join(",")}]`);
-    console.log(`Asistencia (${filtrada.length}):`);
-    filtrada.forEach(a => console.log(`  ✓ ${(a.fecha||"").substring(0,10)} | ${a.nombre_operador} | ${a.tipo_unidad} | ${a.tipo_operacion} → ${normalizeOperacion(a.tipo_operacion)} | id=${a.id}`));
-    console.log(`Extra de rutas (${extraDeRutas.length}):`);
-    extraDeRutas.forEach(u => console.log(`  + ${u.fecha} | ${u._debug.operador} | ${u.tipo_unidad}${u._debug.fromAsistencia ? "" : " (DEFAULT — operador sin asistencia)"} | tipoRuta="${u._debug.tipoRuta}" → ${u._debug.opNorm} | rutaId=${u._debug.idRuta}`));
-    console.groupEnd();
 
     // 2) Costo por tipo_unidad desde catálogo carriers
     const costoPorTipo = {};
