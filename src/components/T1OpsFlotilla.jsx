@@ -1271,9 +1271,13 @@ function ModuleEnvios() {
 
     // 5) Penalizaciones + notas por fecha — sólo de rutas reales (las
     //    sintéticas no tienen penalizacion ni nota). Match por proveedor
-    //    normalizado y tipo_ruta normalizado.
+    //    normalizado y tipo_ruta normalizado. Las notas se procesan
+    //    independientemente del costo: si una ruta tiene costo 0 pero
+    //    tiene nota, la nota se incluye igual (la unidad no se cuenta
+    //    porque fue filtrada arriba en unidadesEnvios).
     const penalPorFecha = {};
     const notasPorFecha = {};
+    const debugNotas = [];
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
@@ -1287,10 +1291,13 @@ function ModuleEnvios() {
       const notaTrim = (r.nota || "").trim();
       if (notaTrim) {
         if (!notasPorFecha[f]) notasPorFecha[f] = [];
-        // Evitar duplicados exactos
         if (!notasPorFecha[f].includes(notaTrim)) notasPorFecha[f].push(notaTrim);
+        debugNotas.push({ fecha: f, operador: r.operador, nota: notaTrim, baseCost, tipoRuta: r.tipoRuta, idRuta: r.id });
       }
     });
+    if (typeof window !== "undefined") {
+      console.log(`[Prefactura] Notas detectadas para ${proveedor} (${debugNotas.length}):`, debugNotas);
+    }
 
     // 6) Renderizar HTML
     const fmtFecha = isoDate => {
