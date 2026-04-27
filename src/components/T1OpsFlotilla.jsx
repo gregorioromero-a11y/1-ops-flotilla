@@ -1462,6 +1462,19 @@ function ModuleEnvios() {
       if (!a.nombre_operador || a.nombre_operador === "Registro manual") return false;
       return !conRuta.has(`${norm(a.nombre_operador)}|${f}`);
     });
+    // DEBUG temporal: log de cualquier asistencia con "Luis" en su nombre
+    if (typeof window !== "undefined") {
+      const luisAsi = asistencia.filter(a => /luis/i.test(a.nombre_operador || ""));
+      const luisRutas = rutas.filter(r => /luis/i.test(r.operador || ""));
+      const luisCandidatas = candidatas.filter(a => /luis/i.test(a.nombre_operador || ""));
+      if (luisAsi.length || luisRutas.length) {
+        console.group("[DEBUG Luis] periodo=" + fechaDesde + "→" + fechaHasta);
+        console.log("Asistencias de Luis (todas):", luisAsi.map(a => ({ id: a.id, fecha: (a.fecha||"").substring(0,10), proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, tipo_operacion: a.tipo_operacion, nombre: a.nombre_operador })));
+        console.log("Rutas de Luis (todas):", luisRutas.map(r => ({ id: r.id, fecha: (r.salida||"").substring(0,10), carrier: r.carrier, tipoRuta: r.tipoRuta, operador: r.operador })));
+        console.log("Sintéticas candidatas de Luis (asistencia sin ruta en periodo):", luisCandidatas.map(a => ({ id: a.id, fecha: (a.fecha||"").substring(0,10), proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, tipo_operacion: a.tipo_operacion })));
+        console.groupEnd();
+      }
+    }
     // Dedup por (operador|fecha|tipo_unidad|operación canónica) — misma unidad
     // registrada bajo varios labels el mismo día cuenta una vez.
     const dedupedSinRuta = dedupAsistencia(candidatas);
@@ -1495,22 +1508,42 @@ function ModuleEnvios() {
   })();
 
   const filtered = rutasCombinadas.filter(r => {
+    const esLuis = typeof window !== "undefined" && /luis/i.test(r.operador || "");
     // Status filter (existente)
-    if (filter === "En ruta" && r.status !== "En curso") return false;
-    if (filter === "En riesgo" && !(getRisk(r) === "high" || getRisk(r) === "medium")) return false;
-    if (filter === "Completadas" && r.status !== "Completada") return false;
-    // Proveedor: matchea el carrier de la ruta O el proveedor inferido por asistencia
+    if (filter === "En ruta" && r.status !== "En curso") {
+      if (esLuis) console.log("[DEBUG Luis filtered] excluido por status=En ruta. status real:", r.status, "_esAsistencia:", r._esAsistencia);
+      return false;
+    }
+    if (filter === "En riesgo" && !(getRisk(r) === "high" || getRisk(r) === "medium")) {
+      if (esLuis) console.log("[DEBUG Luis filtered] excluido por status=En riesgo");
+      return false;
+    }
+    if (filter === "Completadas" && r.status !== "Completada") {
+      if (esLuis) console.log("[DEBUG Luis filtered] excluido por status=Completadas. status real:", r.status, "_esAsistencia:", r._esAsistencia);
+      return false;
+    }
+    // Proveedor
     if (filterProveedor !== "Todos") {
       const provNorm = norm(filterProveedor);
       const carrierMatch = norm(r.carrier) === provNorm;
       const info = carrierMatch ? null : (r._esAsistencia ? null : getCostoInfo(r));
       const inferidoMatch = info && info.proveedor && norm(info.proveedor) === provNorm;
-      if (!carrierMatch && !inferidoMatch) return false;
+      if (!carrierMatch && !inferidoMatch) {
+        if (esLuis) console.log("[DEBUG Luis filtered] excluido por filtro Proveedor=" + filterProveedor + ". carrier:", r.carrier);
+        return false;
+      }
     }
     // Operador
-    if (filterOperador !== "Todos" && norm(r.operador) !== norm(filterOperador)) return false;
-    // Tipo operación: usa el tipo_ruta normalizado
-    if (filterOperacion !== "Todas" && normalizeOperacion(r.tipoRuta) !== filterOperacion) return false;
+    if (filterOperador !== "Todos" && norm(r.operador) !== norm(filterOperador)) {
+      if (esLuis) console.log("[DEBUG Luis filtered] excluido por filtro Operador=" + filterOperador + ". operador real:", r.operador);
+      return false;
+    }
+    // Tipo operación
+    if (filterOperacion !== "Todas" && normalizeOperacion(r.tipoRuta) !== filterOperacion) {
+      if (esLuis) console.log("[DEBUG Luis filtered] excluido por filtro Operación=" + filterOperacion + ". tipoRuta real:", r.tipoRuta, "→", normalizeOperacion(r.tipoRuta));
+      return false;
+    }
+    if (esLuis) console.log("[DEBUG Luis filtered] PASA todos los filtros: fecha=" + (r.salida||"").substring(0,10) + " carrier=" + r.carrier + " tipoRuta=" + r.tipoRuta + " _esAsistencia=" + !!r._esAsistencia);
     return true;
   }).slice().sort((a, b) => (a.operador || "").localeCompare(b.operador || "", "es", { sensitivity: "base" }));
 
