@@ -687,6 +687,11 @@ function ModuleEnvios() {
   //     asistencia, fallback to the operator's most-recent asistencia to
   //     resolve the unit, then pull cost from carriers catalog.
   const getCostoInfo = r => {
+    // Filas sintéticas (sólo asistencia, sin ruta): el costo y el tipo_unidad
+    // se inyectan en el constructor de rutasCombinadas.
+    if (r && r._esAsistencia) {
+      return { baseCost: r._baseCostSintetico || 0, proveedor: r.carrier, tipo_unidad: r._tipoUnidadSintetico || "Sedan", missing: false, tipo_operacion: r.tipoRuta, fromAsistencia: true };
+    }
     // Flat-rate tipos (per-package): bypass asistencia lookup entirely
     const rateFija = TARIFAS_FIJAS[r.tipoRuta];
     if (rateFija != null) {
@@ -873,18 +878,27 @@ function ModuleEnvios() {
     }
   };
 
-  const deleteRuta = (index) => {
-    const r = rutas[index];
+  const deleteRuta = (rOrIndex) => {
+    // Acepta el objeto ruta directamente o un index del array `rutas`.
+    // Las sintéticas (_esAsistencia) se eliminan de la tabla `asistencia`,
+    // no de `rutas`.
+    const r = (typeof rOrIndex === "number") ? rutas[rOrIndex] : rOrIndex;
     if (!r) return;
     setOpenMenu(null);
+    const esAsis = r._esAsistencia;
     setConfirmModal({
-      message: `¿Eliminar la ruta de ${r.operador || "operador desconocido"}?`,
+      message: esAsis
+        ? `¿Eliminar el registro de asistencia de ${r.operador || "operador"} del ${(r.salida || "").substring(0,10)}? Se borrará de Registro Diario.`
+        : `¿Eliminar la ruta de ${r.operador || "operador desconocido"}?`,
       onConfirm: async () => {
-        if (r.id) {
+        if (esAsis && r.asistenciaId) {
+          const { error } = await supabase.from("asistencia").delete().eq("id", r.asistenciaId);
+          if (error) { alert("Error al eliminar asistencia: " + error.message); return; }
+        } else if (r.id) {
           const { error } = await supabase.from("rutas").delete().eq("id", r.id);
           if (error) { alert("Error al eliminar: " + error.message); return; }
         }
-        await loadRutas();
+        await Promise.all([loadRutas(), loadAsistenciaCarriers()]);
       },
     });
   };
@@ -1480,7 +1494,58 @@ function ModuleEnvios() {
     return null;
   };
 
-  const filtered = rutas.filter(r => {
+  // Combina rutas reales del Excel + asistencias del Registro Diario que no
+  // tienen ruta cargada (para que se vean también en la tabla y se puedan
+  // editar/eliminar). Las sintéticas se marcan con _esAsistencia=true.
+  const rutasCombinadas = (() => {
+    if (!asistencia.length) return rutas;
+    // Set de (operador|fecha) que YA tiene ruta real cargada
+    const conRuta = new Set();
+    rutas.forEach(r => {
+      if (!r.operador) return;
+      const f = (r.salida || "").substring(0, 10);
+      if (f) conRuta.add(`${norm(r.operador)}|${f}`);
+    });
+    // Asistencias del periodo, sin ruta correspondiente, con operador real
+    const candidatas = asistencia.filter(a => {
+      const f = (a.fecha || "").substring(0, 10);
+      if (f < fechaDesde || f > fechaHasta) return false;
+      if (!a.nombre_operador || a.nombre_operador === "Registro manual") return false;
+      return !conRuta.has(`${norm(a.nombre_operador)}|${f}`);
+    });
+    // Dedup por (operador|fecha|tipo_unidad|operación canónica) — misma unidad
+    // registrada bajo varios labels el mismo día cuenta una vez.
+    const dedupedSinRuta = dedupAsistencia(candidatas);
+    const sinteticas = dedupedSinRuta.map(a => {
+      const car = carriers.find(c => norm(c.proveedor) === norm(a.proveedor) && c.tipo_unidad === a.tipo_unidad);
+      const baseCost = car ? (parseFloat(car.costo_unidad) || 0) : 0;
+      return {
+        id: null,
+        _esAsistencia: true,
+        asistenciaId: a.id,
+        idRuta: `ASI-${a.id}`,
+        carrier: a.proveedor,
+        operador: a.nombre_operador,
+        correo: a.correo || "",
+        placa: a.placa || "",
+        almacen: "T1 ENVIOS",
+        economico: "",
+        status: "Sólo asistencia",
+        total: 0, entregados: 0, recolecciones: 0,
+        pctEntrega: 0, intentados: 0, noVisitados: 0,
+        salida: a.fecha + (a.timestamp ? "T" + String(a.timestamp).substring(11, 19) : "T08:00:00"),
+        intercambios: 0,
+        tipoRuta: a.tipo_operacion || "Última milla",
+        kmEstimados: "—", kmRecorridos: "—", tiempoEstimado: "—", tiempoReal: "—",
+        penalizacion: "", nota: "",
+        _baseCostSintetico: baseCost,
+        _tipoUnidadSintetico: a.tipo_unidad,
+      };
+    });
+    return [...rutas, ...sinteticas];
+  })();
+
+  const filtered = rutasCombinadas.filter(r => {
     // Status filter (existente)
     if (filter === "En ruta" && r.status !== "En curso") return false;
     if (filter === "En riesgo" && !(getRisk(r) === "high" || getRisk(r) === "medium")) return false;
@@ -1489,7 +1554,7 @@ function ModuleEnvios() {
     if (filterProveedor !== "Todos") {
       const provNorm = norm(filterProveedor);
       const carrierMatch = norm(r.carrier) === provNorm;
-      const info = carrierMatch ? null : getCostoInfo(r);
+      const info = carrierMatch ? null : (r._esAsistencia ? null : getCostoInfo(r));
       const inferidoMatch = info && info.proveedor && norm(info.proveedor) === provNorm;
       if (!carrierMatch && !inferidoMatch) return false;
     }
@@ -2003,8 +2068,14 @@ function ModuleEnvios() {
                 </td>
                 {/* Empleado + risk */}
                 <td style={{ padding: "14px 12px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{r.operador}</span>
+                    {r._esAsistencia && (
+                      <span title="Sólo asistencia: este operador tiene check-in en Registro Diario pero no tiene ruta cargada del Excel."
+                        style={{ fontSize: 9, fontWeight: 800, color: "#0284C7", padding: "2px 6px", borderRadius: 10, backgroundColor: "#DBEAFE", letterSpacing: "0.05em" }}>
+                        ASISTENCIA
+                      </span>
+                    )}
                     {dedupRow && (
                       <span title={"Forma parte de un grupo de " + dedupRow.groupSize + " rutas del mismo operador hoy"}
                         style={{ fontSize: 9, fontWeight: 800, color: "#7C3AED", padding: "2px 6px", borderRadius: 10, backgroundColor: "#EDE9FE", letterSpacing: "0.05em" }}>
@@ -2181,7 +2252,7 @@ function ModuleEnvios() {
                       onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
                         <IC.Edit /> Editar
                       </button>
-                      <button onClick={() => deleteRuta(rutas.indexOf(r))} style={{
+                      <button onClick={() => deleteRuta(r)} style={{
                         width: "100%", padding: "10px 16px", border: "none", backgroundColor: "transparent", cursor: "pointer",
                         fontSize: 12, fontWeight: 600, color: C.red, textAlign: "left", display: "flex", alignItems: "center", gap: 8,
                       }}
