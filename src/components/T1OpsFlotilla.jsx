@@ -1054,18 +1054,39 @@ function ModuleEnvios() {
   };
 
   // Lista de proveedores con datos en el periodo (asistencia O rutas).
-  // Iteración simple O(N), sin llamadas pesadas — no rompe el render.
+  // Dedup case/acento/espacio insensible: agrupa "PAQUETE LIT" y
+  // "Paquete Lit" como el mismo proveedor, conservando la variante con
+  // más datos (asistencia o rutas).
   const proveedoresEnPeriodo = (() => {
-    const set = new Set();
+    const counts = new Map(); // normKey -> { variants: Map<original, count> }
+    const tally = (raw) => {
+      if (!raw || raw === "—") return;
+      const key = norm(raw);
+      if (!key) return;
+      if (!counts.has(key)) counts.set(key, new Map());
+      const variants = counts.get(key);
+      variants.set(raw, (variants.get(raw) || 0) + 1);
+    };
     asistencia.forEach(a => {
       const f = (a.fecha || "").substring(0, 10);
-      if (f >= fechaDesde && f <= fechaHasta && a.proveedor) set.add(a.proveedor);
+      if (f >= fechaDesde && f <= fechaHasta) tally(a.proveedor);
     });
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
-      if (f >= fechaDesde && f <= fechaHasta && r.carrier && r.carrier !== "—") set.add(r.carrier);
+      if (f >= fechaDesde && f <= fechaHasta) tally(r.carrier);
     });
-    return [...set].sort();
+    // De cada grupo conservar la variante con más apariciones; en empate la
+    // versión en mayúsculas (estilo del catálogo carriers).
+    const finales = [];
+    counts.forEach(variants => {
+      let best = null, bestCount = -1;
+      variants.forEach((count, name) => {
+        const isUpperWin = count === bestCount && name === name.toUpperCase() && best && best !== best.toUpperCase();
+        if (count > bestCount || isUpperWin) { best = name; bestCount = count; }
+      });
+      if (best) finales.push(best);
+    });
+    return finales.sort();
   })();
 
   // 7 operaciones canónicas — siempre se muestran en el popup
@@ -2294,8 +2315,10 @@ function ModuleEnvios() {
                 }}
                   style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+C.accent, fontSize:14, fontWeight:700, color:C.text, backgroundColor:C.white, marginBottom:16, boxSizing:"border-box" }}>
                   {proveedoresEnPeriodo.map(p => {
-                    const dias = new Set(asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && a.proveedor === p; }).map(a => (a.fecha||"").substring(0,10))).size;
-                    const ops = asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && a.proveedor === p; }).length;
+                    const pNorm = norm(p);
+                    const matches = asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && norm(a.proveedor) === pNorm; });
+                    const dias = new Set(matches.map(a => (a.fecha||"").substring(0,10))).size;
+                    const ops = matches.length;
                     return <option key={p} value={p}>{p} — {ops} asistencias en {dias} días</option>;
                   })}
                 </select>
