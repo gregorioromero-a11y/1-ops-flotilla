@@ -1070,30 +1070,21 @@ function ModuleEnvios() {
     setManualSaving(false);
   };
 
-  // Lista de proveedores con datos en el periodo (asistencia O rutas).
-  // Dedup case/acento/espacio insensible: agrupa "PAQUETE LIT" y
-  // "Paquete Lit" como el mismo proveedor, conservando la variante con
-  // más datos (asistencia o rutas).
+  // Lista de proveedores con RUTAS en el periodo (sólo del Excel).
+  // La prefactura no usa asistencia, así que aquí tampoco.
   const proveedoresEnPeriodo = (() => {
-    const counts = new Map(); // normKey -> { variants: Map<original, count> }
+    const counts = new Map();
     const tally = (raw) => {
       if (!raw || raw === "—") return;
       const key = norm(raw);
       if (!key) return;
       if (!counts.has(key)) counts.set(key, new Map());
-      const variants = counts.get(key);
-      variants.set(raw, (variants.get(raw) || 0) + 1);
+      counts.get(key).set(raw, (counts.get(key).get(raw) || 0) + 1);
     };
-    asistencia.forEach(a => {
-      const f = (a.fecha || "").substring(0, 10);
-      if (f >= fechaDesde && f <= fechaHasta) tally(a.proveedor);
-    });
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (f >= fechaDesde && f <= fechaHasta) tally(r.carrier);
     });
-    // De cada grupo conservar la variante con más apariciones; en empate la
-    // versión en mayúsculas (estilo del catálogo carriers).
     const finales = [];
     counts.forEach(variants => {
       let best = null, bestCount = -1;
@@ -1165,38 +1156,26 @@ function ModuleEnvios() {
     return out;
   };
 
-  // El conteo y la prefactura ahora se basan EXCLUSIVAMENTE en lo que aparece
-  // en la tabla de Registrar Envíos (rutasCombinadas = rutas reales del Excel
-  // + asistencias sintéticas sin ruta). Esto garantiza que la prefactura
-  // refleje al 100% lo que el usuario ve en pantalla.
-  //
-  // Helper común: filtra rutasCombinadas por proveedor + periodo + opciones
-  // de operación canónica, devuelve { fecha, tipo_unidad } por unidad.
+  // El conteo y la prefactura usan EXCLUSIVAMENTE las rutas cargadas del
+  // Excel (tabla `rutas`). El Registro Diario (asistencia) NO influye en
+  // la prefactura — sólo se usa visualmente en la tabla de Registrar Envíos
+  // como "asistencias sin ruta" (filas sintéticas con badge ASISTENCIA),
+  // pero la prefactura las ignora por completo.
   const unidadesEnvios = (provNorm, opsPermitidas) => {
     const out = [];
-    rutasCombinadas.forEach(r => {
+    rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
-      // Match de proveedor (case-insensitive). Para rutas reales también
-      // acepta el proveedor inferido por getCostoInfo (cuando r.carrier
-      // no es exacto pero el operador tiene asistencia con ese proveedor).
       const carrierMatch = norm(r.carrier) === provNorm;
       if (!carrierMatch) {
-        if (r._esAsistencia) return; // sintética: si carrier no matchea, fuera
         const info = getCostoInfo(r);
         if (!(info && info.proveedor && norm(info.proveedor) === provNorm)) return;
       }
       const opCanonica = normalizeOperacion(r.tipoRuta);
       if (opCanonica === "Sin especificar") return;
       if (opsPermitidas && !opsPermitidas.has(opCanonica)) return;
-      // tipo_unidad: sintéticas lo traen inyectado; reales se infieren
-      let tipo_unidad;
-      if (r._esAsistencia) {
-        tipo_unidad = r._tipoUnidadSintetico || "Sedan";
-      } else {
-        const info = getCostoInfo(r);
-        tipo_unidad = info.tipo_unidad || "Sedan";
-      }
+      const info = getCostoInfo(r);
+      const tipo_unidad = info.tipo_unidad || "Sedan";
       out.push({ fecha: f, tipo_unidad, opCanonica });
     });
     return out;
@@ -1462,19 +1441,6 @@ function ModuleEnvios() {
       if (!a.nombre_operador || a.nombre_operador === "Registro manual") return false;
       return !conRuta.has(`${norm(a.nombre_operador)}|${f}`);
     });
-    // DEBUG temporal: log de cualquier asistencia con "Luis" en su nombre
-    if (typeof window !== "undefined") {
-      const luisAsi = asistencia.filter(a => /luis/i.test(a.nombre_operador || ""));
-      const luisRutas = rutas.filter(r => /luis/i.test(r.operador || ""));
-      const luisCandidatas = candidatas.filter(a => /luis/i.test(a.nombre_operador || ""));
-      if (luisAsi.length || luisRutas.length) {
-        console.group("[DEBUG Luis] periodo=" + fechaDesde + "→" + fechaHasta);
-        console.log("Asistencias de Luis (todas):", luisAsi.map(a => ({ id: a.id, fecha: (a.fecha||"").substring(0,10), proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, tipo_operacion: a.tipo_operacion, nombre: a.nombre_operador })));
-        console.log("Rutas de Luis (todas):", luisRutas.map(r => ({ id: r.id, fecha: (r.salida||"").substring(0,10), carrier: r.carrier, tipoRuta: r.tipoRuta, operador: r.operador })));
-        console.log("Sintéticas candidatas de Luis (asistencia sin ruta en periodo):", luisCandidatas.map(a => ({ id: a.id, fecha: (a.fecha||"").substring(0,10), proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, tipo_operacion: a.tipo_operacion })));
-        console.groupEnd();
-      }
-    }
     // Dedup por (operador|fecha|tipo_unidad|operación canónica) — misma unidad
     // registrada bajo varios labels el mismo día cuenta una vez.
     const dedupedSinRuta = dedupAsistencia(candidatas);
@@ -1508,42 +1474,18 @@ function ModuleEnvios() {
   })();
 
   const filtered = rutasCombinadas.filter(r => {
-    const esLuis = typeof window !== "undefined" && /luis/i.test(r.operador || "");
-    // Status filter (existente)
-    if (filter === "En ruta" && r.status !== "En curso") {
-      if (esLuis) console.log("[DEBUG Luis filtered] excluido por status=En ruta. status real:", r.status, "_esAsistencia:", r._esAsistencia);
-      return false;
-    }
-    if (filter === "En riesgo" && !(getRisk(r) === "high" || getRisk(r) === "medium")) {
-      if (esLuis) console.log("[DEBUG Luis filtered] excluido por status=En riesgo");
-      return false;
-    }
-    if (filter === "Completadas" && r.status !== "Completada") {
-      if (esLuis) console.log("[DEBUG Luis filtered] excluido por status=Completadas. status real:", r.status, "_esAsistencia:", r._esAsistencia);
-      return false;
-    }
-    // Proveedor
+    if (filter === "En ruta" && r.status !== "En curso") return false;
+    if (filter === "En riesgo" && !(getRisk(r) === "high" || getRisk(r) === "medium")) return false;
+    if (filter === "Completadas" && r.status !== "Completada") return false;
     if (filterProveedor !== "Todos") {
       const provNorm = norm(filterProveedor);
       const carrierMatch = norm(r.carrier) === provNorm;
       const info = carrierMatch ? null : (r._esAsistencia ? null : getCostoInfo(r));
       const inferidoMatch = info && info.proveedor && norm(info.proveedor) === provNorm;
-      if (!carrierMatch && !inferidoMatch) {
-        if (esLuis) console.log("[DEBUG Luis filtered] excluido por filtro Proveedor=" + filterProveedor + ". carrier:", r.carrier);
-        return false;
-      }
+      if (!carrierMatch && !inferidoMatch) return false;
     }
-    // Operador
-    if (filterOperador !== "Todos" && norm(r.operador) !== norm(filterOperador)) {
-      if (esLuis) console.log("[DEBUG Luis filtered] excluido por filtro Operador=" + filterOperador + ". operador real:", r.operador);
-      return false;
-    }
-    // Tipo operación
-    if (filterOperacion !== "Todas" && normalizeOperacion(r.tipoRuta) !== filterOperacion) {
-      if (esLuis) console.log("[DEBUG Luis filtered] excluido por filtro Operación=" + filterOperacion + ". tipoRuta real:", r.tipoRuta, "→", normalizeOperacion(r.tipoRuta));
-      return false;
-    }
-    if (esLuis) console.log("[DEBUG Luis filtered] PASA todos los filtros: fecha=" + (r.salida||"").substring(0,10) + " carrier=" + r.carrier + " tipoRuta=" + r.tipoRuta + " _esAsistencia=" + !!r._esAsistencia);
+    if (filterOperador !== "Todos" && norm(r.operador) !== norm(filterOperador)) return false;
+    if (filterOperacion !== "Todas" && normalizeOperacion(r.tipoRuta) !== filterOperacion) return false;
     return true;
   }).slice().sort((a, b) => (a.operador || "").localeCompare(b.operador || "", "es", { sensitivity: "base" }));
 
@@ -2462,10 +2404,10 @@ function ModuleEnvios() {
                   style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+C.accent, fontSize:14, fontWeight:700, color:C.text, backgroundColor:C.white, marginBottom:16, boxSizing:"border-box" }}>
                   {proveedoresEnPeriodo.map(p => {
                     const pNorm = norm(p);
-                    const matches = asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && norm(a.proveedor) === pNorm; });
-                    const dias = new Set(matches.map(a => (a.fecha||"").substring(0,10))).size;
+                    const matches = rutas.filter(r => { const f = (r.salida||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && norm(r.carrier) === pNorm; });
+                    const dias = new Set(matches.map(r => (r.salida||"").substring(0,10))).size;
                     const ops = matches.length;
-                    return <option key={p} value={p}>{p} — {ops} asistencias en {dias} días</option>;
+                    return <option key={p} value={p}>{p} — {ops} rutas en {dias} días</option>;
                   })}
                 </select>
                 {(() => {
