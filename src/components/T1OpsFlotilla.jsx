@@ -1053,12 +1053,17 @@ function ModuleEnvios() {
     setManualSaving(false);
   };
 
-  // Lista de proveedores disponibles para prefactura (con asistencia en el periodo)
+  // Lista de proveedores con datos en el periodo (asistencia O rutas).
+  // Iteración simple O(N), sin llamadas pesadas — no rompe el render.
   const proveedoresEnPeriodo = (() => {
     const set = new Set();
     asistencia.forEach(a => {
       const f = (a.fecha || "").substring(0, 10);
       if (f >= fechaDesde && f <= fechaHasta && a.proveedor) set.add(a.proveedor);
+    });
+    rutas.forEach(r => {
+      const f = (r.salida || "").substring(0, 10);
+      if (f >= fechaDesde && f <= fechaHasta && r.carrier && r.carrier !== "—") set.add(r.carrier);
     });
     return [...set].sort();
   })();
@@ -1125,15 +1130,46 @@ function ModuleEnvios() {
   // Cuenta de asistencias normalizadas + deduplicadas por unidad real.
   // Compara proveedor con normalización (case/acento/espacio insensible)
   // para no perder filas por diferencias de capitalización en BD.
+  // ADEMÁS: agrega rutas cuyo carrier coincida y cuyo tipo_ruta normalizado
+  // coincida con la operación, dedup contra asistencias ya contadas. Esto
+  // permite contar PETCO/Foráneo (que NO se pueden registrar en /checkin
+  // ni en Asistencia Diaria — viven sólo en rutas).
   const conteoOperacion = (proveedor, opCanonica) => {
     if (!proveedor || !opCanonica) return 0;
     const provNorm = norm(proveedor);
+    // Asistencia
     const candidatas = asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
       if (!(f >= fechaDesde && f <= fechaHasta && norm(a.proveedor) === provNorm)) return false;
       return normalizeOperacion(a.tipo_operacion) === opCanonica;
     });
-    return dedupAsistencia(candidatas).length;
+    const dedupedAsis = dedupAsistencia(candidatas);
+    // Set de claves ya contadas (operador|fecha|tipo_unidad)
+    const seen = new Set();
+    dedupedAsis.forEach(a => {
+      if (a.nombre_operador && a.nombre_operador !== "Registro manual") {
+        const f = (a.fecha || "").substring(0, 10);
+        seen.add(`${a.nombre_operador}|${f}|${a.tipo_unidad || ""}`);
+      }
+    });
+    // Rutas: filtra por carrier match + op normalizada, dedup contra seen
+    let extraDeRutas = 0;
+    rutas.forEach(r => {
+      const f = (r.salida || "").substring(0, 10);
+      if (!f || f < fechaDesde || f > fechaHasta) return;
+      if (norm(r.carrier) !== provNorm) return;
+      if (normalizeOperacion(r.tipoRuta) !== opCanonica) return;
+      if (!r.operador) return;
+      // Inferir tipo_unidad de la asistencia más reciente del operador (rápido)
+      const opNorm = norm(r.operador);
+      const a = asistencia.find(x => x.nombre_operador && x.nombre_operador !== "Registro manual" && norm(x.nombre_operador) === opNorm);
+      const tipo_unidad = (a && a.tipo_unidad) || "Sedan";
+      const key = `${r.operador}|${f}|${tipo_unidad}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      extraDeRutas += 1;
+    });
+    return dedupedAsis.length + extraDeRutas;
   };
 
   const generatePrefactura = (proveedor, conIVA, operacionesFiltro) => {
@@ -1155,13 +1191,41 @@ function ModuleEnvios() {
       return true;
     });
     const filtrada = dedupAsistencia(filtradaCruda);
-    console.log(`[Prefactura] ${proveedor} ${fechaDesde}→${fechaHasta} ops=[${operacionesFiltro?.join(",")}]: ${filtradaCruda.length} crudas, ${filtrada.length} dedup, tipos=[${[...new Set(filtrada.map(a => a.tipo_unidad))].join(",")}]`);
+
+    // 1.b) Agregar unidades de RUTAS (PETCO/Foráneo nunca aparecen en
+    //      asistencia porque /checkin sólo permite 3 ops). Dedup contra las
+    //      asistencias ya contadas por (operador, fecha, tipo_unidad).
+    const seen = new Set();
+    filtrada.forEach(a => {
+      if (a.nombre_operador && a.nombre_operador !== "Registro manual") {
+        const f = (a.fecha || "").substring(0, 10);
+        seen.add(`${a.nombre_operador}|${f}|${a.tipo_unidad || ""}`);
+      }
+    });
+    const extraDeRutas = [];
+    rutas.forEach(r => {
+      const f = (r.salida || "").substring(0, 10);
+      if (!f || f < fechaDesde || f > fechaHasta) return;
+      if (norm(r.carrier) !== provNorm) return;
+      const opNormR = normalizeOperacion(r.tipoRuta);
+      if (opsPermitidas && !opsPermitidas.has(opNormR)) return;
+      if (!r.operador) return;
+      const opNormOp = norm(r.operador);
+      const a = asistencia.find(x => x.nombre_operador && x.nombre_operador !== "Registro manual" && norm(x.nombre_operador) === opNormOp);
+      const tipo_unidad = (a && a.tipo_unidad) || "Sedan";
+      const key = `${r.operador}|${f}|${tipo_unidad}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      extraDeRutas.push({ fecha: f, tipo_unidad });
+    });
+
     // 2) Costo por tipo_unidad desde catálogo carriers
     const costoPorTipo = {};
     const tiposSet = new Set();
     filtrada.forEach(a => { if (a.tipo_unidad) tiposSet.add(a.tipo_unidad); });
+    extraDeRutas.forEach(u => { if (u.tipo_unidad) tiposSet.add(u.tipo_unidad); });
     tiposSet.forEach(t => {
-      const car = carriers.find(c => c.proveedor === proveedor && c.tipo_unidad === t);
+      const car = carriers.find(c => norm(c.proveedor) === provNorm && c.tipo_unidad === t);
       costoPorTipo[t] = car ? (parseFloat(car.costo_unidad) || 0) : 0;
     });
     const tipos = [...tiposSet].sort();
@@ -1173,12 +1237,15 @@ function ModuleEnvios() {
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       fechas.push(d.toISOString().substring(0, 10));
     }
-    // 4) Conteos por (fecha, tipo)
+    // 4) Conteos por (fecha, tipo) — combina filtrada + extraDeRutas
     const conteos = {};
     fechas.forEach(f => { conteos[f] = {}; tipos.forEach(t => { conteos[f][t] = 0; }); });
     filtrada.forEach(a => {
       const f = (a.fecha || "").substring(0, 10);
       if (conteos[f] && a.tipo_unidad) conteos[f][a.tipo_unidad] = (conteos[f][a.tipo_unidad] || 0) + 1;
+    });
+    extraDeRutas.forEach(u => {
+      if (conteos[u.fecha] && u.tipo_unidad) conteos[u.fecha][u.tipo_unidad] = (conteos[u.fecha][u.tipo_unidad] || 0) + 1;
     });
 
     // 5) Penalizaciones + notas por fecha (rutas del proveedor en ese día,
