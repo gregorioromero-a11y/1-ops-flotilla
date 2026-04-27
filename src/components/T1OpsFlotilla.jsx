@@ -1053,12 +1053,11 @@ function ModuleEnvios() {
     setManualSaving(false);
   };
 
-  // Lista de proveedores disponibles para prefactura (con asistencia en el periodo)
+  // Lista de proveedores con unidades trabajadas en el periodo (asistencia O rutas)
   const proveedoresEnPeriodo = (() => {
     const set = new Set();
-    asistencia.forEach(a => {
-      const f = (a.fecha || "").substring(0, 10);
-      if (f >= fechaDesde && f <= fechaHasta && a.proveedor) set.add(a.proveedor);
+    construirUnidadesTrabajadas().forEach(u => {
+      if (u.fecha >= fechaDesde && u.fecha <= fechaHasta && u.proveedor) set.add(u.proveedor);
     });
     return [...set].sort();
   })();
@@ -1099,105 +1098,127 @@ function ModuleEnvios() {
   // para que el usuario vea lo que existe y lo que no.
   const operacionesParaProveedor = () => OPERACIONES_CANONICAS;
 
-  // Dedup: misma unidad (operador real) en mismo (proveedor, fecha, tipo_unidad,
-  // operación canónica) cuenta UNA vez aunque exista bajo varios labels en BD
-  // (típico: el mismo operador registrado como "CrossDock" y "Logística Inversa").
-  // Para filas "Registro manual" cada fila vale 1 (es una cuenta agregada, no
-  // un operador único).
-  const dedupAsistencia = (rows) => {
-    const seen = new Set();
-    const out = [];
-    rows.forEach(a => {
-      const op = normalizeOperacion(a.tipo_operacion);
-      if (!a.nombre_operador || a.nombre_operador === "Registro manual") {
-        out.push(a);
-        return;
+  // Construye la lista de "unidades trabajadas" combinando asistencia + rutas.
+  //
+  // Por qué necesita ambas fuentes: el módulo /checkin y el de Asistencia
+  // Diaria sólo permiten registrar 3 operaciones (Última Milla, CrossDock,
+  // Logística Inversa). PETCO/Foráneo NUNCA aparecen en asistencia — viven
+  // en la tabla `rutas` como `tipo_ruta`. Sin esta fusión, la prefactura
+  // de PETCO/Foráneo siempre da 0.
+  //
+  // Dedup automático por key = (proveedor_norm, operador, fecha, tipo_unidad,
+  // op_canonica). Misma key = 1 unidad facturable, sin importar fuente o
+  // labels duplicados.
+  const construirUnidadesTrabajadas = () => {
+    const map = new Map();
+    const addRow = ({ proveedor, operador, fecha, tipo_unidad, opCanonica, dedupId }) => {
+      if (!proveedor || !fecha || !opCanonica || opCanonica === "Sin especificar") return;
+      const opKey = operador || `__${dedupId}`;
+      const key = `${norm(proveedor)}|${opKey}|${fecha}|${tipo_unidad || ""}|${opCanonica}`;
+      if (!map.has(key)) {
+        map.set(key, { proveedor, operador: operador || "(sin operador)", fecha, tipo_unidad, opCanonica });
       }
+    };
+
+    // Fuente 1: asistencia (incluye check-ins automáticos + Registro Manual)
+    asistencia.forEach(a => {
       const f = (a.fecha || "").substring(0, 10);
-      const key = `${a.nombre_operador}|${f}|${a.tipo_unidad || ""}|${op}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      out.push(a);
+      const operadorReal = a.nombre_operador && a.nombre_operador !== "Registro manual" ? a.nombre_operador : null;
+      addRow({
+        proveedor: a.proveedor,
+        operador: operadorReal,
+        fecha: f,
+        tipo_unidad: a.tipo_unidad,
+        opCanonica: normalizeOperacion(a.tipo_operacion),
+        dedupId: "asistencia_" + a.id,
+      });
     });
-    return out;
+
+    // Fuente 2: rutas (única fuente de PETCO/Foráneo). Infiere proveedor +
+    // tipo_unidad usando getCostoInfo, que ya tiene fallbacks robustos.
+    rutas.forEach(r => {
+      const f = (r.salida || "").substring(0, 10);
+      if (!f) return;
+      const info = getCostoInfo(r);
+      if (!info.proveedor) return;
+      addRow({
+        proveedor: info.proveedor,
+        operador: r.operador,
+        fecha: f,
+        tipo_unidad: info.tipo_unidad || "Sedan",
+        opCanonica: normalizeOperacion(r.tipoRuta), // tipoRuta de la ruta, no de asistencia
+        dedupId: "ruta_" + r.id,
+      });
+    });
+
+    return Array.from(map.values());
   };
 
-  // Cuenta de asistencias normalizadas + deduplicadas por unidad real.
-  // Compara proveedor con normalización (case/acento/espacio insensible)
-  // para no perder filas por diferencias de capitalización en BD.
+  // Cuenta de unidades para (proveedor, operación canónica) en el periodo
   const conteoOperacion = (proveedor, opCanonica) => {
     if (!proveedor || !opCanonica) return 0;
     const provNorm = norm(proveedor);
-    const candidatas = asistencia.filter(a => {
-      const f = (a.fecha || "").substring(0, 10);
-      if (!(f >= fechaDesde && f <= fechaHasta && norm(a.proveedor) === provNorm)) return false;
-      return normalizeOperacion(a.tipo_operacion) === opCanonica;
-    });
-    return dedupAsistencia(candidatas).length;
+    return construirUnidadesTrabajadas().filter(u =>
+      norm(u.proveedor) === provNorm &&
+      u.opCanonica === opCanonica &&
+      u.fecha >= fechaDesde && u.fecha <= fechaHasta
+    ).length;
   };
 
   const generatePrefactura = (proveedor, conIVA, operacionesFiltro) => {
     if (!proveedor) return;
-    // Las operaciones del filtro vienen como canónicas; comparamos contra
-    // la versión normalizada del registro en BD para que CrossDock y
-    // Logística Inversa cuenten como Crossdock, etc.
     const opsPermitidas = (operacionesFiltro && operacionesFiltro.length > 0) ? new Set(operacionesFiltro) : null;
-    const opMatch = a => opsPermitidas ? opsPermitidas.has(normalizeOperacion(a.tipo_operacion)) : true;
-    // 1) Filtrar asistencia del periodo + proveedor (+ operaciones seleccionadas)
-    //    Dedup: si la misma unidad (operador real) aparece bajo varios labels
-    //    en el mismo día (ej. "CrossDock" + "Logística Inversa"), cuenta UNA vez.
-    //    Compara proveedor con normalización para no perder filas por casing.
     const provNorm = norm(proveedor);
-    const filtradaCruda = asistencia.filter(a => {
-      const f = (a.fecha || "").substring(0, 10);
-      if (!(f >= fechaDesde && f <= fechaHasta && norm(a.proveedor) === provNorm)) return false;
-      if (!opMatch(a)) return false;
-      return true;
-    });
-    const filtrada = dedupAsistencia(filtradaCruda);
-    console.log(`[Prefactura] ${proveedor} ${fechaDesde}→${fechaHasta} ops=[${operacionesFiltro?.join(",")}]: ${filtradaCruda.length} crudas, ${filtrada.length} dedup, tipos=[${[...new Set(filtrada.map(a => a.tipo_unidad))].join(",")}]`);
+
+    // 1) Recolectar unidades trabajadas (asistencia + rutas, deduplicadas)
+    const unidades = construirUnidadesTrabajadas().filter(u =>
+      norm(u.proveedor) === provNorm &&
+      u.fecha >= fechaDesde && u.fecha <= fechaHasta &&
+      (!opsPermitidas || opsPermitidas.has(u.opCanonica))
+    );
+    console.log(`[Prefactura] ${proveedor} ${fechaDesde}→${fechaHasta} ops=[${operacionesFiltro?.join(",")}]: ${unidades.length} unidades, tipos=[${[...new Set(unidades.map(u => u.tipo_unidad))].join(",")}]`);
+
     // 2) Costo por tipo_unidad desde catálogo carriers
     const costoPorTipo = {};
     const tiposSet = new Set();
-    filtrada.forEach(a => { if (a.tipo_unidad) tiposSet.add(a.tipo_unidad); });
+    unidades.forEach(u => { if (u.tipo_unidad) tiposSet.add(u.tipo_unidad); });
     tiposSet.forEach(t => {
-      const car = carriers.find(c => c.proveedor === proveedor && c.tipo_unidad === t);
+      const car = carriers.find(c => norm(c.proveedor) === provNorm && c.tipo_unidad === t);
       costoPorTipo[t] = car ? (parseFloat(car.costo_unidad) || 0) : 0;
     });
     const tipos = [...tiposSet].sort();
 
-    // 3) Construir lista de fechas del rango (incluye días sin asistencia)
+    // 3) Lista de fechas del rango
     const fechas = [];
     const start = new Date(fechaDesde + "T12:00:00");
     const end = new Date(fechaHasta + "T12:00:00");
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      fechas.push(d.toISOString().substring(0, 10));
+      const yy = d.getFullYear(), mm = String(d.getMonth()+1).padStart(2,"0"), dd = String(d.getDate()).padStart(2,"0");
+      fechas.push(`${yy}-${mm}-${dd}`);
     }
     // 4) Conteos por (fecha, tipo)
     const conteos = {};
     fechas.forEach(f => { conteos[f] = {}; tipos.forEach(t => { conteos[f][t] = 0; }); });
-    filtrada.forEach(a => {
-      const f = (a.fecha || "").substring(0, 10);
-      if (conteos[f] && a.tipo_unidad) conteos[f][a.tipo_unidad] = (conteos[f][a.tipo_unidad] || 0) + 1;
+    unidades.forEach(u => {
+      if (conteos[u.fecha] && u.tipo_unidad) conteos[u.fecha][u.tipo_unidad] = (conteos[u.fecha][u.tipo_unidad] || 0) + 1;
     });
 
-    // 5) Penalizaciones + notas por fecha (rutas del proveedor en ese día,
-    //    filtradas por las operaciones seleccionadas si aplica)
+    // 5) Penalizaciones + notas por fecha (de rutas del proveedor)
     const penalPorFecha = {};
     const notasPorFecha = {};
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
       const info = getCostoInfo(r);
-      if (info.proveedor !== proveedor) return;
-      if (opsPermitidas && !opsPermitidas.has(normalizeOperacion(info.tipo_operacion))) return;
+      if (!info.proveedor || norm(info.proveedor) !== provNorm) return;
+      const opNorm = normalizeOperacion(r.tipoRuta);
+      if (opsPermitidas && !opsPermitidas.has(opNorm)) return;
       const { baseCost, costoNuevo } = getCostoReal(r);
       const desc = baseCost - costoNuevo;
       if (desc > 0) penalPorFecha[f] = (penalPorFecha[f] || 0) + desc;
       const notaTrim = (r.nota || "").trim();
       if (notaTrim) {
         if (!notasPorFecha[f]) notasPorFecha[f] = [];
-        // Evitar duplicados exactos
         if (!notasPorFecha[f].includes(notaTrim)) notasPorFecha[f].push(notaTrim);
       }
     });
