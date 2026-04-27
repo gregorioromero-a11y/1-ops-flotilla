@@ -1063,23 +1063,60 @@ function ModuleEnvios() {
     return [...set].sort();
   })();
 
-  // Tipos de operación disponibles para un proveedor en el periodo seleccionado
-  const operacionesParaProveedor = (proveedor) => {
-    if (!proveedor) return [];
-    const set = new Set();
-    asistencia.forEach(a => {
+  // 7 operaciones canónicas — siempre se muestran en el popup
+  const OPERACIONES_CANONICAS = [
+    "Última milla",
+    "Crossdock",
+    "PETCO",
+    "PETCO Monterrey",
+    "Foráneo Puebla",
+    "Foráneo Monterrey",
+    "Foráneo GDL",
+  ];
+
+  // Mapea variantes de nombres (capitalización, acentos, alias) al canónico.
+  // CrossDock + Logística Inversa cuentan como Crossdock.
+  const normalizeOperacion = (raw) => {
+    if (!raw) return "Sin especificar";
+    const n = String(raw)
+      .toLowerCase()
+      .normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (n.includes("ultima milla") || n === "lm") return "Última milla";
+    if (n.includes("crossdock") || n.includes("cross dock") || n.includes("logistica inversa") || n.includes("logística inversa") || n.includes("halfmile") || n.includes("half mile")) return "Crossdock";
+    if (n.includes("petco") && n.includes("monterrey")) return "PETCO Monterrey";
+    if (n === "petco" || n.startsWith("petco ")) return "PETCO";
+    if (n.includes("foraneo") || n.includes("foráneo")) {
+      if (n.includes("monterrey") || n.includes("mty")) return "Foráneo Monterrey";
+      if (n.includes("gdl") || n.includes("guadalajara")) return "Foráneo GDL";
+      if (n.includes("puebla")) return "Foráneo Puebla";
+    }
+    return raw; // mantener cualquier otro tal cual
+  };
+
+  // Tipos de operación disponibles para un proveedor en el periodo:
+  // siempre devuelve las 7 canónicas en orden fijo (incluso con cuenta 0)
+  // para que el usuario vea lo que existe y lo que no.
+  const operacionesParaProveedor = () => OPERACIONES_CANONICAS;
+
+  // Cuenta de asistencias normalizadas por (proveedor, periodo, operación canónica)
+  const conteoOperacion = (proveedor, opCanonica) => {
+    if (!proveedor || !opCanonica) return 0;
+    return asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
-      if (f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor) {
-        set.add(a.tipo_operacion || "Sin especificar");
-      }
-    });
-    return [...set].sort();
+      if (!(f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor)) return false;
+      return normalizeOperacion(a.tipo_operacion) === opCanonica;
+    }).length;
   };
 
   const generatePrefactura = (proveedor, conIVA, operacionesFiltro) => {
     if (!proveedor) return;
+    // Las operaciones del filtro vienen como canónicas; comparamos contra
+    // la versión normalizada del registro en BD para que CrossDock y
+    // Logística Inversa cuenten como Crossdock, etc.
     const opsPermitidas = (operacionesFiltro && operacionesFiltro.length > 0) ? new Set(operacionesFiltro) : null;
-    const opMatch = a => opsPermitidas ? opsPermitidas.has(a.tipo_operacion || "Sin especificar") : true;
+    const opMatch = a => opsPermitidas ? opsPermitidas.has(normalizeOperacion(a.tipo_operacion)) : true;
     // 1) Filtrar asistencia del periodo + proveedor (+ operaciones seleccionadas)
     const filtrada = asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
@@ -1121,7 +1158,7 @@ function ModuleEnvios() {
       if (!f || f < fechaDesde || f > fechaHasta) return;
       const info = getCostoInfo(r);
       if (info.proveedor !== proveedor) return;
-      if (opsPermitidas && !opsPermitidas.has(info.tipo_operacion || "Sin especificar")) return;
+      if (opsPermitidas && !opsPermitidas.has(normalizeOperacion(info.tipo_operacion))) return;
       const { baseCost, costoNuevo } = getCostoReal(r);
       const desc = baseCost - costoNuevo;
       if (desc > 0) penalPorFecha[f] = (penalPorFecha[f] || 0) + desc;
@@ -1516,7 +1553,8 @@ function ModuleEnvios() {
           <button onClick={() => {
             const p = proveedoresEnPeriodo[0] || "";
             setPrefactProveedor(p);
-            setPrefactOperaciones(operacionesParaProveedor(p));
+            // Default: marca sólo las operaciones canónicas que tengan registros
+            setPrefactOperaciones(OPERACIONES_CANONICAS.filter(op => conteoOperacion(p, op) > 0));
             setPrefactOpen(true);
           }} style={{
             padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.green, backgroundColor: C.greenBg,
@@ -2153,7 +2191,7 @@ function ModuleEnvios() {
                 <select value={prefactProveedor} onChange={e => {
                   const p = e.target.value;
                   setPrefactProveedor(p);
-                  setPrefactOperaciones(operacionesParaProveedor(p));
+                  setPrefactOperaciones(OPERACIONES_CANONICAS.filter(op => conteoOperacion(p, op) > 0));
                 }}
                   style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+C.accent, fontSize:14, fontWeight:700, color:C.text, backgroundColor:C.white, marginBottom:16, boxSizing:"border-box" }}>
                   {proveedoresEnPeriodo.map(p => {
@@ -2163,8 +2201,7 @@ function ModuleEnvios() {
                   })}
                 </select>
                 {(() => {
-                  const opsDisp = operacionesParaProveedor(prefactProveedor);
-                  if (opsDisp.length === 0) return null;
+                  const opsDisp = OPERACIONES_CANONICAS;
                   const todasSeleccionadas = opsDisp.every(o => prefactOperaciones.includes(o));
                   return (
                     <div style={{ marginBottom:16 }}>
@@ -2178,20 +2215,24 @@ function ModuleEnvios() {
                           {todasSeleccionadas ? "Quitar todas" : "Seleccionar todas"}
                         </button>
                       </div>
-                      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(180px, 1fr))", gap:6, padding:10, backgroundColor:C.bg, borderRadius:8, border:"1px solid "+C.border, maxHeight:200, overflowY:"auto" }}>
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(180px, 1fr))", gap:6, padding:10, backgroundColor:C.bg, borderRadius:8, border:"1px solid "+C.border }}>
                         {opsDisp.map(o => {
                           const sel = prefactOperaciones.includes(o);
-                          const cuenta = asistencia.filter(a => { const f = (a.fecha||"").substring(0,10); return f >= fechaDesde && f <= fechaHasta && a.proveedor === prefactProveedor && (a.tipo_operacion || "Sin especificar") === o; }).length;
+                          const cuenta = conteoOperacion(prefactProveedor, o);
+                          const sinDatos = cuenta === 0;
                           return (
-                            <label key={o} style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px", borderRadius:6, backgroundColor:sel?C.accentLight:C.white, border:"1px solid "+(sel?C.accent:C.border), cursor:"pointer", fontSize:12 }}>
+                            <label key={o} style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px", borderRadius:6, backgroundColor:sel?C.accentLight:C.white, border:"1px solid "+(sel?C.accent:C.border), cursor:sinDatos&&!sel?"default":"pointer", fontSize:12, opacity:sinDatos&&!sel?0.55:1 }}>
                               <input type="checkbox" checked={sel}
                                 onChange={() => setPrefactOperaciones(prev => sel ? prev.filter(x => x !== o) : [...prev, o])}
                                 style={{ width:14, height:14, cursor:"pointer" }} />
                               <span style={{ fontWeight:700, color:sel?C.accent:C.text }}>{o}</span>
-                              <span style={{ marginLeft:"auto", fontSize:10, color:C.textMuted, fontWeight:600 }}>{cuenta}</span>
+                              <span style={{ marginLeft:"auto", fontSize:10, color:sinDatos?C.textMuted:C.green, fontWeight:700 }}>{cuenta}</span>
                             </label>
                           );
                         })}
+                      </div>
+                      <div style={{ marginTop:6, fontSize:10, color:C.textMuted, fontStyle:"italic" }}>
+                        Crossdock incluye registros etiquetados como "CrossDock" o "Logística Inversa".
                       </div>
                     </div>
                   );
