@@ -1183,8 +1183,9 @@ function ModuleEnvios() {
       if (opsPermitidas && !opsPermitidas.has(opCanonica)) return;
       const info = getCostoInfo(r);
       let tipo_unidad = info.tipo_unidad;
+      let baseCost = parseFloat(info.baseCost) || 0;
       // Fallback al catálogo del proveedor (NUNCA Sedan hardcoded)
-      if (!tipo_unidad) {
+      if (!tipo_unidad || baseCost <= 0) {
         const opMatchCarrier = (cOp) => {
           const o = (cOp || "").toLowerCase();
           if (opCanonica === "Última milla") return o.includes("ltima");
@@ -1198,21 +1199,33 @@ function ModuleEnvios() {
           && c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—"
           && opMatchCarrier(c.operacion)
         );
-        if (candidates.length === 1) tipo_unidad = candidates[0].tipo_unidad;
+        let chosen = null;
+        if (candidates.length === 1) chosen = candidates[0];
         else if (candidates.length > 1) {
-          tipo_unidad = candidates.slice().sort((a, b) =>
+          chosen = candidates.slice().sort((a, b) =>
             (parseFloat(a.costo_unidad) || 0) - (parseFloat(b.costo_unidad) || 0)
-          )[0].tipo_unidad;
+          )[0];
+        }
+        if (chosen) {
+          if (!tipo_unidad) tipo_unidad = chosen.tipo_unidad;
+          if (baseCost <= 0) baseCost = parseFloat(chosen.costo_unidad) || 0;
         }
       }
       if (!tipo_unidad) {
-        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta });
-        return; // No se pudo determinar — no se cuenta
+        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: "sin tipo_unidad" });
+        return;
+      }
+      // REGLA: si la línea tiene costo 0, NO se cuenta como unidad. La
+      // penalización (si la hay) se aplica por separado en el bloque de
+      // descuentos — sólo el descuento entra al subtotal, sin sumar unidad.
+      if (baseCost <= 0) {
+        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: "costo 0 — sólo descuento si tiene penalización" });
+        return;
       }
       out.push({ fecha: f, tipo_unidad, opCanonica });
     });
     if (ignoradas.length > 0 && typeof window !== "undefined") {
-      console.warn(`[Prefactura] ${ignoradas.length} ruta(s) ignorada(s) por no poder determinar tipo_unidad (operador sin asistencia y proveedor sin catálogo carriers que matchee la operación):`, ignoradas);
+      console.warn(`[Prefactura] ${ignoradas.length} ruta(s) ignorada(s) en el conteo de unidades:`, ignoradas);
     }
     return out;
   };
