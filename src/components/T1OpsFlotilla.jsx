@@ -1100,14 +1100,38 @@ function ModuleEnvios() {
   // para que el usuario vea lo que existe y lo que no.
   const operacionesParaProveedor = () => OPERACIONES_CANONICAS;
 
-  // Cuenta de asistencias normalizadas por (proveedor, periodo, operación canónica)
+  // Dedup: misma unidad (operador real) en mismo (proveedor, fecha, tipo_unidad,
+  // operación canónica) cuenta UNA vez aunque exista bajo varios labels en BD
+  // (típico: el mismo operador registrado como "CrossDock" y "Logística Inversa").
+  // Para filas "Registro manual" cada fila vale 1 (es una cuenta agregada, no
+  // un operador único).
+  const dedupAsistencia = (rows) => {
+    const seen = new Set();
+    const out = [];
+    rows.forEach(a => {
+      const op = normalizeOperacion(a.tipo_operacion);
+      if (!a.nombre_operador || a.nombre_operador === "Registro manual") {
+        out.push(a);
+        return;
+      }
+      const f = (a.fecha || "").substring(0, 10);
+      const key = `${a.nombre_operador}|${f}|${a.tipo_unidad || ""}|${op}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(a);
+    });
+    return out;
+  };
+
+  // Cuenta de asistencias normalizadas + deduplicadas por unidad real
   const conteoOperacion = (proveedor, opCanonica) => {
     if (!proveedor || !opCanonica) return 0;
-    return asistencia.filter(a => {
+    const candidatas = asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
       if (!(f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor)) return false;
       return normalizeOperacion(a.tipo_operacion) === opCanonica;
-    }).length;
+    });
+    return dedupAsistencia(candidatas).length;
   };
 
   const generatePrefactura = (proveedor, conIVA, operacionesFiltro) => {
@@ -1118,12 +1142,15 @@ function ModuleEnvios() {
     const opsPermitidas = (operacionesFiltro && operacionesFiltro.length > 0) ? new Set(operacionesFiltro) : null;
     const opMatch = a => opsPermitidas ? opsPermitidas.has(normalizeOperacion(a.tipo_operacion)) : true;
     // 1) Filtrar asistencia del periodo + proveedor (+ operaciones seleccionadas)
-    const filtrada = asistencia.filter(a => {
+    //    Dedup: si la misma unidad (operador real) aparece bajo varios labels
+    //    en el mismo día (ej. "CrossDock" + "Logística Inversa"), cuenta UNA vez.
+    const filtradaCruda = asistencia.filter(a => {
       const f = (a.fecha || "").substring(0, 10);
       if (!(f >= fechaDesde && f <= fechaHasta && a.proveedor === proveedor)) return false;
       if (!opMatch(a)) return false;
       return true;
     });
+    const filtrada = dedupAsistencia(filtradaCruda);
     // 2) Costo por tipo_unidad desde catálogo carriers
     const costoPorTipo = {};
     const tiposSet = new Set();
@@ -2231,8 +2258,9 @@ function ModuleEnvios() {
                           );
                         })}
                       </div>
-                      <div style={{ marginTop:6, fontSize:10, color:C.textMuted, fontStyle:"italic" }}>
-                        Crossdock incluye registros etiquetados como "CrossDock" o "Logística Inversa".
+                      <div style={{ marginTop:6, fontSize:10, color:C.textMuted, fontStyle:"italic", lineHeight:1.4 }}>
+                        Crossdock = "CrossDock" + "Logística Inversa" (es la misma unidad).<br />
+                        Si una unidad está registrada con varios labels el mismo día, se cuenta una sola vez.
                       </div>
                     </div>
                   );
