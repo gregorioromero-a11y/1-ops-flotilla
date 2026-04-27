@@ -611,6 +611,22 @@ function ModuleEnvios() {
   // Load rutas and costos when date changes
   useEffect(() => { loadRutas(); loadCostos(); loadAsistenciaCarriers(); }, [fechaDesde, fechaHasta]);
 
+  // Auto-refrescar al volver a la pestaña — evita datos viejos cuando un
+  // operador acaba de registrar asistencia desde /checkin u otra PC
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        loadRutas(); loadCostos(); loadAsistenciaCarriers();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [fechaDesde, fechaHasta]);
+
   const loadCostos = async () => {
     const { data } = await supabase.from("costos").select("*").gte("fecha", fechaDesde).lte("fecha", fechaHasta);
     setCostosData(data || []);
@@ -2636,6 +2652,18 @@ function ModuleCostos() {
   const checkinUrl = typeof window !== "undefined" ? window.location.origin + "/checkin" : "/checkin";
 
   useEffect(() => { loadData(); }, []);
+
+  // Auto-refrescar al regresar a la pestaña — evita datos viejos cuando
+  // un operador acaba de registrar asistencia desde su /checkin
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === "visible") loadData(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, []);
 
   const loadData = async () => {
     setLoading(true);

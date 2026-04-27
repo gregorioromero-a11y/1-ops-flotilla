@@ -150,7 +150,12 @@ export default function CheckinPage() {
     setSubmitStatus("submitting");
     setErrorMsg("");
 
-    const today = new Date().toISOString().split("T")[0];
+    // Fecha LOCAL del operador (no UTC). toISOString() convierte a UTC y eso
+    // hace que registros tomados después de las 18:00 hora México (UTC-6)
+    // se guarden con la fecha del día siguiente — provocando que "no aparezcan"
+    // en el filtro del día correcto.
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     const now = new Date().toISOString();
 
     // Find unit cost from carriers
