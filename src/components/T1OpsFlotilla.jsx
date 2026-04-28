@@ -1183,34 +1183,27 @@ function ModuleEnvios() {
       if (opCanonica === "Sin especificar") return;
       if (opsPermitidas && !opsPermitidas.has(opCanonica)) return;
       const info = getCostoInfo(r);
-      const baseCost = parseFloat(info.baseCost) || 0;
-      // Costo después de penalización (lo que realmente se factura por esa
-      // línea). Si la fórmula la deja en 0 o negativo, no es facturable.
-      const costoReal = getCostoReal(r);
-      const costoNuevo = parseFloat(costoReal.costoNuevo) || 0;
-      debug.push({ idRuta: r.id, fecha: f, operador: r.operador, baseCost, costoNuevo, info_missing: info.missing });
-      // REGLA: si la línea tiene costo final 0 (sea por baseCost = 0, o por
-      // penalización que lo lleva a 0/negativo), NO se considera como unidad.
-      // El descuento (si hay) se aplica por separado en el bloque de
-      // penalizaciones — sólo el descuento entra al subtotal, sin sumar unidad.
-      if (costoNuevo <= 0) {
-        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: baseCost <= 0 ? "baseCost = 0" : `penalización lleva costoNuevo a ${costoNuevo}` });
-        return;
-      }
-      // Tiene costo > 0. Inferir tipo_unidad si falta (sólo para tipo, NO
-      // para costo).
+      let baseCost = parseFloat(info.baseCost) || 0;
       let tipo_unidad = info.tipo_unidad;
-      // Validación: si el tipo_unidad de la asistencia no existe en el
-      // catálogo del proveedor, el dato de asistencia es inconsistente
-      // (operador marcó "Moto" en /checkin pero Partrunner sólo tiene Sedan).
-      // Forzar el fallback al catálogo en ese caso.
+
+      // 1) Validar tipo_unidad contra catálogo del proveedor. Si la
+      //    asistencia dice "Moto" pero Partrunner sólo tiene Sedan, el
+      //    dato de asistencia está mal — forzar el fallback al catálogo.
       if (tipo_unidad) {
         const existeEnCatalogo = carriers.some(c =>
           norm(c.proveedor) === provNorm && c.tipo_unidad === tipo_unidad
         );
-        if (!existeEnCatalogo) tipo_unidad = null;
+        if (!existeEnCatalogo) {
+          tipo_unidad = null;
+          baseCost = 0; // el costo viejo correspondía al tipo inválido
+        }
       }
-      if (!tipo_unidad) {
+
+      // 2) Fallback al catálogo cuando NO hay asistencia matching o cuando
+      //    la asistencia es inconsistente. La regla del usuario:
+      //    "el mandatorio será siempre el registro de envíos" — si una ruta
+      //    no tiene asistencia, igual se cuenta usando el catálogo.
+      if (!tipo_unidad || baseCost === 0) {
         const opMatchCarrier = (cOp) => {
           const o = (cOp || "").toLowerCase();
           if (opCanonica === "Última milla") return o.includes("ltima");
@@ -1224,15 +1217,37 @@ function ModuleEnvios() {
           && c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—"
           && opMatchCarrier(c.operacion)
         );
-        if (candidates.length === 1) tipo_unidad = candidates[0].tipo_unidad;
+        let chosen = null;
+        if (candidates.length === 1) chosen = candidates[0];
         else if (candidates.length > 1) {
-          tipo_unidad = candidates.slice().sort((a, b) =>
+          chosen = candidates.slice().sort((a, b) =>
             (parseFloat(a.costo_unidad) || 0) - (parseFloat(b.costo_unidad) || 0)
-          )[0].tipo_unidad;
+          )[0];
+        }
+        if (chosen) {
+          if (!tipo_unidad) tipo_unidad = chosen.tipo_unidad;
+          if (baseCost === 0) baseCost = parseFloat(chosen.costo_unidad) || 0;
         }
       }
+
+      // 3) Recalcular costoNuevo con el baseCost final (ya considerando
+      //    el catálogo). Aplicar penalización si la hay.
+      const hasFormula = (r.penalizacion || "").trim().length > 0;
+      const evaluated = evalFormula(r.penalizacion, baseCost);
+      const costoNuevo = hasFormula && !isNaN(evaluated) ? evaluated : baseCost;
+
+      debug.push({ idRuta: r.id, fecha: f, operador: r.operador, info_baseCost: info.baseCost, info_tipo: info.tipo_unidad, baseCost_final: baseCost, tipo_unidad_final: tipo_unidad, costoNuevo });
+
       if (!tipo_unidad) {
-        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: "sin tipo_unidad" });
+        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: "sin tipo_unidad ni catálogo del proveedor que matchee" });
+        return;
+      }
+
+      // REGLA: si el costo final (después de penalización) es 0 o negativo,
+      // NO se cuenta como unidad. Aplica para penalizaciones al 100% sobre
+      // baseCost > 0 (caso ADET 22 abr).
+      if (costoNuevo <= 0) {
+        ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: baseCost === 0 ? "sin asistencia y sin catálogo con costo" : `penalización lleva costoNuevo a ${costoNuevo}` });
         return;
       }
       out.push({ fecha: f, tipo_unidad, opCanonica });
