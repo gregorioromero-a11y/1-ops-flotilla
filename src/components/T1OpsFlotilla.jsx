@@ -1200,6 +1200,16 @@ function ModuleEnvios() {
       // Tiene costo > 0. Inferir tipo_unidad si falta (sólo para tipo, NO
       // para costo).
       let tipo_unidad = info.tipo_unidad;
+      // Validación: si el tipo_unidad de la asistencia no existe en el
+      // catálogo del proveedor, el dato de asistencia es inconsistente
+      // (operador marcó "Moto" en /checkin pero Partrunner sólo tiene Sedan).
+      // Forzar el fallback al catálogo en ese caso.
+      if (tipo_unidad) {
+        const existeEnCatalogo = carriers.some(c =>
+          norm(c.proveedor) === provNorm && c.tipo_unidad === tipo_unidad
+        );
+        if (!existeEnCatalogo) tipo_unidad = null;
+      }
       if (!tipo_unidad) {
         const opMatchCarrier = (cOp) => {
           const o = (cOp || "").toLowerCase();
