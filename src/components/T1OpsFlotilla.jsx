@@ -650,9 +650,24 @@ function ModuleEnvios() {
       cursor = chunk[chunk.length - 1].id;
     }
     const allAsistencia = Array.from(byId.values()).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || b.id - a.id);
-    const [{ data: cData }, { data: opsData }] = await Promise.all([
+    // Paginación por keyset para operadores (Supabase tope 1000 filas)
+    const loadAllOps = async () => {
+      const m = new Map();
+      let cur = null;
+      while (true) {
+        let q = supabase.from("operadores").select("id, nombre, proveedor, tipo_licencia, activo").order("id", { ascending: false }).limit(1000);
+        if (cur !== null) q = q.lt("id", cur);
+        const { data: ch } = await q;
+        if (!ch || ch.length === 0) break;
+        for (const row of ch) m.set(row.id, row);
+        if (ch.length < 1000) break;
+        cur = ch[ch.length - 1].id;
+      }
+      return Array.from(m.values());
+    };
+    const [{ data: cData }, opsData] = await Promise.all([
       supabase.from("carriers").select("*"),
-      supabase.from("operadores").select("nombre, proveedor, tipo_licencia, activo"),
+      loadAllOps(),
     ]);
     // IMPORTANTE: NO filtrar "Registro manual" aquí — esas filas son
     // asistencia legítima registrada desde el módulo de Asistencia Diaria
@@ -2683,8 +2698,27 @@ function ModuleOperadores() {
 
   const loadData = async () => {
     setLoading(true);
-    const [{ data: ops }, { data: cars }] = await Promise.all([
-      supabase.from("operadores").select("*").order("nombre"),
+    // Paginación por keyset sobre id — Supabase tiene tope de 1000 filas
+    // por consulta. Sin esto, los operadores nuevos no aparecían cuando ya
+    // había más de 1000 registrados.
+    const loadAllOperadores = async () => {
+      const byId = new Map();
+      const pageSize = 1000;
+      let cursor = null;
+      while (true) {
+        let q = supabase.from("operadores").select("*").order("id", { ascending: false }).limit(pageSize);
+        if (cursor !== null) q = q.lt("id", cursor);
+        const { data: chunk, error } = await q;
+        if (error) { console.error("operadores load error:", error); break; }
+        if (!chunk || chunk.length === 0) break;
+        for (const row of chunk) byId.set(row.id, row);
+        if (chunk.length < pageSize) break;
+        cursor = chunk[chunk.length - 1].id;
+      }
+      return Array.from(byId.values()).sort((a, b) => (a.nombre || "").localeCompare(b.nombre || "", "es", { sensitivity: "base" }));
+    };
+    const [ops, { data: cars }] = await Promise.all([
+      loadAllOperadores(),
       supabase.from("carriers").select("proveedor").order("proveedor"),
     ]);
     setOperadores(ops || []);
