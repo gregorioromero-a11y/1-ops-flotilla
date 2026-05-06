@@ -6508,6 +6508,8 @@ function ModuleConsultas() {
   const [resultados, setResultados] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [agruparPor, setAgruparPor] = useState(""); // "" = sin agrupación, sino columna id
+  const [busqueda, setBusqueda] = useState("");
 
   const colDef = TABLAS[tabla];
   const colMap = Object.fromEntries(colDef.columnas.map(c => [c.id, c]));
@@ -6519,7 +6521,61 @@ function ModuleConsultas() {
     setOrderBy(TABLAS[t].columnas[0].id);
     setResultados(null);
     setError("");
+    setAgruparPor("");
+    setBusqueda("");
   };
+
+  // Filtra resultados con búsqueda libre (busca en cualquier columna seleccionada)
+  const resultadosFiltrados = (() => {
+    if (!resultados) return null;
+    if (!busqueda.trim()) return resultados;
+    const q = busqueda.toLowerCase().trim();
+    const cols = columnasSeleccionadas.length > 0 ? columnasSeleccionadas : Object.keys(resultados[0] || {});
+    return resultados.filter(r => cols.some(c => String(r[c] ?? "").toLowerCase().includes(q)));
+  })();
+
+  // Estadísticas: por cada columna numérica seleccionada, calcula count/sum/avg/min/max
+  const stats = (() => {
+    if (!resultadosFiltrados || resultadosFiltrados.length === 0) return [];
+    const cols = (columnasSeleccionadas.length > 0 ? columnasSeleccionadas : Object.keys(resultadosFiltrados[0] || {}))
+      .filter(cId => colMap[cId]?.tipo === "number");
+    return cols.map(cId => {
+      const vals = resultadosFiltrados.map(r => parseFloat(r[cId])).filter(v => !isNaN(v));
+      if (vals.length === 0) return { col: cId, count: 0 };
+      const sum = vals.reduce((s, v) => s + v, 0);
+      return {
+        col: cId,
+        count: vals.length,
+        sum,
+        avg: sum / vals.length,
+        min: Math.min(...vals),
+        max: Math.max(...vals),
+      };
+    });
+  })();
+
+  // Agrupación: cuenta + suma de numéricos por categoría
+  const agrupado = (() => {
+    if (!agruparPor || !resultadosFiltrados || resultadosFiltrados.length === 0) return null;
+    const grupos = {};
+    const colsNum = (columnasSeleccionadas.length > 0 ? columnasSeleccionadas : Object.keys(resultadosFiltrados[0] || {}))
+      .filter(cId => colMap[cId]?.tipo === "number" && cId !== agruparPor);
+    resultadosFiltrados.forEach(r => {
+      const k = r[agruparPor] ?? "(vacío)";
+      const key = String(k);
+      if (!grupos[key]) {
+        grupos[key] = { categoria: key, count: 0 };
+        colsNum.forEach(c => { grupos[key]["sum_" + c] = 0; });
+      }
+      grupos[key].count += 1;
+      colsNum.forEach(c => {
+        const v = parseFloat(r[c]);
+        if (!isNaN(v)) grupos[key]["sum_" + c] += v;
+      });
+    });
+    const arr = Object.values(grupos).sort((a, b) => b.count - a.count);
+    return { rows: arr, colsNum };
+  })();
 
   const toggleColumna = (id) => {
     setColumnasSeleccionadas(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -6714,44 +6770,129 @@ function ModuleConsultas() {
         </div>
       )}
       {resultados !== null && (
-        <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden" }}>
-          <div style={{ padding:"12px 16px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-            <div style={{ fontSize:13, fontWeight:700, color:C.text }}>{resultados.length.toLocaleString()} fila(s)</div>
-            <button onClick={exportarCSV} disabled={resultados.length === 0}
-              style={{ padding:"7px 16px", borderRadius:6, border:"1px solid "+C.green, backgroundColor:C.greenBg, color:C.green, fontSize:12, fontWeight:700, cursor:resultados.length===0?"not-allowed":"pointer", display:"flex", alignItems:"center", gap:6 }}>
-              <IC.Download /> Exportar CSV
-            </button>
-          </div>
-          {resultados.length === 0 ? (
-            <div style={{ padding:40, textAlign:"center", color:C.textMuted, fontSize:13 }}>No hay resultados con los filtros aplicados.</div>
-          ) : (
-            <div style={{ overflowX:"auto", maxHeight:600, overflowY:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-                <thead style={{ position:"sticky", top:0, backgroundColor:C.bg, zIndex:1 }}>
-                  <tr>
-                    {(columnasSeleccionadas.length > 0 ? columnasSeleccionadas : Object.keys(resultados[0])).map(cId => (
-                      <th key={cId} style={{ padding:"8px 12px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", borderBottom:"1px solid "+C.border, whiteSpace:"nowrap" }}>{colMap[cId]?.label || cId}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {resultados.map((row, ri) => (
-                    <tr key={ri} style={{ borderBottom:"1px solid "+C.border }}>
-                      {(columnasSeleccionadas.length > 0 ? columnasSeleccionadas : Object.keys(row)).map(cId => {
-                        const v = row[cId];
-                        return (
-                          <td key={cId} style={{ padding:"8px 12px", color:C.text, whiteSpace:"nowrap", maxWidth:280, overflow:"hidden", textOverflow:"ellipsis" }} title={v != null ? String(v) : ""}>
-                            {v === null || v === undefined ? <span style={{color:C.textMuted}}>—</span> : (typeof v === "boolean" ? (v ? "✓" : "✗") : String(v))}
-                          </td>
-                        );
-                      })}
+        <>
+          {/* Estadísticas de columnas numéricas */}
+          {stats.length > 0 && (
+            <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, marginBottom:14, overflow:"hidden" }}>
+              <div style={{ padding:"10px 16px", borderBottom:"1px solid "+C.border, fontSize:12, fontWeight:700, color:C.text }}>
+                Estadísticas de columnas numéricas
+              </div>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                  <thead>
+                    <tr style={{ backgroundColor:C.bg }}>
+                      {["Columna","N","Suma","Promedio","Mín","Máx"].map(h => (
+                        <th key={h} style={{ padding:"7px 12px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", borderBottom:"1px solid "+C.border }}>{h}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {stats.map(s => (
+                      <tr key={s.col} style={{ borderBottom:"1px solid "+C.border }}>
+                        <td style={{ padding:"8px 12px", fontWeight:700, color:C.text }}>{colMap[s.col]?.label || s.col}</td>
+                        <td style={{ padding:"8px 12px", color:C.text }}>{s.count.toLocaleString()}</td>
+                        <td style={{ padding:"8px 12px", color:C.green, fontWeight:600 }}>{s.count > 0 ? s.sum.toLocaleString(undefined,{maximumFractionDigits:2}) : "—"}</td>
+                        <td style={{ padding:"8px 12px", color:C.accent, fontWeight:600 }}>{s.count > 0 ? s.avg.toLocaleString(undefined,{maximumFractionDigits:2}) : "—"}</td>
+                        <td style={{ padding:"8px 12px", color:C.text }}>{s.count > 0 ? s.min.toLocaleString() : "—"}</td>
+                        <td style={{ padding:"8px 12px", color:C.text }}>{s.count > 0 ? s.max.toLocaleString() : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
-        </div>
+
+          {/* Selector de agrupación */}
+          <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", marginBottom:14, backgroundColor:C.white, borderRadius:10, border:"1px solid "+C.border, flexWrap:"wrap" }}>
+            <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase" }}>Agrupar por</label>
+            <select value={agruparPor} onChange={e => setAgruparPor(e.target.value)}
+              style={{ padding:"6px 10px", borderRadius:6, border:"1px solid "+(agruparPor?C.accent:C.border), fontSize:12, fontWeight:600, backgroundColor:agruparPor?C.accentLight:C.white, color:agruparPor?C.accent:C.text }}>
+              <option value="">— Sin agrupación —</option>
+              {colDef.columnas.filter(c => c.tipo !== "number").map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+            <div style={{ flex:1 }} />
+            <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase" }}>Buscar en resultados</label>
+            <input type="text" value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="texto..."
+              style={{ padding:"6px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, minWidth:200 }} />
+          </div>
+
+          {/* Resultados — tabla agrupada o detalle */}
+          <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden" }}>
+            <div style={{ padding:"12px 16px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:C.text }}>
+                {agrupado
+                  ? `${agrupado.rows.length} grupo(s) — ${resultadosFiltrados.length.toLocaleString()} fila(s) en total`
+                  : `${resultadosFiltrados.length.toLocaleString()} fila(s)${busqueda ? ` (filtradas de ${resultados.length.toLocaleString()})` : ""}`}
+              </div>
+              <button onClick={exportarCSV} disabled={resultadosFiltrados.length === 0}
+                style={{ padding:"7px 16px", borderRadius:6, border:"1px solid "+C.green, backgroundColor:C.greenBg, color:C.green, fontSize:12, fontWeight:700, cursor:resultadosFiltrados.length===0?"not-allowed":"pointer", display:"flex", alignItems:"center", gap:6 }}>
+                <IC.Download /> Exportar CSV
+              </button>
+            </div>
+            {resultadosFiltrados.length === 0 ? (
+              <div style={{ padding:40, textAlign:"center", color:C.textMuted, fontSize:13 }}>No hay resultados con los filtros aplicados.</div>
+            ) : agrupado ? (
+              <div style={{ overflowX:"auto", maxHeight:500, overflowY:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                  <thead style={{ position:"sticky", top:0, backgroundColor:C.bg, zIndex:1 }}>
+                    <tr>
+                      <th style={{ padding:"8px 12px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", borderBottom:"1px solid "+C.border }}>{colMap[agruparPor]?.label || agruparPor}</th>
+                      <th style={{ padding:"8px 12px", textAlign:"right", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", borderBottom:"1px solid "+C.border }}>Conteo</th>
+                      {agrupado.colsNum.map(c => (
+                        <th key={c} style={{ padding:"8px 12px", textAlign:"right", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", borderBottom:"1px solid "+C.border }}>Σ {colMap[c]?.label || c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {agrupado.rows.map((g, gi) => (
+                      <tr key={gi} style={{ borderBottom:"1px solid "+C.border }}>
+                        <td style={{ padding:"8px 12px", fontWeight:600, color:C.text }}>{g.categoria}</td>
+                        <td style={{ padding:"8px 12px", textAlign:"right", color:C.accent, fontWeight:700 }}>{g.count.toLocaleString()}</td>
+                        {agrupado.colsNum.map(c => (
+                          <td key={c} style={{ padding:"8px 12px", textAlign:"right", color:C.green, fontWeight:600 }}>{g["sum_"+c].toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+                        ))}
+                      </tr>
+                    ))}
+                    <tr style={{ backgroundColor:"#FAFBFF", borderTop:"2px solid "+C.text }}>
+                      <td style={{ padding:"10px 12px", fontWeight:800, color:C.text }}>TOTAL</td>
+                      <td style={{ padding:"10px 12px", textAlign:"right", fontWeight:800, color:C.accent }}>{agrupado.rows.reduce((s,g)=>s+g.count,0).toLocaleString()}</td>
+                      {agrupado.colsNum.map(c => (
+                        <td key={c} style={{ padding:"10px 12px", textAlign:"right", fontWeight:800, color:C.green }}>{agrupado.rows.reduce((s,g)=>s+(g["sum_"+c]||0),0).toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ overflowX:"auto", maxHeight:600, overflowY:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                  <thead style={{ position:"sticky", top:0, backgroundColor:C.bg, zIndex:1 }}>
+                    <tr>
+                      {(columnasSeleccionadas.length > 0 ? columnasSeleccionadas : Object.keys(resultadosFiltrados[0])).map(cId => (
+                        <th key={cId} style={{ padding:"8px 12px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", borderBottom:"1px solid "+C.border, whiteSpace:"nowrap" }}>{colMap[cId]?.label || cId}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resultadosFiltrados.map((row, ri) => (
+                      <tr key={ri} style={{ borderBottom:"1px solid "+C.border }}>
+                        {(columnasSeleccionadas.length > 0 ? columnasSeleccionadas : Object.keys(row)).map(cId => {
+                          const v = row[cId];
+                          return (
+                            <td key={cId} style={{ padding:"8px 12px", color:C.text, whiteSpace:"nowrap", maxWidth:280, overflow:"hidden", textOverflow:"ellipsis" }} title={v != null ? String(v) : ""}>
+                              {v === null || v === undefined ? <span style={{color:C.textMuted}}>—</span> : (typeof v === "boolean" ? (v ? "✓" : "✗") : String(v))}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
