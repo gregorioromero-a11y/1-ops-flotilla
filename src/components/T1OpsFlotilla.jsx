@@ -89,6 +89,7 @@ const navSections = [
     { id: "ruteo", label: "Ruteo / Clusters", icon: IC.Map, badge: "Nuevo" },
     { id: "asignaciones", label: "Asignaciones", icon: IC.ClipboardCheck, badge: "Nuevo" },
     { id: "manifiesto", label: "Manifiesto", icon: IC.ClipboardCheck, badge: "Nuevo" },
+    { id: "consultas", label: "Consultas", icon: IC.BarChart, badge: "Nuevo" },
   ]},
   { label: "SISTEMA", items: [
     { id: "config", label: "Configuración", icon: IC.Settings },
@@ -6375,6 +6376,387 @@ function ModuleManifiesto() {
   );
 }
 
+// --- CONSULTAS (estilo Minitab — sin SQL crudo) ---
+function ModuleConsultas() {
+  // Catálogo de tablas + columnas-tipo (etiqueta amigable, tipo de dato)
+  const TABLAS = {
+    rutas: {
+      label: "Rutas (Registrar Envíos)",
+      columnas: [
+        { id: "id", label: "ID", tipo: "number" },
+        { id: "id_ruta", label: "ID Ruta", tipo: "text" },
+        { id: "carrier", label: "Carrier / Proveedor", tipo: "text" },
+        { id: "operador", label: "Operador", tipo: "text" },
+        { id: "tipo_ruta", label: "Tipo Ruta", tipo: "text" },
+        { id: "status", label: "Status", tipo: "text" },
+        { id: "total", label: "Total Paquetes", tipo: "number" },
+        { id: "entregados", label: "Entregados", tipo: "number" },
+        { id: "intentados", label: "Intentados", tipo: "number" },
+        { id: "no_visitados", label: "No Visitados", tipo: "number" },
+        { id: "recolecciones", label: "Recolecciones", tipo: "number" },
+        { id: "pct_entrega", label: "% Entrega", tipo: "number" },
+        { id: "intercambios", label: "Intercambios", tipo: "number" },
+        { id: "fecha_salida", label: "Fecha Salida", tipo: "date" },
+        { id: "fecha_registro", label: "Fecha Registro", tipo: "date" },
+        { id: "almacen", label: "Almacén", tipo: "text" },
+        { id: "placa", label: "Placa", tipo: "text" },
+        { id: "economico", label: "Económico", tipo: "text" },
+        { id: "correo_operador", label: "Correo Operador", tipo: "text" },
+        { id: "penalizacion", label: "Penalización", tipo: "text" },
+        { id: "nota", label: "Nota", tipo: "text" },
+      ],
+    },
+    asistencia: {
+      label: "Asistencia (Registro Diario)",
+      columnas: [
+        { id: "id", label: "ID", tipo: "number" },
+        { id: "fecha", label: "Fecha", tipo: "date" },
+        { id: "timestamp", label: "Timestamp", tipo: "date" },
+        { id: "proveedor", label: "Proveedor", tipo: "text" },
+        { id: "nombre_operador", label: "Operador", tipo: "text" },
+        { id: "tipo_unidad", label: "Tipo Unidad", tipo: "text" },
+        { id: "tipo_operacion", label: "Tipo Operación", tipo: "text" },
+        { id: "latitud", label: "Latitud", tipo: "number" },
+        { id: "longitud", label: "Longitud", tipo: "number" },
+        { id: "placa", label: "Placa", tipo: "text" },
+        { id: "correo", label: "Correo", tipo: "text" },
+      ],
+    },
+    operadores: {
+      label: "Operadores",
+      columnas: [
+        { id: "id", label: "ID", tipo: "number" },
+        { id: "nombre", label: "Nombre", tipo: "text" },
+        { id: "proveedor", label: "Proveedor", tipo: "text" },
+        { id: "tipo_licencia", label: "Tipo Licencia", tipo: "text" },
+        { id: "activo", label: "Activo", tipo: "boolean" },
+      ],
+    },
+    carriers: {
+      label: "Carriers (Catálogo)",
+      columnas: [
+        { id: "id", label: "ID", tipo: "number" },
+        { id: "proveedor", label: "Proveedor", tipo: "text" },
+        { id: "tipo_unidad", label: "Tipo Unidad", tipo: "text" },
+        { id: "operacion", label: "Operación", tipo: "text" },
+        { id: "costo_unidad", label: "Costo / Unidad", tipo: "number" },
+      ],
+    },
+    asignaciones_sesion: {
+      label: "Asignaciones por sesión",
+      columnas: [
+        { id: "id", label: "ID", tipo: "number" },
+        { id: "sesion", label: "Sesión", tipo: "text" },
+        { id: "ruta_nombre", label: "Ruta", tipo: "text" },
+        { id: "proveedor", label: "Proveedor", tipo: "text" },
+        { id: "tipo_unidad", label: "Tipo Unidad", tipo: "text" },
+        { id: "unidades", label: "Unidades", tipo: "number" },
+        { id: "no_asignar", label: "No Asignar", tipo: "boolean" },
+        { id: "created_at", label: "Creado", tipo: "date" },
+      ],
+    },
+    ruteo_puntos: {
+      label: "Puntos de Ruteo",
+      columnas: [
+        { id: "id", label: "ID", tipo: "number" },
+        { id: "sesion", label: "Sesión", tipo: "text" },
+        { id: "nombre", label: "Nombre Sesión", tipo: "text" },
+        { id: "indice", label: "Índice", tipo: "number" },
+        { id: "cluster", label: "Cluster", tipo: "number" },
+        { id: "ruta", label: "Ruta", tipo: "text" },
+        { id: "latitud", label: "Latitud", tipo: "number" },
+        { id: "longitud", label: "Longitud", tipo: "number" },
+        { id: "created_at", label: "Creado", tipo: "date" },
+      ],
+    },
+  };
+
+  const OPERADORES_FILTRO = {
+    text: [
+      { id: "eq", label: "es igual a" },
+      { id: "neq", label: "no es igual a" },
+      { id: "ilike", label: "contiene" },
+      { id: "is_null", label: "está vacío" },
+      { id: "not_null", label: "no está vacío" },
+    ],
+    number: [
+      { id: "eq", label: "=" },
+      { id: "neq", label: "≠" },
+      { id: "gt", label: ">" },
+      { id: "gte", label: "≥" },
+      { id: "lt", label: "<" },
+      { id: "lte", label: "≤" },
+      { id: "is_null", label: "está vacío" },
+      { id: "not_null", label: "no está vacío" },
+    ],
+    date: [
+      { id: "gte", label: "≥ fecha" },
+      { id: "lte", label: "≤ fecha" },
+      { id: "eq", label: "= fecha" },
+    ],
+    boolean: [
+      { id: "eq", label: "es igual a" },
+    ],
+  };
+
+  const [tabla, setTabla] = useState("rutas");
+  const [columnasSeleccionadas, setColumnasSeleccionadas] = useState(() => TABLAS.rutas.columnas.slice(0, 8).map(c => c.id));
+  const [filtros, setFiltros] = useState([]); // [{ col, op, val }]
+  const [orderBy, setOrderBy] = useState("id");
+  const [orderDir, setOrderDir] = useState("desc");
+  const [limite, setLimite] = useState(500);
+  const [resultados, setResultados] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const colDef = TABLAS[tabla];
+  const colMap = Object.fromEntries(colDef.columnas.map(c => [c.id, c]));
+
+  const cambiarTabla = (t) => {
+    setTabla(t);
+    setColumnasSeleccionadas(TABLAS[t].columnas.slice(0, 8).map(c => c.id));
+    setFiltros([]);
+    setOrderBy(TABLAS[t].columnas[0].id);
+    setResultados(null);
+    setError("");
+  };
+
+  const toggleColumna = (id) => {
+    setColumnasSeleccionadas(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const agregarFiltro = () => {
+    setFiltros(prev => [...prev, { col: colDef.columnas[0].id, op: "eq", val: "" }]);
+  };
+  const quitarFiltro = (idx) => setFiltros(prev => prev.filter((_, i) => i !== idx));
+  const updateFiltro = (idx, patch) => setFiltros(prev => prev.map((f, i) => i === idx ? { ...f, ...patch } : f));
+
+  const ejecutar = async () => {
+    setLoading(true); setError(""); setResultados(null);
+    try {
+      const cols = columnasSeleccionadas.length > 0 ? columnasSeleccionadas.join(",") : "*";
+      // Paginación por keyset si la tabla tiene `id`. Si no, offset.
+      const tieneId = colDef.columnas.some(c => c.id === "id");
+      const all = [];
+      const pageSize = 1000;
+      let cursor = null;
+      while (all.length < limite) {
+        const restante = limite - all.length;
+        const take = Math.min(pageSize, restante);
+        let q = supabase.from(tabla).select(cols).order(orderBy, { ascending: orderDir === "asc" }).limit(take);
+        // Aplicar filtros
+        for (const f of filtros) {
+          if (!f.col) continue;
+          const colDefF = colMap[f.col];
+          let v = f.val;
+          if (colDefF?.tipo === "number" && f.op !== "is_null" && f.op !== "not_null") v = parseFloat(v);
+          if (colDefF?.tipo === "boolean") v = String(f.val).toLowerCase() === "true";
+          if (f.op === "is_null") q = q.is(f.col, null);
+          else if (f.op === "not_null") q = q.not(f.col, "is", null);
+          else if (f.op === "ilike") q = q.ilike(f.col, "%" + (f.val || "") + "%");
+          else if (["eq","neq","gt","gte","lt","lte"].includes(f.op)) q = q[f.op](f.col, v);
+        }
+        // Keyset paginación si ordenamos por id desc
+        if (tieneId && orderBy === "id" && orderDir === "desc" && cursor !== null) {
+          q = q.lt("id", cursor);
+        }
+        const { data, error: qErr } = await q;
+        if (qErr) throw qErr;
+        if (!data || data.length === 0) break;
+        all.push(...data);
+        if (data.length < take) break;
+        if (tieneId && orderBy === "id" && orderDir === "desc") {
+          cursor = data[data.length - 1].id;
+        } else {
+          break; // sin keyset confiable, parar después de la primera página
+        }
+      }
+      setResultados(all);
+    } catch (e) {
+      setError(e.message || String(e));
+    }
+    setLoading(false);
+  };
+
+  const exportarCSV = () => {
+    if (!resultados || resultados.length === 0) return;
+    const cols = columnasSeleccionadas.length > 0 ? columnasSeleccionadas : Object.keys(resultados[0]);
+    const rowToCsv = (vals) => vals.map(v => {
+      if (v === null || v === undefined) return "";
+      const s = String(v).replace(/"/g, '""');
+      return /[",\n]/.test(s) ? `"${s}"` : s;
+    }).join(",");
+    const header = rowToCsv(cols.map(c => colMap[c]?.label || c));
+    const lines = resultados.map(r => rowToCsv(cols.map(c => r[c])));
+    const csv = [header, ...lines].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `consulta_${tabla}_${new Date().toISOString().substring(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom:18 }}>
+        <h1 style={{ fontSize:24, fontWeight:800, margin:0 }}>Consultas</h1>
+        <p style={{ color:C.textMuted, fontSize:13, marginTop:2 }}>Consulta visual sobre cualquier tabla — sin SQL. Selecciona columnas, agrega filtros y ejecuta.</p>
+      </div>
+
+      {/* Selector de tabla */}
+      <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, padding:16, marginBottom:14 }}>
+        <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em", display:"block", marginBottom:6 }}>Tabla</label>
+        <select value={tabla} onChange={e => cambiarTabla(e.target.value)}
+          style={{ padding:"9px 12px", borderRadius:8, border:"1px solid "+C.accent, fontSize:14, fontWeight:700, color:C.text, backgroundColor:C.white, minWidth:300 }}>
+          {Object.entries(TABLAS).map(([id, t]) => <option key={id} value={id}>{t.label}</option>)}
+        </select>
+      </div>
+
+      {/* Columnas */}
+      <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, padding:16, marginBottom:14 }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+          <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em" }}>
+            Columnas a mostrar ({columnasSeleccionadas.length}/{colDef.columnas.length})
+          </label>
+          <div style={{ display:"flex", gap:8 }}>
+            <button type="button" onClick={() => setColumnasSeleccionadas(colDef.columnas.map(c => c.id))}
+              style={{ background:"none", border:"none", cursor:"pointer", padding:0, fontSize:11, fontWeight:700, color:C.accent, textDecoration:"underline" }}>Todas</button>
+            <button type="button" onClick={() => setColumnasSeleccionadas([])}
+              style={{ background:"none", border:"none", cursor:"pointer", padding:0, fontSize:11, fontWeight:700, color:C.textMuted, textDecoration:"underline" }}>Ninguna</button>
+          </div>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(200px,1fr))", gap:6 }}>
+          {colDef.columnas.map(c => {
+            const sel = columnasSeleccionadas.includes(c.id);
+            return (
+              <label key={c.id} style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 10px", borderRadius:6, backgroundColor:sel?C.accentLight:C.bg, border:"1px solid "+(sel?C.accent:C.border), cursor:"pointer", fontSize:12 }}>
+                <input type="checkbox" checked={sel} onChange={() => toggleColumna(c.id)} style={{ width:14, height:14, cursor:"pointer" }} />
+                <span style={{ fontWeight:600, color:sel?C.accent:C.text }}>{c.label}</span>
+                <span style={{ marginLeft:"auto", fontSize:9, color:C.textMuted, textTransform:"uppercase" }}>{c.tipo}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, padding:16, marginBottom:14 }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+          <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em" }}>Filtros ({filtros.length})</label>
+          <button type="button" onClick={agregarFiltro}
+            style={{ padding:"5px 12px", borderRadius:6, border:"1px dashed "+C.accent, backgroundColor:"transparent", color:C.accent, fontSize:11, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
+            <IC.Plus /> Agregar filtro
+          </button>
+        </div>
+        {filtros.length === 0 && <div style={{ fontSize:12, color:C.textMuted, fontStyle:"italic" }}>Sin filtros — la consulta devolverá todas las filas (hasta el límite).</div>}
+        {filtros.map((f, i) => {
+          const cd = colMap[f.col];
+          const ops = OPERADORES_FILTRO[cd?.tipo || "text"] || OPERADORES_FILTRO.text;
+          const sinValor = f.op === "is_null" || f.op === "not_null";
+          return (
+            <div key={i} style={{ display:"flex", gap:8, alignItems:"center", marginTop:8, padding:"8px 10px", backgroundColor:C.bg, borderRadius:6 }}>
+              <select value={f.col} onChange={e => updateFiltro(i, { col: e.target.value, op: "eq", val: "" })}
+                style={{ padding:"6px 8px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, minWidth:160 }}>
+                {colDef.columnas.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
+              <select value={f.op} onChange={e => updateFiltro(i, { op: e.target.value })}
+                style={{ padding:"6px 8px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, minWidth:130 }}>
+                {ops.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+              {!sinValor && (
+                cd?.tipo === "boolean" ? (
+                  <select value={f.val} onChange={e => updateFiltro(i, { val: e.target.value })}
+                    style={{ padding:"6px 8px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, flex:1 }}>
+                    <option value="true">Verdadero</option>
+                    <option value="false">Falso</option>
+                  </select>
+                ) : (
+                  <input type={cd?.tipo === "date" ? "date" : (cd?.tipo === "number" ? "number" : "text")}
+                    value={f.val} onChange={e => updateFiltro(i, { val: e.target.value })}
+                    placeholder="Valor"
+                    style={{ padding:"6px 8px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, flex:1, boxSizing:"border-box" }} />
+                )
+              )}
+              <button onClick={() => quitarFiltro(i)} style={{ padding:4, border:"none", backgroundColor:C.redBg, color:C.red, borderRadius:4, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}><IC.X /></button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Orden + límite + ejecutar */}
+      <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:14, padding:"10px 14px", backgroundColor:C.white, borderRadius:10, border:"1px solid "+C.border }}>
+        <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase" }}>Ordenar por</label>
+        <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
+          style={{ padding:"6px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, fontWeight:600 }}>
+          {colDef.columnas.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+        </select>
+        <select value={orderDir} onChange={e => setOrderDir(e.target.value)}
+          style={{ padding:"6px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, fontWeight:600 }}>
+          <option value="desc">↓ Descendente</option>
+          <option value="asc">↑ Ascendente</option>
+        </select>
+        <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", marginLeft:14 }}>Límite</label>
+        <input type="number" min="1" max="50000" value={limite} onChange={e => setLimite(Math.max(1, Math.min(50000, parseInt(e.target.value)||1)))}
+          style={{ padding:"6px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, width:90, textAlign:"center", fontWeight:700 }} />
+        <div style={{ flex:1 }} />
+        <button onClick={ejecutar} disabled={loading || columnasSeleccionadas.length === 0}
+          style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:loading||columnasSeleccionadas.length===0?C.textMuted:C.accent, color:"white", fontSize:13, fontWeight:700, cursor:loading||columnasSeleccionadas.length===0?"not-allowed":"pointer" }}>
+          {loading ? "Ejecutando..." : "▶ Ejecutar consulta"}
+        </button>
+      </div>
+
+      {/* Resultados */}
+      {error && (
+        <div style={{ padding:14, backgroundColor:C.redBg, color:C.red, borderRadius:8, border:"1px solid "+C.red, marginBottom:14, fontSize:13, fontWeight:600 }}>
+          Error: {error}
+        </div>
+      )}
+      {resultados !== null && (
+        <div style={{ backgroundColor:C.white, borderRadius:12, border:"1px solid "+C.border, overflow:"hidden" }}>
+          <div style={{ padding:"12px 16px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <div style={{ fontSize:13, fontWeight:700, color:C.text }}>{resultados.length.toLocaleString()} fila(s)</div>
+            <button onClick={exportarCSV} disabled={resultados.length === 0}
+              style={{ padding:"7px 16px", borderRadius:6, border:"1px solid "+C.green, backgroundColor:C.greenBg, color:C.green, fontSize:12, fontWeight:700, cursor:resultados.length===0?"not-allowed":"pointer", display:"flex", alignItems:"center", gap:6 }}>
+              <IC.Download /> Exportar CSV
+            </button>
+          </div>
+          {resultados.length === 0 ? (
+            <div style={{ padding:40, textAlign:"center", color:C.textMuted, fontSize:13 }}>No hay resultados con los filtros aplicados.</div>
+          ) : (
+            <div style={{ overflowX:"auto", maxHeight:600, overflowY:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead style={{ position:"sticky", top:0, backgroundColor:C.bg, zIndex:1 }}>
+                  <tr>
+                    {(columnasSeleccionadas.length > 0 ? columnasSeleccionadas : Object.keys(resultados[0])).map(cId => (
+                      <th key={cId} style={{ padding:"8px 12px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", borderBottom:"1px solid "+C.border, whiteSpace:"nowrap" }}>{colMap[cId]?.label || cId}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {resultados.map((row, ri) => (
+                    <tr key={ri} style={{ borderBottom:"1px solid "+C.border }}>
+                      {(columnasSeleccionadas.length > 0 ? columnasSeleccionadas : Object.keys(row)).map(cId => {
+                        const v = row[cId];
+                        return (
+                          <td key={cId} style={{ padding:"8px 12px", color:C.text, whiteSpace:"nowrap", maxWidth:280, overflow:"hidden", textOverflow:"ellipsis" }} title={v != null ? String(v) : ""}>
+                            {v === null || v === undefined ? <span style={{color:C.textMuted}}>—</span> : (typeof v === "boolean" ? (v ? "✓" : "✗") : String(v))}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- PLACEHOLDER ---
 function ModulePlaceholder({ title, desc }) {
   return (
@@ -6412,6 +6794,7 @@ export default function T1OpsFlotilla() {
       case "ruteo": return <ModuleRuteo />;
       case "asignaciones": return <ModuleAsignaciones />;
       case "manifiesto": return <ModuleManifiesto />;
+      case "consultas": return <ModuleConsultas />;
       case "config": return <ModulePlaceholder title="Configuración" desc="Ajustes del sistema" />;
       default: return <ModuleDashboard />;
     }
