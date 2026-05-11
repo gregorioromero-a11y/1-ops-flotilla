@@ -589,6 +589,9 @@ function ModuleEnvios() {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualSaving, setManualSaving] = useState(false);
   const [manualMsg, setManualMsg] = useState("");
+  const [editRuta, setEditRuta] = useState(null); // ruta siendo editada
+  const [editCarrier, setEditCarrier] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
   const [prefactOpen, setPrefactOpen] = useState(false);
   const [prefactProveedor, setPrefactProveedor] = useState("");
   const [prefactIVA, setPrefactIVA] = useState(true);
@@ -2291,7 +2294,7 @@ function ModuleEnvios() {
                       position: "absolute", right: 12, top: 40, backgroundColor: C.white, borderRadius: 8,
                       boxShadow: "0 4px 16px rgba(0,0,0,0.12)", border: `1px solid ${C.border}`, zIndex: 100, minWidth: 140, overflow: "hidden",
                     }}>
-                      <button onClick={() => { setOpenMenu(null); /* edit logic */ }} style={{
+                      <button onClick={() => { setOpenMenu(null); setEditRuta(r); setEditCarrier(r.carrier || ""); }} style={{
                         width: "100%", padding: "10px 16px", border: "none", backgroundColor: "transparent", cursor: "pointer",
                         fontSize: 12, fontWeight: 600, color: C.text, textAlign: "left", display: "flex", alignItems: "center", gap: 8,
                       }}
@@ -2591,6 +2594,68 @@ function ModuleEnvios() {
           </div>
         </div>
       )}
+
+      {/* Edit modal — actualmente sólo permite cambiar el Transportista */}
+      {editRuta && (() => {
+        // Lista de proveedores únicos del catálogo carriers + asistencia (dedup case-insensitive)
+        const provSet = new Map(); // norm → preferred raw
+        const tally = (raw) => {
+          if (!raw || raw === "—") return;
+          const k = norm(raw);
+          if (!k) return;
+          if (!provSet.has(k) || (raw === raw.toUpperCase() && provSet.get(k) !== provSet.get(k).toUpperCase())) {
+            provSet.set(k, raw);
+          }
+        };
+        carriers.forEach(c => tally(c.proveedor));
+        asistencia.forEach(a => tally(a.proveedor));
+        rutas.forEach(r => tally(r.carrier));
+        const listaProv = [...provSet.values()].sort();
+        const sinCambio = editCarrier === (editRuta.carrier || "");
+        return (
+          <div style={{ position:"fixed", inset:0, backgroundColor:"rgba(12,20,37,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:10000 }}
+            onClick={() => !editSaving && setEditRuta(null)}>
+            <div onClick={e => e.stopPropagation()} style={{ backgroundColor:C.white, borderRadius:14, padding:0, width:480, maxWidth:"92vw", boxShadow:"0 16px 48px rgba(0,0,0,0.28)" }}>
+              <div style={{ padding:"16px 22px", borderBottom:"1px solid "+C.border }}>
+                <div style={{ fontSize:16, fontWeight:800, color:C.text }}>Editar ruta</div>
+                <div style={{ fontSize:12, color:C.textMuted, marginTop:2 }}>{editRuta.operador} · {(editRuta.salida||"").substring(0,10)}</div>
+              </div>
+              <div style={{ padding:22 }}>
+                <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Transportista</label>
+                <select value={editCarrier} onChange={e => setEditCarrier(e.target.value)}
+                  style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+(sinCambio?C.border:C.accent), fontSize:14, fontWeight:700, color:C.text, backgroundColor:sinCambio?C.white:C.accentLight, boxSizing:"border-box" }}>
+                  {listaProv.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+                <div style={{ fontSize:11, color:C.textMuted, marginTop:8 }}>
+                  Actual: <b style={{ color:C.text }}>{editRuta.carrier || "—"}</b>
+                </div>
+              </div>
+              <div style={{ padding:"14px 22px", borderTop:"1px solid "+C.border, display:"flex", justifyContent:"flex-end", gap:10 }}>
+                <button onClick={() => !editSaving && setEditRuta(null)} disabled={editSaving}
+                  style={{ padding:"9px 20px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, color:C.text, fontSize:13, fontWeight:600, cursor:editSaving?"not-allowed":"pointer" }}>
+                  Cancelar
+                </button>
+                <button onClick={async () => {
+                  if (sinCambio || !editRuta.id) { setEditRuta(null); return; }
+                  setEditSaving(true);
+                  try {
+                    const { error } = await supabase.from("rutas").update({ carrier: editCarrier }).eq("id", editRuta.id);
+                    if (error) throw error;
+                    setRutas(prev => prev.map(x => x.id === editRuta.id ? { ...x, carrier: editCarrier } : x));
+                    setEditRuta(null);
+                  } catch (err) {
+                    alert("Error al guardar: " + (err.message || err));
+                  }
+                  setEditSaving(false);
+                }} disabled={editSaving || sinCambio}
+                  style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:(editSaving||sinCambio)?C.textMuted:C.accent, color:"white", fontSize:13, fontWeight:700, cursor:(editSaving||sinCambio)?"not-allowed":"pointer" }}>
+                  {editSaving ? "Guardando..." : "Guardar cambios"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Confirm modal — replaces window.confirm() which can be permanently disabled by the browser */}
       {confirmModal && (
