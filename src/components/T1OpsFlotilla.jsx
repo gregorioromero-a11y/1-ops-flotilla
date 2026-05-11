@@ -6382,6 +6382,7 @@ function ModuleConsultas() {
   const TABLAS = {
     rutas: {
       label: "Rutas (Registrar Envíos)",
+      enrichWithCosts: true, // calcula costos virtuales después del fetch
       columnas: [
         { id: "id", label: "ID", tipo: "number" },
         { id: "id_ruta", label: "ID Ruta", tipo: "text" },
@@ -6404,6 +6405,13 @@ function ModuleConsultas() {
         { id: "correo_operador", label: "Correo Operador", tipo: "text" },
         { id: "penalizacion", label: "Penalización", tipo: "text" },
         { id: "nota", label: "Nota", tipo: "text" },
+        // Calculadas (no existen en BD — se generan al vuelo)
+        { id: "_proveedor_inferido", label: "Proveedor (inferido)", tipo: "text", virtual: true },
+        { id: "_tipo_unidad", label: "Tipo Unidad", tipo: "text", virtual: true },
+        { id: "_costo_base", label: "Costo Base ($)", tipo: "number", virtual: true },
+        { id: "_costo_real", label: "Costo Real ($)", tipo: "number", virtual: true },
+        { id: "_descuento", label: "Descuento ($)", tipo: "number", virtual: true },
+        { id: "_costo_por_paq", label: "Costo / Paquete ($)", tipo: "number", virtual: true },
       ],
     },
     asistencia: {
@@ -6590,8 +6598,15 @@ function ModuleConsultas() {
   const ejecutar = async () => {
     setLoading(true); setError(""); setResultados(null);
     try {
-      const cols = columnasSeleccionadas.length > 0 ? columnasSeleccionadas.join(",") : "*";
-      // Paginación por keyset si la tabla tiene `id`. Si no, offset.
+      // Excluir columnas virtuales del SELECT (no existen en BD)
+      const colsReales = columnasSeleccionadas.filter(c => !colMap[c]?.virtual);
+      // Si la tabla enriquece con costos, asegurar que campos necesarios estén
+      // en el select aunque el usuario no los marque (los necesitamos para calcular)
+      const required = colDef.enrichWithCosts
+        ? ["id","carrier","operador","tipo_ruta","fecha_salida","entregados","intentados","no_visitados","recolecciones","penalizacion"]
+        : [];
+      const finalCols = [...new Set([...colsReales, ...required])];
+      const cols = finalCols.length > 0 ? finalCols.join(",") : "*";
       const tieneId = colDef.columnas.some(c => c.id === "id");
       const all = [];
       const pageSize = 1000;
@@ -6600,9 +6615,8 @@ function ModuleConsultas() {
         const restante = limite - all.length;
         const take = Math.min(pageSize, restante);
         let q = supabase.from(tabla).select(cols).order(orderBy, { ascending: orderDir === "asc" }).limit(take);
-        // Aplicar filtros
         for (const f of filtros) {
-          if (!f.col) continue;
+          if (!f.col || colMap[f.col]?.virtual) continue; // virtual no se filtra en BD
           const colDefF = colMap[f.col];
           let v = f.val;
           if (colDefF?.tipo === "number" && f.op !== "is_null" && f.op !== "not_null") v = parseFloat(v);
@@ -6612,7 +6626,6 @@ function ModuleConsultas() {
           else if (f.op === "ilike") q = q.ilike(f.col, "%" + (f.val || "") + "%");
           else if (["eq","neq","gt","gte","lt","lte"].includes(f.op)) q = q[f.op](f.col, v);
         }
-        // Keyset paginación si ordenamos por id desc
         if (tieneId && orderBy === "id" && orderDir === "desc" && cursor !== null) {
           q = q.lt("id", cursor);
         }
@@ -6624,10 +6637,99 @@ function ModuleConsultas() {
         if (tieneId && orderBy === "id" && orderDir === "desc") {
           cursor = data[data.length - 1].id;
         } else {
-          break; // sin keyset confiable, parar después de la primera página
+          break;
         }
       }
-      setResultados(all);
+
+      // ENRIQUECIMIENTO: para `rutas`, calcular costos cruzando con
+      // asistencia + carriers (mismo método que usa Registrar Envíos).
+      let final = all;
+      if (colDef.enrichWithCosts && all.length > 0) {
+        // Cargar asistencia + carriers (paginados)
+        const cargarTodo = async (tbl, sel) => {
+          const acc = [];
+          let cur = null;
+          while (true) {
+            let qq = supabase.from(tbl).select(sel).order("id", { ascending: false }).limit(1000);
+            if (cur !== null) qq = qq.lt("id", cur);
+            const { data: ch } = await qq;
+            if (!ch || ch.length === 0) break;
+            acc.push(...ch);
+            if (ch.length < 1000) break;
+            cur = ch[ch.length - 1].id;
+          }
+          return acc;
+        };
+        const [asis, cars] = await Promise.all([
+          cargarTodo("asistencia", "id, fecha, nombre_operador, proveedor, tipo_unidad"),
+          cargarTodo("carriers", "id, proveedor, tipo_unidad, costo_unidad"),
+        ]);
+        // Indexar asistencia por (operador_norm + fecha)
+        const idxAsis = new Map();
+        asis.forEach(a => {
+          if (!a.nombre_operador || a.nombre_operador === "Registro manual") return;
+          const f = (a.fecha || "").substring(0, 10);
+          const k = norm(a.nombre_operador) + "|" + f;
+          if (!idxAsis.has(k)) idxAsis.set(k, a);
+        });
+        // Indexar carriers por proveedor+tipo_unidad
+        const carrierKey = (p, t) => norm(p) + "|" + (t || "");
+        const idxCars = new Map();
+        cars.forEach(c => {
+          idxCars.set(carrierKey(c.proveedor, c.tipo_unidad), parseFloat(c.costo_unidad) || 0);
+        });
+        // Tarifas fijas (mismo que Registrar Envíos)
+        const TARIFAS_FIJAS_LOCAL = { "PETCO Monterrey": 50, "Foráneo Monterrey": 55, "Foráneo GDL": 55 };
+        const evalLocal = (expr, costo) => {
+          if (!expr || !String(expr).trim()) return NaN;
+          let s = String(expr).replace(/costo/gi, "(" + (parseFloat(costo) || 0) + ")");
+          if (!/^[\d+\-*/().\s]*$/.test(s)) return NaN;
+          try {
+            // eslint-disable-next-line no-new-func
+            const r = Function('"use strict"; return (' + s + ')')();
+            return (typeof r === "number" && isFinite(r)) ? r : NaN;
+          } catch { return NaN; }
+        };
+
+        final = all.map(r => {
+          const tarFija = TARIFAS_FIJAS_LOCAL[r.tipo_ruta];
+          let proveedor = null, tipo_unidad = null, costo_base = 0;
+          if (tarFija != null) {
+            const isCross = /(half|cross)/i.test(r.tipo_ruta || "");
+            const paqOp = (parseInt(r.entregados) || 0) + (isCross ? (parseInt(r.recolecciones) || 0) : 0);
+            costo_base = tarFija * paqOp;
+            proveedor = r.tipo_ruta;
+            tipo_unidad = "Tarifa fija";
+          } else if (r.operador) {
+            const f = (r.fecha_salida || "").substring(0, 10);
+            const a = idxAsis.get(norm(r.operador) + "|" + f);
+            if (a) {
+              proveedor = a.proveedor;
+              tipo_unidad = a.tipo_unidad;
+              costo_base = idxCars.get(carrierKey(a.proveedor, a.tipo_unidad)) || 0;
+            }
+          }
+          // Penalización (aplica costo final)
+          const hasFormula = (r.penalizacion || "").trim().length > 0;
+          const evalu = evalLocal(r.penalizacion, costo_base);
+          const costo_real = hasFormula && !isNaN(evalu) ? evalu : costo_base;
+          const descuento = costo_base - costo_real;
+          const isCross = /(half|cross)/i.test(r.tipo_ruta || "");
+          const divisor = isCross ? (parseInt(r.recolecciones) || 0) : (parseInt(r.entregados) || 0);
+          const costo_por_paq = divisor > 0 ? costo_real / divisor : null;
+          return {
+            ...r,
+            _proveedor_inferido: proveedor,
+            _tipo_unidad: tipo_unidad,
+            _costo_base: costo_base,
+            _costo_real: costo_real,
+            _descuento: descuento,
+            _costo_por_paq: costo_por_paq,
+          };
+        });
+      }
+
+      setResultados(final);
     } catch (e) {
       setError(e.message || String(e));
     }
@@ -6715,7 +6817,7 @@ function ModuleConsultas() {
             <div key={i} style={{ display:"flex", gap:8, alignItems:"center", marginTop:8, padding:"8px 10px", backgroundColor:C.bg, borderRadius:6 }}>
               <select value={f.col} onChange={e => updateFiltro(i, { col: e.target.value, op: "eq", val: "" })}
                 style={{ padding:"6px 8px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, minWidth:160 }}>
-                {colDef.columnas.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                {colDef.columnas.filter(c => !c.virtual).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
               </select>
               <select value={f.op} onChange={e => updateFiltro(i, { op: e.target.value })}
                 style={{ padding:"6px 8px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, minWidth:130 }}>
@@ -6746,7 +6848,7 @@ function ModuleConsultas() {
         <label style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase" }}>Ordenar por</label>
         <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
           style={{ padding:"6px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, fontWeight:600 }}>
-          {colDef.columnas.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          {colDef.columnas.filter(c => !c.virtual).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
         </select>
         <select value={orderDir} onChange={e => setOrderDir(e.target.value)}
           style={{ padding:"6px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:12, fontWeight:600 }}>
