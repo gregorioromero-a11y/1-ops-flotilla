@@ -591,6 +591,8 @@ function ModuleEnvios() {
   const [manualMsg, setManualMsg] = useState("");
   const [editRuta, setEditRuta] = useState(null); // ruta siendo editada
   const [editCarrier, setEditCarrier] = useState("");
+  const [editTipoUnidad, setEditTipoUnidad] = useState("");
+  const [editCosto, setEditCosto] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [prefactOpen, setPrefactOpen] = useState(false);
   const [prefactProveedor, setPrefactProveedor] = useState("");
@@ -710,6 +712,23 @@ function ModuleEnvios() {
     // se inyectan en el constructor de rutasCombinadas.
     if (r && r._esAsistencia) {
       return { baseCost: r._baseCostSintetico || 0, proveedor: r.carrier, tipo_unidad: r._tipoUnidadSintetico || "Sedan", missing: false, tipo_operacion: r.tipoRuta, fromAsistencia: true };
+    }
+    // OVERRIDE manual desde la modal Editar: si la ruta tiene tipo_unidad y/o
+    // costo_unidad explícitos, esos mandan sobre asistencia/catálogo.
+    if (r && (r.tipoUnidadOverride || r.costoUnidadOverride != null)) {
+      const tu = r.tipoUnidadOverride || null;
+      const cu = r.costoUnidadOverride != null ? r.costoUnidadOverride : null;
+      // Si falta uno, intentar completar con asistencia/catálogo
+      let baseCost = cu;
+      let tipo_unidad = tu;
+      if (tipo_unidad && baseCost == null) {
+        const car = carriers.find(c => norm(c.proveedor) === norm(r.carrier) && c.tipo_unidad === tipo_unidad);
+        baseCost = parseFloat(car?.costo_unidad) || 0;
+      }
+      if (!tipo_unidad && baseCost != null) {
+        tipo_unidad = "Override";
+      }
+      return { baseCost: baseCost || 0, proveedor: r.carrier, tipo_unidad: tipo_unidad || "Override", missing: false, tipo_operacion: r.tipoRuta, override: true };
     }
     // Flat-rate tipos (per-package): bypass asistencia lookup entirely
     const rateFija = TARIFAS_FIJAS[r.tipoRuta];
@@ -879,6 +898,9 @@ function ModuleEnvios() {
         tiempoEstimado: r.tiempo_estimado || "—", tiempoReal: r.tiempo_real || "—",
         penalizacion: r.penalizacion || "",
         nota: r.nota || "",
+        // Overrides por ruta (cuando el usuario edita manualmente desde la modal)
+        tipoUnidadOverride: r.tipo_unidad || null,
+        costoUnidadOverride: r.costo_unidad != null ? parseFloat(r.costo_unidad) : null,
       })));
     } else {
       setRutas([]);
@@ -2294,7 +2316,14 @@ function ModuleEnvios() {
                       position: "absolute", right: 12, top: 40, backgroundColor: C.white, borderRadius: 8,
                       boxShadow: "0 4px 16px rgba(0,0,0,0.12)", border: `1px solid ${C.border}`, zIndex: 100, minWidth: 140, overflow: "hidden",
                     }}>
-                      <button onClick={() => { setOpenMenu(null); setEditRuta(r); setEditCarrier(r.carrier || ""); }} style={{
+                      <button onClick={() => {
+                        setOpenMenu(null);
+                        setEditRuta(r);
+                        setEditCarrier(r.carrier || "");
+                        const infoCur = getCostoInfo(r);
+                        setEditTipoUnidad(r.tipoUnidadOverride || infoCur.tipo_unidad || "");
+                        setEditCosto(r.costoUnidadOverride != null ? String(r.costoUnidadOverride) : (infoCur.baseCost ? String(infoCur.baseCost) : ""));
+                      }} style={{
                         width: "100%", padding: "10px 16px", border: "none", backgroundColor: "transparent", cursor: "pointer",
                         fontSize: 12, fontWeight: 600, color: C.text, textAlign: "left", display: "flex", alignItems: "center", gap: 8,
                       }}
@@ -2611,23 +2640,54 @@ function ModuleEnvios() {
         asistencia.forEach(a => tally(a.proveedor));
         rutas.forEach(r => tally(r.carrier));
         const listaProv = [...provSet.values()].sort();
-        const sinCambio = editCarrier === (editRuta.carrier || "");
+        // Tipos de unidad disponibles para el carrier seleccionado (del catálogo)
+        const tiposParaCarrier = [...new Set(
+          carriers.filter(c => norm(c.proveedor) === norm(editCarrier) && c.tipo_unidad && c.tipo_unidad !== "—" && c.tipo_unidad !== "---")
+            .map(c => c.tipo_unidad)
+        )].sort();
+        const carrierChanged = editCarrier !== (editRuta.carrier || "");
+        const tuChanged = (editTipoUnidad || "") !== (editRuta.tipoUnidadOverride || "");
+        const costoOriginalStr = editRuta.costoUnidadOverride != null ? String(editRuta.costoUnidadOverride) : "";
+        const costoChanged = (editCosto || "") !== costoOriginalStr;
+        const sinCambio = !carrierChanged && !tuChanged && !costoChanged;
+        // Auto-sugerir costo cuando cambia el tipo de unidad
+        const sugerirCosto = () => {
+          const car = carriers.find(c => norm(c.proveedor) === norm(editCarrier) && c.tipo_unidad === editTipoUnidad);
+          if (car) setEditCosto(String(parseFloat(car.costo_unidad) || 0));
+        };
         return (
           <div style={{ position:"fixed", inset:0, backgroundColor:"rgba(12,20,37,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:10000 }}
             onClick={() => !editSaving && setEditRuta(null)}>
-            <div onClick={e => e.stopPropagation()} style={{ backgroundColor:C.white, borderRadius:14, padding:0, width:480, maxWidth:"92vw", boxShadow:"0 16px 48px rgba(0,0,0,0.28)" }}>
+            <div onClick={e => e.stopPropagation()} style={{ backgroundColor:C.white, borderRadius:14, padding:0, width:520, maxWidth:"92vw", boxShadow:"0 16px 48px rgba(0,0,0,0.28)" }}>
               <div style={{ padding:"16px 22px", borderBottom:"1px solid "+C.border }}>
                 <div style={{ fontSize:16, fontWeight:800, color:C.text }}>Editar ruta</div>
                 <div style={{ fontSize:12, color:C.textMuted, marginTop:2 }}>{editRuta.operador} · {(editRuta.salida||"").substring(0,10)}</div>
               </div>
-              <div style={{ padding:22 }}>
-                <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Transportista</label>
-                <select value={editCarrier} onChange={e => setEditCarrier(e.target.value)}
-                  style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+(sinCambio?C.border:C.accent), fontSize:14, fontWeight:700, color:C.text, backgroundColor:sinCambio?C.white:C.accentLight, boxSizing:"border-box" }}>
-                  {listaProv.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
-                <div style={{ fontSize:11, color:C.textMuted, marginTop:8 }}>
-                  Actual: <b style={{ color:C.text }}>{editRuta.carrier || "—"}</b>
+              <div style={{ padding:22, display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+                <div style={{ gridColumn:"1 / -1" }}>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Transportista</label>
+                  <select value={editCarrier} onChange={e => { setEditCarrier(e.target.value); setEditTipoUnidad(""); setEditCosto(""); }}
+                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+(carrierChanged?C.accent:C.border), fontSize:14, fontWeight:700, color:C.text, backgroundColor:carrierChanged?C.accentLight:C.white, boxSizing:"border-box" }}>
+                    {listaProv.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Tipo de unidad</label>
+                  <select value={editTipoUnidad} onChange={e => { setEditTipoUnidad(e.target.value); const car = carriers.find(c => norm(c.proveedor) === norm(editCarrier) && c.tipo_unidad === e.target.value); if (car) setEditCosto(String(parseFloat(car.costo_unidad) || 0)); }}
+                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+(tuChanged?C.accent:C.border), fontSize:13, fontWeight:600, color:C.text, backgroundColor:tuChanged?C.accentLight:C.white, boxSizing:"border-box" }}>
+                    <option value="">— Inferir del catálogo —</option>
+                    {tiposParaCarrier.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Costo / unidad ($)</label>
+                  <input type="number" min="0" step="0.01" value={editCosto} onChange={e => setEditCosto(e.target.value)}
+                    placeholder="Vacío = catálogo"
+                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+(costoChanged?C.accent:C.border), fontSize:14, fontWeight:700, color:C.green, backgroundColor:costoChanged?C.accentLight:C.white, boxSizing:"border-box" }} />
+                </div>
+                <div style={{ gridColumn:"1 / -1", padding:"10px 12px", backgroundColor:C.bg, borderRadius:6, fontSize:11, color:C.textMuted, lineHeight:1.5 }}>
+                  <b style={{ color:C.text }}>Cómo funciona:</b> deja "Tipo de unidad" en "Inferir del catálogo" y "Costo / unidad" vacío para usar el costo automático del proveedor.
+                  Si pones valores, esa ruta usará esos overrides en lugar del catálogo.
                 </div>
               </div>
               <div style={{ padding:"14px 22px", borderTop:"1px solid "+C.border, display:"flex", justifyContent:"flex-end", gap:10 }}>
@@ -2639,9 +2699,25 @@ function ModuleEnvios() {
                   if (sinCambio || !editRuta.id) { setEditRuta(null); return; }
                   setEditSaving(true);
                   try {
-                    const { error } = await supabase.from("rutas").update({ carrier: editCarrier }).eq("id", editRuta.id);
-                    if (error) throw error;
-                    setRutas(prev => prev.map(x => x.id === editRuta.id ? { ...x, carrier: editCarrier } : x));
+                    const update = {};
+                    if (carrierChanged) update.carrier = editCarrier;
+                    if (tuChanged) update.tipo_unidad = editTipoUnidad || null;
+                    if (costoChanged) update.costo_unidad = editCosto === "" ? null : parseFloat(editCosto);
+                    const { error } = await supabase.from("rutas").update(update).eq("id", editRuta.id);
+                    if (error) {
+                      if (/column .* does not exist|schema cache/i.test(error.message)) {
+                        alert("⚠ Falta crear las columnas en Supabase. SQL:\n\nALTER TABLE rutas ADD COLUMN IF NOT EXISTS tipo_unidad text;\nALTER TABLE rutas ADD COLUMN IF NOT EXISTS costo_unidad numeric;");
+                        setEditSaving(false);
+                        return;
+                      }
+                      throw error;
+                    }
+                    setRutas(prev => prev.map(x => x.id === editRuta.id ? {
+                      ...x,
+                      ...(carrierChanged && { carrier: editCarrier }),
+                      ...(tuChanged && { tipoUnidadOverride: editTipoUnidad || null }),
+                      ...(costoChanged && { costoUnidadOverride: editCosto === "" ? null : parseFloat(editCosto) }),
+                    } : x));
                     setEditRuta(null);
                   } catch (err) {
                     alert("Error al guardar: " + (err.message || err));
