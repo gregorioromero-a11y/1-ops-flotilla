@@ -4041,6 +4041,7 @@ function ModuleRuteo() {
   const [rawRows, setRawRows] = useState([]);
   const [fileInfo, setFileInfo] = useState(null);
   const [mapMaximized, setMapMaximized] = useState(false);
+  const [mapStatic, setMapStatic] = useState(false); // true = no drag/zoom (mapa fijo)
   const [historico, setHistorico] = useState([]);
   const [loadingHist, setLoadingHist] = useState(false);
   const [showHistorico, setShowHistorico] = useState(false);
@@ -4108,17 +4109,28 @@ function ModuleRuteo() {
     };
   }, []);
 
-  // Toggle map dragging when switching modes
+  // Toggle interactividad del mapa según mapMode + mapStatic.
+  // - mapStatic = true → mapa congelado (sin drag, sin zoom, sin doble click)
+  // - mapMode = "lasso" → drag/scroll desactivados para no interferir con la selección
+  // - default → todo habilitado
   useEffect(() => {
-    if (!leafletMapRef.current) return;
-    if (mapMode === "lasso") {
-      leafletMapRef.current.dragging.disable();
-      leafletMapRef.current.scrollWheelZoom.disable();
+    const m = leafletMapRef.current;
+    if (!m) return;
+    const lockDrag = mapMode === "lasso" || mapStatic;
+    const lockZoom = mapStatic;
+    if (lockDrag) m.dragging.disable(); else m.dragging.enable();
+    if (lockZoom) {
+      m.scrollWheelZoom.disable(); m.doubleClickZoom.disable(); m.boxZoom.disable(); m.touchZoom.disable(); m.keyboard.disable();
+      if (m.zoomControl) m.zoomControl.remove();
     } else {
-      leafletMapRef.current.dragging.enable();
-      leafletMapRef.current.scrollWheelZoom.enable();
+      // En modo dinámico restablece zoom y controles
+      m.scrollWheelZoom.enable(); m.doubleClickZoom.enable(); m.boxZoom.enable(); m.touchZoom.enable(); m.keyboard.enable();
+      // El zoomControl puede haberse removido — reañadirlo si falta
+      if (m.zoomControl && !m.zoomControl._map) m.zoomControl.addTo(m);
     }
-  }, [mapMode]);
+    // Lasso siempre desactiva scrollWheelZoom adicional (no afecta a estático)
+    if (mapMode === "lasso") m.scrollWheelZoom.disable();
+  }, [mapMode, mapStatic]);
 
   // Ray-casting point-in-polygon
   const pip = (x, y, poly) => {
@@ -4989,6 +5001,10 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                     ✕ Limpiar ({selectedIndices.size})
                   </button>
                 )}
+                <button onClick={() => setMapStatic(s => !s)} title={mapStatic ? "Mapa estático (sin movimiento). Click para hacerlo dinámico." : "Mapa dinámico (drag/zoom). Click para congelarlo."}
+                  style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + (mapStatic ? "#0284C7" : C.border), backgroundColor: mapStatic ? "#DBEAFE" : "transparent", color: mapStatic ? "#0284C7" : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                  {mapStatic ? "🔒 Estático" : "🔓 Dinámico"}
+                </button>
                 <button onClick={() => setMapMaximized(m => !m)} title={mapMaximized ? "Restaurar mapa" : "Maximizar mapa"} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: mapMaximized ? C.sidebar : "transparent", color: mapMaximized ? "white" : C.textMuted, fontSize: 16, cursor: "pointer", lineHeight: 1 }}>
                   {mapMaximized ? "⊡" : "⛶"}
                 </button>
