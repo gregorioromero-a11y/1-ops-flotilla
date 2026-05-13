@@ -4109,28 +4109,19 @@ function ModuleRuteo() {
     };
   }, []);
 
-  // Toggle interactividad del mapa según mapMode + mapStatic.
-  // - mapStatic = true → mapa congelado (sin drag, sin zoom, sin doble click)
-  // - mapMode = "lasso" → drag/scroll desactivados para no interferir con la selección
-  // - default → todo habilitado
+  // Toggle map dragging when switching modes (lasso vs click).
+  // mapStatic NO afecta interactividad — sólo afecta el render de pines
+  // (estático = todos los pines visibles sin agrupación por zoom).
   useEffect(() => {
-    const m = leafletMapRef.current;
-    if (!m) return;
-    const lockDrag = mapMode === "lasso" || mapStatic;
-    const lockZoom = mapStatic;
-    if (lockDrag) m.dragging.disable(); else m.dragging.enable();
-    if (lockZoom) {
-      m.scrollWheelZoom.disable(); m.doubleClickZoom.disable(); m.boxZoom.disable(); m.touchZoom.disable(); m.keyboard.disable();
-      if (m.zoomControl) m.zoomControl.remove();
+    if (!leafletMapRef.current) return;
+    if (mapMode === "lasso") {
+      leafletMapRef.current.dragging.disable();
+      leafletMapRef.current.scrollWheelZoom.disable();
     } else {
-      // En modo dinámico restablece zoom y controles
-      m.scrollWheelZoom.enable(); m.doubleClickZoom.enable(); m.boxZoom.enable(); m.touchZoom.enable(); m.keyboard.enable();
-      // El zoomControl puede haberse removido — reañadirlo si falta
-      if (m.zoomControl && !m.zoomControl._map) m.zoomControl.addTo(m);
+      leafletMapRef.current.dragging.enable();
+      leafletMapRef.current.scrollWheelZoom.enable();
     }
-    // Lasso siempre desactiva scrollWheelZoom adicional (no afecta a estático)
-    if (mapMode === "lasso") m.scrollWheelZoom.disable();
-  }, [mapMode, mapStatic]);
+  }, [mapMode]);
 
   // Ray-casting point-in-polygon
   const pip = (x, y, poly) => {
@@ -4228,14 +4219,14 @@ function ModuleRuteo() {
     setupLasso(map);
   }, [leafletLoaded, puntos]);
 
-  // Redraw markers when assignments, selection, or guía key changes (debounced for performance)
+  // Redraw markers when assignments, selection, guía key OR mapStatic change
   useEffect(() => {
     if (!leafletMapRef.current || puntos.length === 0) return;
     if (redrawTimerRef.current) clearTimeout(redrawTimerRef.current);
     redrawTimerRef.current = setTimeout(() => {
       if (leafletMapRef.current) drawMarkers(leafletMapRef.current, puntos, asignaciones, numClusters, selectedIndices, guiaKey);
     }, 40);
-  }, [asignaciones, selectedIndices, guiaKey]);
+  }, [asignaciones, selectedIndices, guiaKey, mapStatic]);
 
   // Invalidate map size when maximized state changes
   useEffect(() => {
@@ -4260,12 +4251,15 @@ function ModuleRuteo() {
       markersRef.current.forEach(m => { try { map.removeLayer(m); } catch {} });
       markersRef.current = [];
     }
-    // Datasets grandes (>500 puntos): UN cluster group POR RUTA. Cada grupo
-    // visual representa UNA ruta — su ícono de cluster muestra el número de
-    // ruta (NO el conteo de puntos), con el color de esa ruta. Cuando el
-    // usuario hace zoom, los pines individuales aparecen también con su número.
-    // Esto preserva la UX original (rutas identificables) y soporta 15K+ puntos.
-    const USE_CLUSTER = pts.length > 500 && L.markerClusterGroup;
+    // CLUSTER (dinámico): un MarkerClusterGroup POR RUTA. Los pines se
+    // agrupan en burbujas con número de ruta cuando hay zoom out, y aparecen
+    // individuales al hacer zoom in. Necesario para datasets >500 puntos
+    // (15K markers individuales matarían al navegador).
+    //
+    // ESTÁTICO: TODOS los pines individuales visibles SIEMPRE, sin importar
+    // el zoom. El usuario lo elige con el switch — útil para visión completa,
+    // pero con 15K puntos el render se pone lento.
+    const USE_CLUSTER = !mapStatic && pts.length > 500 && L.markerClusterGroup;
     let groupsByRoute = null;
     if (USE_CLUSTER) {
       groupsByRoute = new Map();
@@ -5001,9 +4995,9 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                     ✕ Limpiar ({selectedIndices.size})
                   </button>
                 )}
-                <button onClick={() => setMapStatic(s => !s)} title={mapStatic ? "Mapa estático (sin movimiento). Click para hacerlo dinámico." : "Mapa dinámico (drag/zoom). Click para congelarlo."}
+                <button onClick={() => setMapStatic(s => !s)} title={mapStatic ? "Estático: todos los pines visibles SIEMPRE. Click para volver a agrupar con el zoom." : "Dinámico: pines se agrupan con el zoom. Click para mostrarlos TODOS sin agrupar."}
                   style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + (mapStatic ? "#0284C7" : C.border), backgroundColor: mapStatic ? "#DBEAFE" : "transparent", color: mapStatic ? "#0284C7" : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-                  {mapStatic ? "🔒 Estático" : "🔓 Dinámico"}
+                  {mapStatic ? "📍 Estático" : "🔀 Dinámico"}
                 </button>
                 <button onClick={() => setMapMaximized(m => !m)} title={mapMaximized ? "Restaurar mapa" : "Maximizar mapa"} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: mapMaximized ? C.sidebar : "transparent", color: mapMaximized ? "white" : C.textMuted, fontSize: 16, cursor: "pointer", lineHeight: 1 }}>
                   {mapMaximized ? "⊡" : "⛶"}
