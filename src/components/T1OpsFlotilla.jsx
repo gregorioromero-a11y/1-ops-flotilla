@@ -4234,34 +4234,30 @@ function ModuleRuteo() {
 
   const drawMarkers = (map, pts, assigns, nk, selSet, gKey) => {
     const L = window.L;
-    // Limpiar markers anteriores
+    // Limpiar layers anteriores
+    if (clusterGroupRef.current) {
+      // clusterGroupRef ahora puede ser un Map (cluster por ruta) o un único group
+      if (clusterGroupRef.current instanceof Map) {
+        clusterGroupRef.current.forEach(g => map.removeLayer(g));
+      } else {
+        map.removeLayer(clusterGroupRef.current);
+      }
+      clusterGroupRef.current = null;
+    }
     if (markersRef.current.length > 0) {
-      // Si estaban en el cluster group, vaciarlo en bloque (mucho más rápido
-      // que removeLayer una por una con 15K markers)
-      if (clusterGroupRef.current) clusterGroupRef.current.clearLayers();
-      else markersRef.current.forEach(m => map.removeLayer(m));
+      markersRef.current.forEach(m => { try { map.removeLayer(m); } catch {} });
       markersRef.current = [];
     }
-    // Para datasets grandes (>500 puntos) usamos MarkerCluster — agrupa
-    // markers cercanos automáticamente, el navegador no renderiza 15K
-    // SVGs simultáneamente. Threshold conservador.
+    // Datasets grandes (>500 puntos): UN cluster group POR RUTA. Cada grupo
+    // visual representa UNA ruta — su ícono de cluster muestra el número de
+    // ruta (NO el conteo de puntos), con el color de esa ruta. Cuando el
+    // usuario hace zoom, los pines individuales aparecen también con su número.
+    // Esto preserva la UX original (rutas identificables) y soporta 15K+ puntos.
     const USE_CLUSTER = pts.length > 500 && L.markerClusterGroup;
+    let groupsByRoute = null;
     if (USE_CLUSTER) {
-      if (!clusterGroupRef.current) {
-        clusterGroupRef.current = L.markerClusterGroup({
-          chunkedLoading: true, // procesa markers en chunks para no bloquear UI
-          chunkInterval: 50,    // ms por chunk
-          chunkDelay: 10,       // ms entre chunks
-          showCoverageOnHover: false,
-          spiderfyOnMaxZoom: true,
-          maxClusterRadius: 50, // px — más alto = más agrupación
-        });
-        map.addLayer(clusterGroupRef.current);
-      }
-    } else if (clusterGroupRef.current) {
-      // Datasets chicos: limpiar cluster y volver al modo directo
-      map.removeLayer(clusterGroupRef.current);
-      clusterGroupRef.current = null;
+      groupsByRoute = new Map();
+      clusterGroupRef.current = groupsByRoute;
     }
     pts.forEach((p, i) => {
       const cl = assigns[i] ?? 0;
@@ -4280,8 +4276,33 @@ function ModuleRuteo() {
       </div>`;
       const icon = L.divIcon({ html: pinHtml, className: "", iconSize: [w, h], iconAnchor: [w / 2, h] });
       const marker = L.marker([p.lat, p.lng], { icon });
-      if (clusterGroupRef.current) clusterGroupRef.current.addLayer(marker);
-      else marker.addTo(map);
+      if (groupsByRoute) {
+        // Obtener (o crear) el cluster group de esta ruta. El iconCreateFunction
+        // muestra el NÚMERO DE RUTA (no el conteo de puntos) con el color de
+        // la ruta — es lo que el usuario espera ver.
+        if (!groupsByRoute.has(cl)) {
+          const labelClusterTxt = isExcluded ? "✕" : String(cl + 1);
+          const fontSz = labelClusterTxt.length >= 3 ? 11 : labelClusterTxt.length === 2 ? 13 : 15;
+          const cg = L.markerClusterGroup({
+            chunkedLoading: true,
+            chunkInterval: 50,
+            chunkDelay: 10,
+            showCoverageOnHover: false,
+            spiderfyOnMaxZoom: true,
+            maxClusterRadius: 50,
+            iconCreateFunction: () => L.divIcon({
+              html: `<div style="background:${color};color:white;width:38px;height:38px;border-radius:50%;border:2.5px solid white;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:${fontSz}px;box-shadow:0 2px 6px rgba(0,0,0,0.35);opacity:${isExcluded ? 0.65 : 1};">${labelClusterTxt}</div>`,
+              className: "",
+              iconSize: [38, 38],
+            }),
+          });
+          map.addLayer(cg);
+          groupsByRoute.set(cl, cg);
+        }
+        groupsByRoute.get(cl).addLayer(marker);
+      } else {
+        marker.addTo(map);
+      }
       const guiaVal = gKey && p[gKey] ? String(p[gKey]) : "";
       if (guiaVal) {
         marker.bindTooltip(`<b style="font-family:monospace;font-size:13px;">${guiaVal}</b>`, {
