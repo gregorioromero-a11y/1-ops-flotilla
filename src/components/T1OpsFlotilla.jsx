@@ -4048,6 +4048,8 @@ function ModuleRuteo() {
   const [mergeCluster, setMergeCluster] = useState(null); // cluster origen para fusionar
   const [mergeTarget, setMergeTarget] = useState(null);   // cluster destino
   const [mergeSaving, setMergeSaving] = useState(false);
+  const [splitNByCluster, setSplitNByCluster] = useState({}); // { clusterId: N } para la tabla
+  const [showSplitTable, setShowSplitTable] = useState(false);
   const [historico, setHistorico] = useState([]);
   const [loadingHist, setLoadingHist] = useState(false);
   const [showHistorico, setShowHistorico] = useState(false);
@@ -5129,7 +5131,102 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                 </div>
               );
             })}
+            <button onClick={() => setShowSplitTable(s => !s)}
+              style={{ marginLeft: "auto", padding: "4px 12px", borderRadius: 6, border: "1px solid " + C.accent, backgroundColor: showSplitTable ? C.accent : C.accentLight, color: showSplitTable ? "white" : C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              {showSplitTable ? "▴ Ocultar dividir rutas" : "✂ Dividir rutas en bloque"}
+            </button>
           </div>
+
+          {/* Tabla para dividir rutas en batch */}
+          {showSplitTable && (
+            <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, marginBottom: 14, overflow: "hidden" }}>
+              <div style={{ padding: "12px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Dividir rutas</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Escribe el N para las rutas que quieras partir. Las que dejes vacías no se tocan.</div>
+                </div>
+                {(() => {
+                  const cuantas = Object.entries(splitNByCluster).filter(([, n]) => parseInt(n) >= 2).length;
+                  return cuantas > 0 && (
+                    <button disabled={splitSaving}
+                      onClick={async () => {
+                        const pendientes = Object.entries(splitNByCluster)
+                          .filter(([, n]) => parseInt(n) >= 2)
+                          .map(([cl, n]) => [parseInt(cl), parseInt(n)]);
+                        for (const [cl, n] of pendientes) {
+                          // Re-validar contra el state más reciente
+                          const cnt = asignaciones.filter(a => a === cl).length;
+                          if (cnt < n) continue;
+                          // eslint-disable-next-line no-await-in-loop
+                          await dividirRuta(cl, n);
+                        }
+                        setSplitNByCluster({});
+                      }}
+                      style={{ padding: "8px 18px", borderRadius: 8, border: "none", backgroundColor: splitSaving ? C.textMuted : C.accent, color: "white", fontSize: 12, fontWeight: 700, cursor: splitSaving ? "not-allowed" : "pointer" }}>
+                      {splitSaving ? "Procesando..." : `✂ Aplicar ${cuantas} divisione${cuantas === 1 ? "" : "s"}`}
+                    </button>
+                  );
+                })()}
+              </div>
+              <div style={{ overflowX: "auto", maxHeight: 360 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead style={{ position: "sticky", top: 0, backgroundColor: C.bg, zIndex: 1 }}>
+                    <tr>
+                      <th style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>Ruta</th>
+                      <th style={{ padding: "8px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>Puntos</th>
+                      <th style={{ padding: "8px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>Dividir en N</th>
+                      <th style={{ padding: "8px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>Promedio resultante</th>
+                      <th style={{ padding: "8px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(clusterCount).filter(([cl]) => +cl !== -1).sort((a, b) => +a[0] - +b[0]).map(([cl, cnt]) => {
+                      const clNum = +cl;
+                      const n = splitNByCluster[clNum] || "";
+                      const nInt = parseInt(n) || 0;
+                      const valido = nInt >= 2 && nInt <= cnt;
+                      return (
+                        <tr key={cl} style={{ borderBottom: "1px solid " + C.border }}
+                          onMouseEnter={e => e.currentTarget.style.backgroundColor = "#FAFBFF"}
+                          onMouseLeave={e => e.currentTarget.style.backgroundColor = "transparent"}>
+                          <td style={{ padding: "8px 14px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <div style={{ width: 10, height: 10, borderRadius: "50%", backgroundColor: RCOLORS[clNum % RCOLORS.length] }} />
+                              <span style={{ fontWeight: 700, color: RCOLORS[clNum % RCOLORS.length] }}>Ruta {clNum + 1}</span>
+                            </div>
+                          </td>
+                          <td style={{ padding: "8px 14px", textAlign: "right", fontWeight: 600, color: C.text }}>{cnt}</td>
+                          <td style={{ padding: "6px 14px", textAlign: "center" }}>
+                            <input type="number" min="2" max={cnt} value={n}
+                              onChange={e => {
+                                const v = e.target.value;
+                                setSplitNByCluster(prev => {
+                                  const next = { ...prev };
+                                  if (v === "" || v === "0" || v === "1") delete next[clNum];
+                                  else next[clNum] = Math.min(cnt, parseInt(v) || 0);
+                                  return next;
+                                });
+                              }}
+                              placeholder="—"
+                              style={{ width: 70, padding: "6px 8px", borderRadius: 6, border: "1px solid " + (valido ? C.accent : C.border), fontSize: 14, fontWeight: 700, textAlign: "center", backgroundColor: valido ? C.accentLight : C.white, color: valido ? C.accent : C.text }} />
+                          </td>
+                          <td style={{ padding: "8px 14px", textAlign: "center", color: C.textMuted }}>
+                            {valido ? `~${Math.round(cnt / nInt)} pts c/u` : "—"}
+                          </td>
+                          <td style={{ padding: "6px 14px", textAlign: "right" }}>
+                            <button onClick={() => valido && dividirRuta(clNum, nInt)} disabled={!valido || splitSaving}
+                              style={{ padding: "5px 12px", borderRadius: 6, border: "none", backgroundColor: (!valido || splitSaving) ? C.bg : C.accent, color: (!valido || splitSaving) ? C.textMuted : "white", fontSize: 11, fontWeight: 700, cursor: (!valido || splitSaving) ? "not-allowed" : "pointer" }}>
+                              ✂ Dividir
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Map */}
           <div style={{ backgroundColor: C.white, borderRadius: mapMaximized ? 0 : 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: mapMaximized ? 0 : 14, ...(mapMaximized ? { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999 } : {}) }}>
