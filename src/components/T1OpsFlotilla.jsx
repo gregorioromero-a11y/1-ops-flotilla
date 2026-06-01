@@ -4042,6 +4042,9 @@ function ModuleRuteo() {
   const [fileInfo, setFileInfo] = useState(null);
   const [mapMaximized, setMapMaximized] = useState(false);
   const [mapStatic, setMapStatic] = useState(false); // true = no drag/zoom (mapa fijo)
+  const [splitCluster, setSplitCluster] = useState(null); // cluster id que se está dividiendo
+  const [splitN, setSplitN] = useState(2);
+  const [splitSaving, setSplitSaving] = useState(false);
   const [historico, setHistorico] = useState([]);
   const [loadingHist, setLoadingHist] = useState(false);
   const [showHistorico, setShowHistorico] = useState(false);
@@ -4688,6 +4691,89 @@ function ModuleRuteo() {
     setLoading(false);
   };
 
+  // Divide UNA ruta en N sub-rutas. Sólo re-clusteriza los puntos de ese
+  // cluster — las otras rutas no se tocan. Las nuevas se anexan al final
+  // (Ruta N+1, N+2, ...). Si había asignación previa en asignaciones_sesion,
+  // se hereda a las nuevas para que el usuario no tenga que re-asignar.
+  const dividirRuta = async (clusterId, n) => {
+    if (n < 2) return;
+    // Indices globales de los puntos en este cluster
+    const idxs = [];
+    asignaciones.forEach((cl, i) => { if (cl === clusterId) idxs.push(i); });
+    if (idxs.length < n) { setMsg(`No se puede dividir Ruta ${clusterId + 1} en ${n}: solo tiene ${idxs.length} puntos.`); return; }
+    setSplitSaving(true);
+    setMsg(`⏳ Dividiendo Ruta ${clusterId + 1} (${idxs.length} puntos) en ${n} sub-rutas...`);
+    try {
+      const ptsSubset = idxs.map(i => ({ lat: puntos[i].lat, lng: puntos[i].lng }));
+      const { assigns: subAssigns, seqOrder: subSeq } = await runKMeansAsync(ptsSubset, n, (p) => {
+        setMsg(`⏳ Dividiendo Ruta ${clusterId + 1}: ${p.phase === "clustering" ? "Clusterizando" : "Optimizando"}: ${p.value}%`);
+      });
+      // ID base para las nuevas rutas: max actual + 1
+      const maxCluster = Math.max(...asignaciones);
+      const newClusterIds = Array.from({ length: n }, (_, k) => maxCluster + 1 + k);
+      // Construir nueva asignación global
+      const nuevasAsigns = [...asignaciones];
+      const nuevoSeq = kMeans._lastSeqOrder ? [...kMeans._lastSeqOrder] : new Array(asignaciones.length).fill(0);
+      idxs.forEach((globalIdx, localPos) => {
+        nuevasAsigns[globalIdx] = newClusterIds[subAssigns[localPos]];
+        if (subSeq) nuevoSeq[globalIdx] = subSeq[localPos];
+      });
+      setAsignaciones(nuevasAsigns);
+      kMeans._lastSeqOrder = nuevoSeq;
+      setSelectedIndices(new Set());
+
+      // Persistir en BD: update por chunks de puntos, agrupados por nuevo cluster
+      if (sesionId) {
+        // Agrupar índices por nuevo cluster id
+        const porNuevoCluster = {};
+        idxs.forEach((globalIdx, localPos) => {
+          const newCl = newClusterIds[subAssigns[localPos]];
+          if (!porNuevoCluster[newCl]) porNuevoCluster[newCl] = [];
+          porNuevoCluster[newCl].push(globalIdx);
+        });
+        const updatePromises = Object.entries(porNuevoCluster).map(async ([newCl, gIdxs]) => {
+          const clNum = parseInt(newCl);
+          // Supabase no acepta .in() con miles de elementos. Chunkar.
+          const CHUNK = 100;
+          for (let i = 0; i < gIdxs.length; i += CHUNK) {
+            const slice = gIdxs.slice(i, i + CHUNK);
+            await supabase.from("ruteo_puntos")
+              .update({ cluster: clNum, ruta: "Ruta " + (clNum + 1) })
+              .eq("sesion", sesionId)
+              .in("indice", slice);
+          }
+        });
+        await Promise.all(updatePromises);
+
+        // Heredar asignación: si Ruta clusterId+1 tenía asignación en
+        // asignaciones_sesion, copiarla a las N nuevas Rutas
+        const oldRutaNombre = "Ruta " + (clusterId + 1);
+        const { data: oldAsig } = await supabase.from("asignaciones_sesion")
+          .select("*").eq("sesion", sesionId).eq("ruta_nombre", oldRutaNombre).limit(1);
+        if (oldAsig && oldAsig.length > 0) {
+          const src = oldAsig[0];
+          const nuevasFilas = newClusterIds.map(newCl => ({
+            sesion: sesionId,
+            ruta_nombre: "Ruta " + (newCl + 1),
+            proveedor: src.proveedor,
+            tipo_unidad: src.tipo_unidad,
+            unidades: src.unidades,
+            no_asignar: src.no_asignar,
+          }));
+          // Borrar la asignación vieja y insertar las nuevas
+          await supabase.from("asignaciones_sesion").delete()
+            .eq("sesion", sesionId).eq("ruta_nombre", oldRutaNombre);
+          await supabase.from("asignaciones_sesion").insert(nuevasFilas);
+        }
+      }
+      setMsg(`✓ Ruta ${clusterId + 1} dividida en ${n} sub-rutas (Rutas ${newClusterIds[0]+1}–${newClusterIds[n-1]+1}).`);
+      setSplitCluster(null);
+    } catch (err) {
+      setMsg("Error al dividir: " + (err.message || err));
+    }
+    setSplitSaving(false);
+  };
+
   // Paginated fetch to bypass Supabase's default 1000-row cap
   // Inserción paralela con chunks. Insertar 15K filas en serie tomaba ~30s
   // por el round-trip de red. En paralelo con 5 chunks concurrentes baja a ~6s.
@@ -4969,13 +5055,25 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
           {/* Cluster legend */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, padding: "12px 18px", border: "1px solid " + C.border, marginBottom: 14, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: C.text, marginRight: 4 }}>Rutas:</span>
-            {Object.entries(clusterCount).sort((a, b) => +a[0] - +b[0]).map(([cl, cnt]) => (
-              <div key={cl} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 12px", borderRadius: 16, backgroundColor: RCOLORS[+cl % RCOLORS.length] + "18", border: "1px solid " + RCOLORS[+cl % RCOLORS.length] + "40" }}>
-                <div style={{ width: 9, height: 9, borderRadius: "50%", backgroundColor: RCOLORS[+cl % RCOLORS.length] }} />
-                <span style={{ fontSize: 12, fontWeight: 600, color: RCOLORS[+cl % RCOLORS.length] }}>Ruta {+cl + 1}</span>
-                <span style={{ fontSize: 11, color: C.textMuted }}>{cnt} pts</span>
-              </div>
-            ))}
+            {Object.entries(clusterCount).sort((a, b) => +a[0] - +b[0]).map(([cl, cnt]) => {
+              const clNum = +cl;
+              const isExcl = clNum === -1;
+              return (
+                <div key={cl} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 6px 3px 12px", borderRadius: 16, backgroundColor: (isExcl ? "#94A3B8" : RCOLORS[clNum % RCOLORS.length]) + "18", border: "1px solid " + (isExcl ? "#94A3B8" : RCOLORS[clNum % RCOLORS.length]) + "40" }}>
+                  <div style={{ width: 9, height: 9, borderRadius: "50%", backgroundColor: isExcl ? "#94A3B8" : RCOLORS[clNum % RCOLORS.length] }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: isExcl ? "#475569" : RCOLORS[clNum % RCOLORS.length] }}>{isExcl ? "Excluidos" : "Ruta " + (clNum + 1)}</span>
+                  <span style={{ fontSize: 11, color: C.textMuted }}>{cnt} pts</span>
+                  {!isExcl && cnt >= 2 && (
+                    <button onClick={() => { setSplitCluster(clNum); setSplitN(2); }} title={`Dividir Ruta ${clNum + 1} en N sub-rutas`}
+                      style={{ marginLeft: 4, padding: "1px 6px", borderRadius: 10, border: "none", backgroundColor: "transparent", color: C.textMuted, cursor: "pointer", fontSize: 12 }}
+                      onMouseEnter={e => e.currentTarget.style.backgroundColor = RCOLORS[clNum % RCOLORS.length] + "30"}
+                      onMouseLeave={e => e.currentTarget.style.backgroundColor = "transparent"}>
+                      ✂
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           {/* Map */}
@@ -5106,6 +5204,42 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
             {showHistorico ? "Ocultar" : "Ver sesiones anteriores"}
           </button>
         </div>
+
+        {/* Modal: dividir ruta en N sub-rutas */}
+        {splitCluster !== null && (() => {
+          const cnt = clusterCount[splitCluster] || 0;
+          return (
+            <div style={{ position:"fixed", inset:0, backgroundColor:"rgba(12,20,37,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:10000 }}
+              onClick={() => !splitSaving && setSplitCluster(null)}>
+              <div onClick={e => e.stopPropagation()} style={{ backgroundColor:C.white, borderRadius:14, width:440, maxWidth:"92vw", boxShadow:"0 16px 48px rgba(0,0,0,0.28)" }}>
+                <div style={{ padding:"16px 22px", borderBottom:"1px solid "+C.border }}>
+                  <div style={{ fontSize:16, fontWeight:800, color:C.text }}>Dividir Ruta {splitCluster + 1}</div>
+                  <div style={{ fontSize:12, color:C.textMuted, marginTop:2 }}>Esta ruta tiene <b style={{ color:C.text }}>{cnt} puntos</b>. Se re-clusterizarán SOLO esos puntos con el mismo algoritmo (kMeans++ + TSP).</div>
+                </div>
+                <div style={{ padding:22 }}>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Dividir en cuántas sub-rutas (N)</label>
+                  <input type="number" min="2" max={Math.min(cnt, 20)} value={splitN}
+                    onChange={e => setSplitN(Math.max(2, Math.min(cnt, parseInt(e.target.value) || 2)))}
+                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+C.accent, fontSize:18, fontWeight:800, color:C.accent, textAlign:"center", boxSizing:"border-box" }} />
+                  <div style={{ marginTop:8, fontSize:11, color:C.textMuted, lineHeight:1.5 }}>
+                    Promedio por sub-ruta: <b style={{ color:C.text }}>~{Math.round(cnt / splitN)} puntos</b><br />
+                    Las nuevas sub-rutas se anexarán como <b style={{ color:C.text }}>Ruta {Math.max(...Object.keys(clusterCount).map(Number)) + 2}–{Math.max(...Object.keys(clusterCount).map(Number)) + 1 + splitN}</b>. Las demás rutas no se tocan. Si Ruta {splitCluster + 1} ya tenía proveedor asignado, las nuevas lo heredan.
+                  </div>
+                </div>
+                <div style={{ padding:"14px 22px", borderTop:"1px solid "+C.border, display:"flex", justifyContent:"flex-end", gap:10 }}>
+                  <button onClick={() => !splitSaving && setSplitCluster(null)} disabled={splitSaving}
+                    style={{ padding:"9px 20px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, color:C.text, fontSize:13, fontWeight:600, cursor:splitSaving?"not-allowed":"pointer" }}>
+                    Cancelar
+                  </button>
+                  <button onClick={() => dividirRuta(splitCluster, splitN)} disabled={splitSaving || splitN < 2 || splitN > cnt}
+                    style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:(splitSaving||splitN<2||splitN>cnt)?C.textMuted:C.accent, color:"white", fontSize:13, fontWeight:700, cursor:(splitSaving||splitN<2||splitN>cnt)?"not-allowed":"pointer" }}>
+                    {splitSaving ? "Dividiendo..." : `✂ Dividir en ${splitN}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
         {showHistorico && (
           loadingHist ? (
             <div style={{ padding: 30, textAlign: "center", color: C.textMuted, fontSize: 13 }}>Cargando sesiones...</div>
