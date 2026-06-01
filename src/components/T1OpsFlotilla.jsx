@@ -4045,6 +4045,9 @@ function ModuleRuteo() {
   const [splitCluster, setSplitCluster] = useState(null); // cluster id que se está dividiendo
   const [splitN, setSplitN] = useState(2);
   const [splitSaving, setSplitSaving] = useState(false);
+  const [mergeCluster, setMergeCluster] = useState(null); // cluster origen para fusionar
+  const [mergeTarget, setMergeTarget] = useState(null);   // cluster destino
+  const [mergeSaving, setMergeSaving] = useState(false);
   const [historico, setHistorico] = useState([]);
   const [loadingHist, setLoadingHist] = useState(false);
   const [showHistorico, setShowHistorico] = useState(false);
@@ -4774,6 +4777,50 @@ function ModuleRuteo() {
     setSplitSaving(false);
   };
 
+  // Fusiona dos rutas en una. Todos los puntos del cluster origen pasan al
+  // destino y la ruta origen desaparece. Se re-corre el TSP sobre el conjunto
+  // unificado para que el orden de visita siga siendo óptimo. La asignación
+  // de proveedor del destino se mantiene; la del origen (si había) se borra.
+  const fusionarRutas = async (srcCluster, targetCluster) => {
+    if (srcCluster === targetCluster || srcCluster == null || targetCluster == null) return;
+    const idxs = [];
+    asignaciones.forEach((cl, i) => { if (cl === srcCluster || cl === targetCluster) idxs.push(i); });
+    if (idxs.length === 0) return;
+    setMergeSaving(true);
+    setMsg(`⏳ Fusionando Ruta ${srcCluster + 1} en Ruta ${targetCluster + 1}...`);
+    try {
+      const ptsSubset = idxs.map(i => ({ lat: puntos[i].lat, lng: puntos[i].lng }));
+      const { seqOrder: subSeq } = await runKMeansAsync(ptsSubset, 1, (p) => {
+        setMsg(`⏳ Fusionando: ${p.phase === "clustering" ? "Procesando" : "Optimizando orden"}: ${p.value}%`);
+      });
+      const nuevasAsigns = [...asignaciones];
+      const nuevoSeq = kMeans._lastSeqOrder ? [...kMeans._lastSeqOrder] : new Array(asignaciones.length).fill(0);
+      idxs.forEach((globalIdx, localPos) => {
+        nuevasAsigns[globalIdx] = targetCluster;
+        if (subSeq) nuevoSeq[globalIdx] = subSeq[localPos];
+      });
+      setAsignaciones(nuevasAsigns);
+      kMeans._lastSeqOrder = nuevoSeq;
+      setSelectedIndices(new Set());
+
+      if (sesionId) {
+        await supabase.from("ruteo_puntos")
+          .update({ cluster: targetCluster, ruta: "Ruta " + (targetCluster + 1) })
+          .eq("sesion", sesionId)
+          .eq("cluster", srcCluster);
+        await supabase.from("asignaciones_sesion").delete()
+          .eq("sesion", sesionId)
+          .eq("ruta_nombre", "Ruta " + (srcCluster + 1));
+      }
+      setMsg(`✓ Ruta ${srcCluster + 1} fusionada en Ruta ${targetCluster + 1} (ahora con ${idxs.length} puntos).`);
+      setMergeCluster(null);
+      setMergeTarget(null);
+    } catch (err) {
+      setMsg("Error al fusionar: " + (err.message || err));
+    }
+    setMergeSaving(false);
+  };
+
   // Paginated fetch to bypass Supabase's default 1000-row cap
   // Inserción paralela con chunks. Insertar 15K filas en serie tomaba ~30s
   // por el round-trip de red. En paralelo con 5 chunks concurrentes baja a ~6s.
@@ -5071,6 +5118,14 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                       ✂
                     </button>
                   )}
+                  {!isExcl && Object.keys(clusterCount).filter(c => +c !== -1 && +c !== clNum).length > 0 && (
+                    <button onClick={() => { setMergeCluster(clNum); setMergeTarget(null); }} title={`Fusionar Ruta ${clNum + 1} con otra ruta`}
+                      style={{ padding: "1px 6px", borderRadius: 10, border: "none", backgroundColor: "transparent", color: C.textMuted, cursor: "pointer", fontSize: 12 }}
+                      onMouseEnter={e => e.currentTarget.style.backgroundColor = RCOLORS[clNum % RCOLORS.length] + "30"}
+                      onMouseLeave={e => e.currentTarget.style.backgroundColor = "transparent"}>
+                      🔗
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -5234,6 +5289,53 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                   <button onClick={() => dividirRuta(splitCluster, splitN)} disabled={splitSaving || splitN < 2 || splitN > cnt}
                     style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:(splitSaving||splitN<2||splitN>cnt)?C.textMuted:C.accent, color:"white", fontSize:13, fontWeight:700, cursor:(splitSaving||splitN<2||splitN>cnt)?"not-allowed":"pointer" }}>
                     {splitSaving ? "Dividiendo..." : `✂ Dividir en ${splitN}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Modal: fusionar ruta con otra */}
+        {mergeCluster !== null && (() => {
+          const cntSrc = clusterCount[mergeCluster] || 0;
+          const candidatos = Object.entries(clusterCount)
+            .filter(([cl]) => +cl !== -1 && +cl !== mergeCluster)
+            .sort((a, b) => +a[0] - +b[0]);
+          const cntTarget = mergeTarget != null ? (clusterCount[mergeTarget] || 0) : 0;
+          const totalFusion = cntSrc + cntTarget;
+          return (
+            <div style={{ position:"fixed", inset:0, backgroundColor:"rgba(12,20,37,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:10000 }}
+              onClick={() => !mergeSaving && setMergeCluster(null)}>
+              <div onClick={e => e.stopPropagation()} style={{ backgroundColor:C.white, borderRadius:14, width:460, maxWidth:"92vw", boxShadow:"0 16px 48px rgba(0,0,0,0.28)" }}>
+                <div style={{ padding:"16px 22px", borderBottom:"1px solid "+C.border }}>
+                  <div style={{ fontSize:16, fontWeight:800, color:C.text }}>Fusionar Ruta {mergeCluster + 1}</div>
+                  <div style={{ fontSize:12, color:C.textMuted, marginTop:2 }}>Esta ruta tiene <b style={{ color:C.text }}>{cntSrc} puntos</b>. Selecciona la ruta destino — todos los puntos se moverán ahí y la ruta {mergeCluster + 1} desaparecerá.</div>
+                </div>
+                <div style={{ padding:22 }}>
+                  <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:6 }}>Fusionar en…</label>
+                  <select value={mergeTarget != null ? mergeTarget : ""} onChange={e => setMergeTarget(e.target.value === "" ? null : parseInt(e.target.value))}
+                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+(mergeTarget != null?C.accent:C.border), fontSize:14, fontWeight:700, color:C.text, backgroundColor:mergeTarget != null?C.accentLight:C.white, boxSizing:"border-box" }}>
+                    <option value="">— Selecciona la ruta destino —</option>
+                    {candidatos.map(([cl, c]) => (
+                      <option key={cl} value={cl}>Ruta {+cl + 1} ({c} puntos)</option>
+                    ))}
+                  </select>
+                  {mergeTarget != null && (
+                    <div style={{ marginTop:10, padding:"10px 12px", backgroundColor:C.bg, borderRadius:6, fontSize:11, color:C.textMuted, lineHeight:1.5 }}>
+                      Después de fusionar, <b style={{ color:C.text }}>Ruta {mergeTarget + 1}</b> tendrá <b style={{ color:C.text }}>{totalFusion} puntos</b>. Se re-calcula el orden TSP automáticamente.<br />
+                      La asignación de proveedor de Ruta {mergeTarget + 1} se mantiene; la de Ruta {mergeCluster + 1} se elimina.
+                    </div>
+                  )}
+                </div>
+                <div style={{ padding:"14px 22px", borderTop:"1px solid "+C.border, display:"flex", justifyContent:"flex-end", gap:10 }}>
+                  <button onClick={() => !mergeSaving && setMergeCluster(null)} disabled={mergeSaving}
+                    style={{ padding:"9px 20px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, color:C.text, fontSize:13, fontWeight:600, cursor:mergeSaving?"not-allowed":"pointer" }}>
+                    Cancelar
+                  </button>
+                  <button onClick={() => fusionarRutas(mergeCluster, mergeTarget)} disabled={mergeSaving || mergeTarget == null}
+                    style={{ padding:"9px 22px", borderRadius:8, border:"none", backgroundColor:(mergeSaving||mergeTarget==null)?C.textMuted:C.accent, color:"white", fontSize:13, fontWeight:700, cursor:(mergeSaving||mergeTarget==null)?"not-allowed":"pointer" }}>
+                    {mergeSaving ? "Fusionando..." : (mergeTarget != null ? `🔗 Fusionar en Ruta ${mergeTarget + 1}` : "🔗 Fusionar")}
                   </button>
                 </div>
               </div>
