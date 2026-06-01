@@ -4713,9 +4713,11 @@ function ModuleRuteo() {
       const { assigns: subAssigns, seqOrder: subSeq } = await runKMeansAsync(ptsSubset, n, (p) => {
         setMsg(`⏳ Dividiendo Ruta ${clusterId + 1}: ${p.phase === "clustering" ? "Clusterizando" : "Optimizando"}: ${p.value}%`);
       });
-      // ID base para las nuevas rutas: max actual + 1
+      // La ruta original CONSERVA su número (clusterId). Las N-1 sub-rutas
+      // restantes se anexan al final con IDs nuevos. Así dividir Ruta 7 en 2
+      // queda: Ruta 7 (1ra sub) + Ruta 56 (2da sub).
       const maxCluster = Math.max(...asignaciones);
-      const newClusterIds = Array.from({ length: n }, (_, k) => maxCluster + 1 + k);
+      const newClusterIds = [clusterId, ...Array.from({ length: n - 1 }, (_, k) => maxCluster + 1 + k)];
       // Construir nueva asignación global
       const nuevasAsigns = [...asignaciones];
       const nuevoSeq = kMeans._lastSeqOrder ? [...kMeans._lastSeqOrder] : new Array(asignaciones.length).fill(0);
@@ -4771,7 +4773,10 @@ function ModuleRuteo() {
           await supabase.from("asignaciones_sesion").insert(nuevasFilas);
         }
       }
-      setMsg(`✓ Ruta ${clusterId + 1} dividida en ${n} sub-rutas (Rutas ${newClusterIds[0]+1}–${newClusterIds[n-1]+1}).`);
+      const nuevasStr = n === 2
+        ? `Ruta ${newClusterIds[1] + 1}`
+        : `Rutas ${newClusterIds[1] + 1}–${newClusterIds[n - 1] + 1}`;
+      setMsg(`✓ Ruta ${clusterId + 1} dividida: se conserva Ruta ${clusterId + 1} (1ra sub-ruta) + ${nuevasStr} nueva(s).`);
       setSplitCluster(null);
     } catch (err) {
       setMsg("Error al dividir: " + (err.message || err));
@@ -5375,7 +5380,15 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                     style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1px solid "+C.accent, fontSize:18, fontWeight:800, color:C.accent, textAlign:"center", boxSizing:"border-box" }} />
                   <div style={{ marginTop:8, fontSize:11, color:C.textMuted, lineHeight:1.5 }}>
                     Promedio por sub-ruta: <b style={{ color:C.text }}>~{Math.round(cnt / splitN)} puntos</b><br />
-                    Las nuevas sub-rutas se anexarán como <b style={{ color:C.text }}>Ruta {Math.max(...Object.keys(clusterCount).map(Number)) + 2}–{Math.max(...Object.keys(clusterCount).map(Number)) + 1 + splitN}</b>. Las demás rutas no se tocan. Si Ruta {splitCluster + 1} ya tenía proveedor asignado, las nuevas lo heredan.
+                    {(() => {
+                      const maxN = Math.max(...Object.keys(clusterCount).filter(k => +k !== -1).map(Number));
+                      const nuevasInicio = maxN + 2; // primera nueva = maxN+1+1 (1-indexed display)
+                      const nuevasFin = maxN + splitN; // última nueva = maxN+(splitN-1)+1
+                      const rango = splitN === 2
+                        ? `Ruta ${nuevasInicio}`
+                        : `Rutas ${nuevasInicio}–${nuevasFin}`;
+                      return <>Se conserva <b style={{ color:C.text }}>Ruta {splitCluster + 1}</b> (1ra sub-ruta) y se crean <b style={{ color:C.text }}>{rango}</b> al final. Las demás rutas no se tocan. Si Ruta {splitCluster + 1} ya tenía proveedor asignado, todas las sub-rutas lo heredan.</>;
+                    })()}
                   </div>
                 </div>
                 <div style={{ padding:"14px 22px", borderTop:"1px solid "+C.border, display:"flex", justifyContent:"flex-end", gap:10 }}>
