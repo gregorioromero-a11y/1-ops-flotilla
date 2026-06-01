@@ -4713,16 +4713,29 @@ function ModuleRuteo() {
       const { assigns: subAssigns, seqOrder: subSeq } = await runKMeansAsync(ptsSubset, n, (p) => {
         setMsg(`⏳ Dividiendo Ruta ${clusterId + 1}: ${p.phase === "clustering" ? "Clusterizando" : "Optimizando"}: ${p.value}%`);
       });
-      // La ruta original CONSERVA su número (clusterId). Las N-1 sub-rutas
-      // restantes se anexan al final con IDs nuevos. Así dividir Ruta 7 en 2
-      // queda: Ruta 7 (1ra sub) + Ruta 56 (2da sub).
+      // El sub-cluster con MÁS puntos conserva el número original (Ruta 7).
+      // Los demás se anexan al final como Ruta maxCluster+1, +2, etc.
+      // Esto evita la apariencia de "Ruta 7 desapareció" — la sub-ruta
+      // principal mantiene el ID y los grupos menores son los nuevos.
       const maxCluster = Math.max(...asignaciones);
-      const newClusterIds = [clusterId, ...Array.from({ length: n - 1 }, (_, k) => maxCluster + 1 + k)];
+      const counts = new Array(n).fill(0);
+      subAssigns.forEach(c => counts[c]++);
+      // Sub-clusters ordenados por tamaño desc: el más grande primero
+      const sortedSubs = counts
+        .map((cnt, subIdx) => ({ subIdx, cnt }))
+        .sort((a, b) => b.cnt - a.cnt);
+      // Mapeo: subIdx (del worker) → cluster id final
+      const subToFinalId = {};
+      sortedSubs.forEach((s, rank) => {
+        subToFinalId[s.subIdx] = rank === 0 ? clusterId : maxCluster + rank;
+      });
+      // newClusterIds en orden de sub-índice (para mantener compatibilidad)
+      const newClusterIds = Array.from({ length: n }, (_, i) => subToFinalId[i]);
       // Construir nueva asignación global
       const nuevasAsigns = [...asignaciones];
       const nuevoSeq = kMeans._lastSeqOrder ? [...kMeans._lastSeqOrder] : new Array(asignaciones.length).fill(0);
       idxs.forEach((globalIdx, localPos) => {
-        nuevasAsigns[globalIdx] = newClusterIds[subAssigns[localPos]];
+        nuevasAsigns[globalIdx] = subToFinalId[subAssigns[localPos]];
         if (subSeq) nuevoSeq[globalIdx] = subSeq[localPos];
       });
       setAsignaciones(nuevasAsigns);
@@ -4773,10 +4786,11 @@ function ModuleRuteo() {
           await supabase.from("asignaciones_sesion").insert(nuevasFilas);
         }
       }
-      const nuevasStr = n === 2
-        ? `Ruta ${newClusterIds[1] + 1}`
-        : `Rutas ${newClusterIds[1] + 1}–${newClusterIds[n - 1] + 1}`;
-      setMsg(`✓ Ruta ${clusterId + 1} dividida: se conserva Ruta ${clusterId + 1} (1ra sub-ruta) + ${nuevasStr} nueva(s).`);
+      const nuevasIds = Object.values(subToFinalId).filter(id => id !== clusterId).sort((a, b) => a - b);
+      const nuevasStr = nuevasIds.length === 1
+        ? `Ruta ${nuevasIds[0] + 1}`
+        : `Rutas ${nuevasIds[0] + 1}–${nuevasIds[nuevasIds.length - 1] + 1}`;
+      setMsg(`✓ Ruta ${clusterId + 1} dividida: se conserva Ruta ${clusterId + 1} (sub-ruta principal) + ${nuevasStr} nueva(s).`);
       setSplitCluster(null);
     } catch (err) {
       setMsg("Error al dividir: " + (err.message || err));
