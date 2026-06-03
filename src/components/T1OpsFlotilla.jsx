@@ -3252,11 +3252,20 @@ function ModuleCostos() {
       return (typeof result === "number" && isFinite(result)) ? result : NaN;
     } catch { return NaN; }
   };
-  const getPenalizacion = r => {
-    const v = evalFormula(r.penalizacion, getCosto(r));
-    return isNaN(v) ? 0 : v;
+  // Unificado con ModuleEnvios: la fórmula evalúa al COSTO FINAL.
+  // - "costo+200" → $1700 (fee de $200 sobre $1500)
+  // - "costo*0.86" → $1290 (paga 86% del costo)
+  // - "700" → $700 (costo fijo)
+  // El "penalizacion" derivado es el delta entre el final y el base
+  // (positivo = descuento, negativo = fee/sobrecargo).
+  const getCostoFinal = r => {
+    const base = getCosto(r);
+    const hasFormula = (r.penalizacion || "").trim().length > 0;
+    if (!hasFormula) return base;
+    const v = evalFormula(r.penalizacion, base);
+    return isNaN(v) ? base : v;
   };
-  const getCostoFinal = r => getCosto(r) + getPenalizacion(r);
+  const getPenalizacion = r => getCosto(r) - getCostoFinal(r);
   const proveedores = [...new Set(carriers.map(c => c.proveedor))];
   const tiposDisponibles = carriers.filter(c => c.proveedor === form.proveedor);
   const getCarrierForLine = l => carriers.find(c => c.proveedor === form.proveedor && c.tipo_unidad === l.tipo_unidad);
@@ -3743,11 +3752,15 @@ function ModuleCostos() {
               <tbody>
                 {filtrados.map((r, i) => {
                   const costo = getCosto(r);
-                  const penal = getPenalizacion(r);
-                  const costoReal = costo + penal;
+                  // La fórmula evalúa al COSTO FINAL directamente
+                  const costoReal = getCostoFinal(r);
+                  // Delta = base - final. Positivo = descuento, negativo = fee/sobrecargo.
+                  const penal = costo - costoReal;
                   const tc = tipoColors[r.tipo_unidad] || {bg:"#F3F4F6",c:"#7C8495"};
                   const penalStr = r.penalizacion || "";
-                  const penalInvalid = penalStr.trim() && isNaN(evalFormula(penalStr, costo));
+                  const hasFormula = penalStr.trim().length > 0;
+                  const evaluatedVal = hasFormula ? evalFormula(penalStr, costo) : 0;
+                  const penalInvalid = hasFormula && isNaN(evaluatedVal);
                   return (
                     <tr key={r.id} style={{ borderTop:"1px solid "+C.border }}
                       onMouseEnter={ev=>ev.currentTarget.style.backgroundColor="#FAFBFF"}
@@ -3785,9 +3798,19 @@ function ModuleCostos() {
                       <td style={{ padding:"8px 10px" }}>
                         <input type="text" defaultValue={penalStr}
                           onBlur={e => { if (e.target.value !== penalStr) savePenalizacion(r.id, e.target.value); }}
-                          placeholder="ej: costo*0.1"
-                          title="Fórmula: puedes usar 'costo' y operadores + - * / y paréntesis. Ej: costo*0.1, -50, 100+25"
-                          style={{ width:120, padding:"5px 8px", borderRadius:5, border:"1px solid "+(penalInvalid?C.red:C.border), fontSize:11, fontFamily:"monospace", backgroundColor:penalInvalid?C.redBg:C.white }} />
+                          placeholder="costo+200"
+                          title={"La fórmula evalúa al COSTO FINAL (no al delta).\nVariable 'costo' = costo base de esta ruta.\n\nEjemplos:\n  costo+200      ← suma fee de \$200\n  costo-100      ← resta \$100\n  costo*1.1      ← sube 10% (fee de temporada)\n  costo*0.86     ← paga 86% del costo\n  1500+200       ← override directo (= \$1,700)\n  700            ← costo fijo \$700\n  (costo+150)*1.16  ← combinación arbitraria"}
+                          style={{ width:130, padding:"5px 8px", borderRadius:5, border:"1px solid "+(penalInvalid?C.red:(hasFormula && !penalInvalid?C.green:C.border)), fontSize:11, fontFamily:"monospace", backgroundColor:penalInvalid?C.redBg:(hasFormula && !penalInvalid?C.greenBg:C.white) }} />
+                        {hasFormula && !penalInvalid && (
+                          <div style={{ fontSize: 9, color: C.green, fontWeight: 700, marginTop: 2, textAlign: "center" }} title="Costo final calculado">
+                            = ${evaluatedVal.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                          </div>
+                        )}
+                        {penalInvalid && (
+                          <div style={{ fontSize: 9, color: C.red, fontWeight: 700, marginTop: 2, textAlign: "center" }}>
+                            ⚠ inválida
+                          </div>
+                        )}
                       </td>
                       <td style={{ padding:"10px 14px", fontWeight:800, color:penal!==0?(penal>0?C.red:C.green):C.text }}>
                         ${costoReal.toLocaleString()}
