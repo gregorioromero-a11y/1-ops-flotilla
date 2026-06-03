@@ -1366,8 +1366,11 @@ function ModuleEnvios() {
       if (!provFromRow || norm(provFromRow) !== provNorm) return;
       if (opsPermitidas && !opsPermitidas.has(normalizeOperacion(r.tipoRuta))) return;
       const { baseCost, costoNuevo } = getCostoReal(r);
-      const desc = baseCost - costoNuevo;
-      if (desc > 0) penalPorFecha[f] = (penalPorFecha[f] || 0) + desc;
+      const ajuste = baseCost - costoNuevo;
+      // Acumular AJUSTES de la fórmula: positivos = descuento (resta),
+      // negativos = fee/cargo (suma). Antes solo se sumaban los positivos,
+      // lo que ignoraba los fees de temporada (costo+200, costo*1.1, etc.).
+      if (ajuste !== 0) penalPorFecha[f] = (penalPorFecha[f] || 0) + ajuste;
       const notaTrim = (r.nota || "").trim();
       if (notaTrim) {
         if (!notasPorFecha[f]) notasPorFecha[f] = [];
@@ -1411,7 +1414,7 @@ function ModuleEnvios() {
         ${tdsTipos}
         <td class="importe">${importeFila > 0 ? "$ " + importeFila.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2}) : "$ -"}</td>
         <td class="coment">${comentarios}</td>
-        <td class="desc">${desc > 0 ? "-$ " + desc.toLocaleString("en-US", {minimumFractionDigits: 2}) : ""}</td>
+        <td class="desc" style="color:${desc > 0 ? "#16A34A" : desc < 0 ? "#DC2626" : "inherit"}">${desc > 0 ? "-$ " + desc.toLocaleString("en-US", {minimumFractionDigits: 2}) : desc < 0 ? "+$ " + Math.abs(desc).toLocaleString("en-US", {minimumFractionDigits: 2}) : ""}</td>
       </tr>`;
     }).join("");
 
@@ -1514,14 +1517,14 @@ function ModuleEnvios() {
         ${totalesUnidadesPorTipo.map(n => `<td class="totalNum">${n}</td>`).join("")}
         <td class="importe" style="font-weight:800">$ ${subtotal.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
         <td></td>
-        <td class="desc" style="font-weight:800">${totalDescuento > 0 ? "-$ " + totalDescuento.toLocaleString("en-US", {minimumFractionDigits: 2}) : ""}</td>
+        <td class="desc" style="font-weight:800;color:${totalDescuento > 0 ? "#16A34A" : totalDescuento < 0 ? "#DC2626" : "inherit"}">${totalDescuento > 0 ? "-$ " + totalDescuento.toLocaleString("en-US", {minimumFractionDigits: 2}) : totalDescuento < 0 ? "+$ " + Math.abs(totalDescuento).toLocaleString("en-US", {minimumFractionDigits: 2}) : ""}</td>
       </tr>
     </tbody>
   </table>
   <div class="summary">
     <table>
       <tr><td class="val">$ ${subtotal.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">SUBTOTAL</td></tr>
-      <tr><td class="val">${totalDescuento > 0 ? "-$ " + totalDescuento.toLocaleString("en-US", {minimumFractionDigits: 2}) : "$ -"}</td><td class="lbl">DESCUENTO</td></tr>
+      <tr><td class="val" style="color:${totalDescuento > 0 ? "#16A34A" : totalDescuento < 0 ? "#DC2626" : "inherit"}">${totalDescuento > 0 ? "-$ " + totalDescuento.toLocaleString("en-US", {minimumFractionDigits: 2}) : totalDescuento < 0 ? "+$ " + Math.abs(totalDescuento).toLocaleString("en-US", {minimumFractionDigits: 2}) : "$ -"}</td><td class="lbl">${totalDescuento < 0 ? "CARGO ADICIONAL" : "DESCUENTO"}</td></tr>
       <tr><td class="val">$ ${subtotalNeto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">SUBTOTAL</td></tr>
       ${conIVA ? `<tr><td class="val">$ ${ivaMonto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">IVA</td></tr>` : ""}
       <tr><td class="val" style="font-weight:800">$ ${totalFinal.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">TOTAL</td></tr>
