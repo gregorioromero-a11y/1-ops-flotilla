@@ -2243,9 +2243,19 @@ function ModuleEnvios() {
                     <td style={{ padding: "8px 6px" }}>
                       <input key={"pen-" + (r.id ?? i)} type="text" defaultValue={r.penalizacion || ""}
                         onBlur={e => { if (e.target.value !== (r.penalizacion || "")) savePenalizacion(r.id, e.target.value); }}
-                        placeholder="costo*0.86"
-                        title={"Fórmula que evalúa al COSTO REAL FINAL (no al descuento).\nVariable 'costo' = costo base.\nEj: costo*0.86 (paga 86%) · costo-250 (resta $250) · 1161 (costo fijo)"}
-                        style={{ width: 80, padding: "4px 6px", borderRadius: 5, border: "1px solid " + (penInvalid ? C.red : C.border), fontSize: 11, fontFamily: "monospace", backgroundColor: penInvalid ? C.redBg : C.white }} />
+                        placeholder="costo+200"
+                        title={"Cualquier operación matemática (+, −, ×, ÷, paréntesis).\nEvalúa al COSTO REAL FINAL.\nVariable 'costo' = costo base de esta ruta.\n\nEjemplos:\n  costo+200      ← suma fee de \$200 al costo base\n  costo-250      ← resta \$250\n  costo*0.86     ← paga 86% del costo\n  costo*1.1      ← sube 10% por fee de temporada\n  1500+200       ← override directo (resultado: 1700)\n  700            ← costo fijo \$700\n  (costo+150)*1.16  ← suma fee y aplica IVA"}
+                        style={{ width: 90, padding: "4px 6px", borderRadius: 5, border: "1px solid " + (penInvalid ? C.red : (hasFormula && !penInvalid ? C.green : C.border)), fontSize: 11, fontFamily: "monospace", backgroundColor: penInvalid ? C.redBg : (hasFormula && !penInvalid ? C.greenBg : C.white) }} />
+                      {hasFormula && !penInvalid && (
+                        <div style={{ fontSize: 9, color: C.green, fontWeight: 700, marginTop: 2, textAlign: "center" }} title="Resultado de la fórmula">
+                          = ${evaluated.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        </div>
+                      )}
+                      {penInvalid && (
+                        <div style={{ fontSize: 9, color: C.red, fontWeight: 700, marginTop: 2, textAlign: "center" }}>
+                          ⚠ inválida
+                        </div>
+                      )}
                     </td>
                     <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {info.missing ? (
