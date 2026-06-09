@@ -1766,18 +1766,19 @@ function ModuleEnvios() {
   rutaCosto.forEach(x => {
     const orig = (x.r.carrier || "Sin carrier").trim() || "Sin carrier";
     const key = norm(orig) || "sin carrier";
-    if (!costosPorCarrier[key]) costosPorCarrier[key] = { carrier: orig, _nameCounts: {}, rutas: 0, costo: 0, costoUM: 0, costoHM: 0, entregadosUM: 0, entregadosHM: 0 };
+    if (!costosPorCarrier[key]) costosPorCarrier[key] = { carrier: orig, _nameCounts: {}, rutas: 0, rutasUM: 0, rutasHM: 0, costo: 0, costoUM: 0, costoHM: 0, entregadosUM: 0, entregadosHM: 0 };
     const cc = costosPorCarrier[key];
     cc._nameCounts[orig] = (cc._nameCounts[orig] || 0) + 1;
     const bucket = bucketDeOperacion(x.r);
     cc.rutas += 1;
     cc.costo += x.costoContado;
     if (bucket === "Half mile") {
+      cc.rutasHM += 1;
       cc.costoHM += x.costoContado;
       cc.entregadosHM += (parseInt(x.r.recolecciones) || 0);
     } else {
       cc.entregadosUM += (parseInt(x.r.entregados) || 0);
-      if (bucket === "Última milla") cc.costoUM += x.costoContado;
+      if (bucket === "Última milla") { cc.rutasUM += 1; cc.costoUM += x.costoContado; }
     }
   });
   // Nombre a mostrar = la grafía más frecuente entre las variantes agrupadas.
@@ -1796,6 +1797,10 @@ function ModuleEnvios() {
     .sort((a, b) => b.total - a.total);
   const umMmTotUM = umMmPorProveedor.reduce((s, c) => s + c.costoUM, 0);
   const umMmTotHM = umMmPorProveedor.reduce((s, c) => s + c.costoHM, 0);
+
+  // Tablas separadas: solo última milla y solo media milla, por proveedor.
+  const umPorProveedor = carrierCostList.filter(c => c.costoUM > 0).sort((a, b) => b.costoUM - a.costoUM);
+  const mmPorProveedor = carrierCostList.filter(c => c.costoHM > 0).sort((a, b) => b.costoHM - a.costoHM);
 
   // ===== FIXED: Use XLSX directly from npm import instead of dynamic CDN import =====
   const handleFileUpload = (e) => {
@@ -2070,12 +2075,78 @@ function ModuleEnvios() {
         </div>
       )}
 
-      {/* Costo Última Milla + Media Milla por proveedor (Total = ÚM + MM) */}
+      {/* 1) Costo Última Milla por proveedor */}
+      {umPorProveedor.length > 0 && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+            Costo Última Milla por Proveedor
+            <span style={{ fontWeight: 500, color: C.green, fontSize: 11, marginLeft: 8 }}>(solo última milla)</span>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid " + C.border }}>
+                {["Proveedor", "Rutas", "Costo Última Milla"].map(h => (
+                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {umPorProveedor.map((c, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13 }}>{c.rutasUM}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 14, color: C.green, fontWeight: 700 }}>${Math.round(c.costoUM).toLocaleString()}</td>
+                </tr>
+              ))}
+              <tr style={{ backgroundColor: "#FAFBFF", borderTop: "2px solid " + C.border }}>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{umPorProveedor.reduce((s, c) => s + c.rutasUM, 0)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800, color: C.green }}>${Math.round(umMmTotUM).toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 2) Costo Media Milla por proveedor */}
+      {mmPorProveedor.length > 0 && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+            Costo Media Milla por Proveedor
+            <span style={{ fontWeight: 500, color: C.blue, fontSize: 11, marginLeft: 8 }}>(solo media milla / half mile)</span>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid " + C.border }}>
+                {["Proveedor", "Rutas", "Costo Media Milla"].map(h => (
+                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {mmPorProveedor.map((c, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13 }}>{c.rutasHM}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 14, color: C.blue, fontWeight: 700 }}>${Math.round(c.costoHM).toLocaleString()}</td>
+                </tr>
+              ))}
+              <tr style={{ backgroundColor: "#FAFBFF", borderTop: "2px solid " + C.border }}>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{mmPorProveedor.reduce((s, c) => s + c.rutasHM, 0)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800, color: C.blue }}>${Math.round(umMmTotHM).toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 3) Costo General por proveedor (Total = ÚM + MM) */}
       {umMmPorProveedor.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
           <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
-            Costo Última Milla + Media Milla por Proveedor
-            <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(Total = última milla + media milla)</span>
+            Costo General por Proveedor
+            <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(última milla + media milla)</span>
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
