@@ -1759,11 +1759,16 @@ function ModuleEnvios() {
   // mile. Foráneo/PETCO suman al total y sus entregas cuentan como finales.
   // entregadosUM = entregas al cliente final (todo EXCEPTO HM); entregadosHM =
   // recolecciones intermedias. Costo/paquete = costo total / entregadosUM.
+  // Se agrupa por nombre NORMALIZADO (norm: minúsculas, sin acentos, sin dobles
+  // espacios) para que variantes de capitalización del mismo carrier (p.ej.
+  // "Verde Diseño Logistic" y "VERDE DISEÑO LOGISTIC") cuenten como uno solo.
   const costosPorCarrier = {};
   rutaCosto.forEach(x => {
-    const prov = x.r.carrier || "Sin carrier";
-    if (!costosPorCarrier[prov]) costosPorCarrier[prov] = { carrier: prov, rutas: 0, costo: 0, costoUM: 0, costoHM: 0, entregadosUM: 0, entregadosHM: 0 };
-    const cc = costosPorCarrier[prov];
+    const orig = (x.r.carrier || "Sin carrier").trim() || "Sin carrier";
+    const key = norm(orig) || "sin carrier";
+    if (!costosPorCarrier[key]) costosPorCarrier[key] = { carrier: orig, _nameCounts: {}, rutas: 0, costo: 0, costoUM: 0, costoHM: 0, entregadosUM: 0, entregadosHM: 0 };
+    const cc = costosPorCarrier[key];
+    cc._nameCounts[orig] = (cc._nameCounts[orig] || 0) + 1;
     const bucket = bucketDeOperacion(x.r);
     cc.rutas += 1;
     cc.costo += x.costoContado;
@@ -1774,6 +1779,10 @@ function ModuleEnvios() {
       cc.entregadosUM += (parseInt(x.r.entregados) || 0);
       if (bucket === "Última milla") cc.costoUM += x.costoContado;
     }
+  });
+  // Nombre a mostrar = la grafía más frecuente entre las variantes agrupadas.
+  Object.values(costosPorCarrier).forEach(cc => {
+    cc.carrier = Object.entries(cc._nameCounts).sort((a, b) => b[1] - a[1])[0][0];
   });
   const carrierCostList = Object.values(costosPorCarrier).sort((a, b) => b.costo - a.costo);
   const carrierTotCostoUM = carrierCostList.reduce((s, c) => s + c.costoUM, 0);
