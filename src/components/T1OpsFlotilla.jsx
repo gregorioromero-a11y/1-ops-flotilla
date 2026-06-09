@@ -1728,6 +1728,31 @@ function ModuleEnvios() {
   const sinAsistenciaPermisible = rutaCosto.filter(x => x.info.missing && esPermisible(x.r)).length;
   const crossSinRecol = rutaCosto.filter(x => isCrossdock(x.r) && (!x.r.recolecciones || x.r.recolecciones === 0)).length;
 
+  // Desglose de costo REAL por tipo de operación (4 cubetas).
+  // Se calcula desde rutaCosto (motor real) y no desde costosData, porque la
+  // clasificación por tipo vive en rutaCosto.r.tipoRuta. Suma costoContado para
+  // que el total reconcilie con costoTotalDiaNuevo (respeta dedup).
+  const bucketDeOperacion = (r) => {
+    const op = normalizeOperacion(r.tipoRuta);
+    if (op === "Última milla") return "Última milla";
+    if (op === "Crossdock") return "Half mile";
+    if (op === "PETCO" || op === "PETCO Monterrey") return "PETCO";
+    if (op.startsWith("Foráneo")) return "Foráneo";
+    return "Otros";
+  };
+  const DESGLOSE_ORDEN = ["Última milla", "Half mile", "Foráneo", "PETCO", "Otros"];
+  const DESGLOSE_COLOR = { "Última milla": C.green, "Half mile": C.blue, "Foráneo": C.purple, "PETCO": C.accent, "Otros": C.textMuted };
+  const desgloseOp = {};
+  rutaCosto.forEach(x => {
+    const b = bucketDeOperacion(x.r);
+    if (!desgloseOp[b]) desgloseOp[b] = { tipo: b, costo: 0, paquetes: 0, rutas: 0 };
+    desgloseOp[b].costo += x.costoContado;
+    desgloseOp[b].paquetes += isCrossdock(x.r) ? (parseInt(x.r.recolecciones) || 0) : (parseInt(x.r.entregados) || 0);
+    desgloseOp[b].rutas += 1;
+  });
+  const desgloseList = DESGLOSE_ORDEN.filter(t => desgloseOp[t]).map(t => desgloseOp[t]);
+  const desgloseTotalPaq = desgloseList.reduce((s, d) => s + d.paquetes, 0);
+
   // Cost by carrier
   const costosPorCarrier = {};
   costosData.forEach(c => {
@@ -1908,6 +1933,69 @@ function ModuleEnvios() {
           <StatCard label="Costo / paquete" value={"$" + costoPorPaquete} subvalue={totalEntregados + " paquetes entregados"} icon={<IC.Package />} color={C.accent} />
           <StatCard label="Última milla" value={"$" + (costoUM >= 1000 ? (costoUM/1000).toFixed(0) + "K" : costoUM.toLocaleString())} subvalue={costoTotalPeriodo > 0 ? ((costoUM/costoTotalPeriodo*100).toFixed(0) + "% del total") : ""} icon={<IC.Truck />} color={C.green} />
           <StatCard label="Half mile" value={"$" + (costoHM >= 1000 ? (costoHM/1000).toFixed(0) + "K" : costoHM.toLocaleString())} subvalue={costoTotalPeriodo > 0 ? ((costoHM/costoTotalPeriodo*100).toFixed(0) + "% del total") : ""} icon={<IC.Map />} color={C.blue} />
+        </div>
+      )}
+
+      {/* Desglose por tipo de operación (Última milla / Half mile / Foráneo / PETCO) */}
+      {desgloseList.length > 0 && costoTotalDiaNuevo > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
+            {desgloseList.map((d) => {
+              const pct = costoTotalDiaNuevo > 0 ? (d.costo / costoTotalDiaNuevo * 100).toFixed(0) : 0;
+              return (
+                <StatCard
+                  key={d.tipo}
+                  label={d.tipo}
+                  value={"$" + (d.costo >= 1000000 ? (d.costo/1000000).toFixed(2) + "M" : d.costo >= 1000 ? (d.costo/1000).toFixed(0) + "K" : Math.round(d.costo).toLocaleString())}
+                  subvalue={pct + "% del total · " + d.rutas + " rutas"}
+                  icon={<IC.Truck />}
+                  color={DESGLOSE_COLOR[d.tipo]}
+                />
+              );
+            })}
+          </div>
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+              Costo por tipo de operación — Periodo seleccionado
+              <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(costo real calculado, según tipo de ruta)</span>
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid " + C.border }}>
+                  {["Tipo de operación", "Rutas", "Paquetes", "Costo Total", "% del Costo", "Costo/Paquete"].map(h => (
+                    <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {desgloseList.map((d, i) => {
+                  const cppq = d.paquetes > 0 ? (d.costo / d.paquetes).toFixed(2) : "—";
+                  const pct = costoTotalDiaNuevo > 0 ? (d.costo / costoTotalDiaNuevo * 100).toFixed(1) : "0";
+                  return (
+                    <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>
+                        <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, backgroundColor: DESGLOSE_COLOR[d.tipo], marginRight: 8 }} />
+                        {d.tipo}
+                      </td>
+                      <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.rutas}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.paquetes.toLocaleString()}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${Math.round(d.costo).toLocaleString()}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: DESGLOSE_COLOR[d.tipo] }}>{pct}%</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.accent }}>{typeof cppq === "string" ? cppq : "$" + cppq}</td>
+                    </tr>
+                  );
+                })}
+                <tr style={{ backgroundColor: "#FAFBFF", borderTop: "2px solid " + C.border }}>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{desgloseList.reduce((s, d) => s + d.rutas, 0)}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{desgloseTotalPaq.toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${Math.round(costoTotalDiaNuevo).toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>100%</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.accent }}>{desgloseTotalPaq > 0 ? "$" + (costoTotalDiaNuevo / desgloseTotalPaq).toFixed(2) : "—"}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
