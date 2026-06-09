@@ -1780,6 +1780,14 @@ function ModuleEnvios() {
   const carrierTotCostoHM = carrierCostList.reduce((s, c) => s + c.costoHM, 0);
   const carrierTotEntHM = carrierCostList.reduce((s, c) => s + c.entregadosHM, 0);
 
+  // Costo Última Milla + Media Milla por proveedor (Total = ÚM + MM, sin foráneo/PETCO)
+  const umMmPorProveedor = carrierCostList
+    .map(c => ({ carrier: c.carrier, costoUM: c.costoUM, costoHM: c.costoHM, total: c.costoUM + c.costoHM }))
+    .filter(c => c.total > 0)
+    .sort((a, b) => b.total - a.total);
+  const umMmTotUM = umMmPorProveedor.reduce((s, c) => s + c.costoUM, 0);
+  const umMmTotHM = umMmPorProveedor.reduce((s, c) => s + c.costoHM, 0);
+
   // ===== FIXED: Use XLSX directly from npm import instead of dynamic CDN import =====
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
@@ -2050,6 +2058,41 @@ function ModuleEnvios() {
           <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
             Costo/Paquete = Costo Total ÷ Entregados ÚM (incluye foráneo/PETCO como entrega final). Los Entregados HM son recolecciones intermedias: no entran al denominador, su costo se amortiza en última milla.
           </div>
+        </div>
+      )}
+
+      {/* Costo Última Milla + Media Milla por proveedor (Total = ÚM + MM) */}
+      {umMmPorProveedor.length > 0 && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+            Costo Última Milla + Media Milla por Proveedor
+            <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(Total = última milla + media milla)</span>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid " + C.border }}>
+                {["Proveedor", "Costo Última Milla", "Costo Media Milla", "Costo Total (ÚM + MM)"].map(h => (
+                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {umMmPorProveedor.map((c, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, color: C.green, fontWeight: 600 }}>${Math.round(c.costoUM).toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, color: C.blue, fontWeight: 600 }}>${Math.round(c.costoHM).toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${Math.round(c.total).toLocaleString()}</td>
+                </tr>
+              ))}
+              <tr style={{ backgroundColor: "#FAFBFF", borderTop: "2px solid " + C.border }}>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.green }}>${Math.round(umMmTotUM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.blue }}>${Math.round(umMmTotHM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${Math.round(umMmTotUM + umMmTotHM).toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       )}
 
