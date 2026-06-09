@@ -1,3 +1,36 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Tema "control room / consola de despacho": fondo azul-tinta oscuro */
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #0A0F1A;
+  color: #E8EEF9;
+  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Números y títulos: Space Grotesk (aire técnico) */
+.font-grotesk {
+  font-family: var(--font-grotesk), var(--font-inter), sans-serif;
+}
+
+/* Scrollbars acordes al tema oscuro */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #0A0F1A;
+}
+::-webkit-scrollbar-thumb {
+  background: #22304A;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2E3F5C;
+}
