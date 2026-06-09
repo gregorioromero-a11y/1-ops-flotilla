@@ -5795,6 +5795,11 @@ function ModuleAsignaciones() {
   const [sesionDropdownOpen, setSesionDropdownOpen] = useState(false);
   const sesionDropdownRef = useRef(null);
   const sesionListRef = useRef(null);
+  // Rango de id [idMin, idMax] por sesión. ruteo_puntos NO tiene índice en
+  // `sesion` (filtrar por sesión hace timeout), pero cada sesión es un bloque
+  // contiguo de id, así que cargamos por rango de id (índice PK, rápido).
+  const rangesRef = useRef({});
+  const MAX_SESIONES_RESUMEN = 30;
   const [capacidad, setCapacidad] = useState(() => {
     try { return JSON.parse(localStorage.getItem("t1_capacidad_v1") || "{}"); } catch { return {}; }
   });
@@ -5843,7 +5848,7 @@ function ModuleAsignaciones() {
     if (!sel) return;
     const dateStr = new Date(sel.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
     setConfirmModal({
-      message: `¿Eliminar sesión ${sid.substring(0,10)} (${dateStr}, ${sel.puntos} puntos, ${sel.rutas} rutas)? Se borran sus puntos y asignaciones de Supabase. No se puede deshacer.`,
+      message: `¿Eliminar sesión ${sid.substring(0,10)} (${dateStr}${sel.puntos != null ? `, ${sel.puntos} puntos` : ""}${sel.rutas != null ? `, ${sel.rutas} rutas` : ""})? Se borran sus puntos y asignaciones de Supabase. No se puede deshacer.`,
       onConfirm: async () => {
         setDeletingSesion(true);
         try {
@@ -5880,56 +5885,72 @@ function ModuleAsignaciones() {
     return all;
   };
 
-  // Carga ruteo_puntos resiliente: intenta con la columna `nombre` y si la BD
-  // no la tiene aún (no se corrió el ALTER TABLE), cae al select sin `nombre`.
-  // Paginación por keyset sobre `id` (PK único, monotónico) en lugar de offset:
-  // con ORDER BY created_at + offset, las filas que comparten created_at (todos
-  // los puntos de una sesión se insertan al mismo instante) pueden saltarse o
-  // duplicarse, haciendo que la última sesión no aparezca.
-  const fetchPuntosResumen = async () => {
-    const probe = await supabase.from("ruteo_puntos").select("sesion, created_at, cluster, nombre").limit(1);
-    const tieneNombre = !probe.error;
-    const baseCols = tieneNombre ? "id, sesion, created_at, cluster, nombre" : "id, sesion, created_at, cluster";
-    const byId = new Map();
-    const pageSize = 1000;
-    let cursor = null;
-    while (true) {
-      let q = supabase.from("ruteo_puntos").select(baseCols).order("id", { ascending: false }).limit(pageSize);
+  // Resumen de sesiones SIN escanear las ~300k filas de ruteo_puntos.
+  // ruteo_puntos no tiene índice en `sesion` (filtrar por sesión hace timeout) y
+  // los agregados de PostgREST están deshabilitados. Pero cada sesión es un
+  // bloque CONTIGUO de id, así que saltamos de sesión en sesión por id
+  // descendente con .neq("sesion", …): una query por sesión. Acotado a las N más
+  // recientes y progresivo (callback onSession por cada una). De cada sesión
+  // derivamos puntos = idMax - idMaxSiguiente y el rango [idMin, idMax] para
+  // poder cargarla luego por rango de id (rápido, índice PK).
+  const fetchSesionesResumen = async (maxSesiones, onSession) => {
+    const out = [];
+    let cursor = null;     // id límite superior (exclusivo) de la siguiente búsqueda
+    let pend = null;       // sesión detectada, aún sin cerrar (sin idMin/puntos)
+    const cerrar = (idMinSiguiente) => {
+      if (!pend) return;
+      const idMin = idMinSiguiente != null ? idMinSiguiente + 1 : null;
+      const s = {
+        sesion: pend.sesion, fecha: pend.fecha, nombre: pend.nombre,
+        puntos: idMinSiguiente != null ? pend.idMax - idMinSiguiente : null,
+        rutas: null, idMax: pend.idMax, idMin,
+      };
+      rangesRef.current[s.sesion] = { idMin, idMax: s.idMax };
+      out.push(s);
+      if (onSession) onSession(s);
+      pend = null;
+    };
+    while (out.length < maxSesiones) {
+      let q = supabase.from("ruteo_puntos").select("id, sesion, created_at, nombre").order("id", { ascending: false }).limit(1);
       if (cursor !== null) q = q.lt("id", cursor);
-      const { data: chunk, error } = await q;
-      if (error) { console.error("ruteo_puntos load error:", error); break; }
-      if (!chunk || chunk.length === 0) break;
-      for (const row of chunk) byId.set(row.id, row);
-      if (chunk.length < pageSize) break;
-      cursor = chunk[chunk.length - 1].id;
+      if (pend) q = q.neq("sesion", pend.sesion);
+      const { data, error } = await q;
+      if (error) { console.error("[Asignaciones] resumen sesiones error:", error); break; }
+      const row = data && data[0];
+      if (!row) { cerrar(null); break; } // no hay más sesiones
+      cerrar(row.id);                     // cierra la anterior: su idMin = row.id + 1
+      pend = { sesion: row.sesion, idMax: row.id, fecha: row.created_at, nombre: row.nombre };
+      cursor = row.id;
     }
-    return Array.from(byId.values());
+    cerrar(null); // cierra la última pendiente si quedó al alcanzar el límite
+    return out;
   };
 
   const loadData = async () => {
     setLoading(true);
-    const [{ data: cData }, rData] = await Promise.all([
-      supabase.from("carriers").select("*").order("proveedor"),
-      fetchPuntosResumen(),
-    ]);
-    const umCarriers = (cData || []).filter(c => c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—" && (c.operacion || "").toLowerCase().includes("ltima"));
-    setCarriers(umCarriers);
-    if (rData && rData.length > 0) {
-      const grouped = {};
-      rData.forEach(r => {
-        if (!grouped[r.sesion]) grouped[r.sesion] = { sesion: r.sesion, fecha: r.created_at, nombre: r.nombre || null, puntos: 0, rutas: new Set() };
-        grouped[r.sesion].puntos += 1;
-        grouped[r.sesion].rutas.add(r.cluster);
-        if (!grouped[r.sesion].nombre && r.nombre) grouped[r.sesion].nombre = r.nombre;
+    // Carriers en paralelo (rápido), sin bloquear el resumen de sesiones.
+    supabase.from("carriers").select("*").order("proveedor").then(({ data: cData }) => {
+      setCarriers((cData || []).filter(c => c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—" && (c.operacion || "").toLowerCase().includes("ltima")));
+    });
+    try {
+      let primera = true;
+      const acc = [];
+      // Progresivo: apenas llega la sesión más reciente, quitamos el spinner y la
+      // auto-cargamos; el resto del dropdown se va poblando en background.
+      await fetchSesionesResumen(MAX_SESIONES_RESUMEN, (s) => {
+        acc.push(s);
+        setHistorico([...acc]);
+        if (primera) {
+          primera = false;
+          setLoading(false);
+          if (!sesionId) loadSesion(s.sesion);
+        }
       });
-      const sorted = Object.values(grouped).map(g => ({ ...g, rutas: g.rutas.size })).sort((a, b) => b.fecha.localeCompare(a.fecha));
-      setHistorico(sorted);
-      // Auto-carga la sesión más reciente para que aparezca pre-seleccionada en azul
-      if (sorted.length > 0 && !sesionId) {
-        loadSesion(sorted[0].sesion);
-      }
+    } catch (e) {
+      console.error("[Asignaciones] loadData error:", e);
+    } finally {
+      setLoading(false); // nunca dejar el spinner colgado
     }
-    setLoading(false);
   };
 
   const [saveMsg, setSaveMsg] = useState("");
@@ -5938,8 +5959,15 @@ function ModuleAsignaciones() {
   const loadSesion = async (sid) => {
     setLoadingSession(true);
     setSesionId(sid);
+    // Cargar por RANGO de id (índice PK, rápido). Filtrar por sesión hace timeout
+    // porque no hay índice en `sesion`. Si por algún motivo no tenemos el rango,
+    // caemos al filtro por sesión (lento) como último recurso.
+    const range = rangesRef.current[sid];
+    const puntosQuery = range && range.idMin != null
+      ? () => supabase.from("ruteo_puntos").select("*").gte("id", range.idMin).lte("id", range.idMax).order("indice")
+      : () => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice");
     const [data, savedRows] = await Promise.all([
-      fetchAllPaginated(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice")),
+      fetchAllPaginated(puntosQuery),
       supabase.from("asignaciones_sesion").select("*").eq("sesion", sid).then(r => r.data || []).catch(() => []),
     ]);
     console.log(`[Asignaciones] Sesión ${sid}: ${data.length} puntos cargados de Supabase`);
@@ -5955,6 +5983,9 @@ function ModuleAsignaciones() {
       console.log(`[Asignaciones] Excluidos: ${excluidos} · En rutas: ${data.length - excluidos}`);
       const rutaList = Object.values(rutaMap).sort((a, b) => a.cluster - b.cluster);
       setRutas(rutaList);
+      // Rellena puntos/rutas exactos de esta sesión en el dropdown (el resumen
+      // por saltos sólo trae puntos aproximados y rutas null).
+      setHistorico(prev => prev.map(h => h.sesion === sid ? { ...h, puntos: data.length, rutas: rutaList.length } : h));
 
       // Build saved-assignment map keyed by ruta_nombre
       const savedMap = {};
@@ -6414,7 +6445,7 @@ function ModuleAsignaciones() {
                         if (!sel) return sesionId;
                         const dateStr = new Date(sel.fecha).toLocaleString("es-MX", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
                         const prefix = sel.nombre ? `${sel.nombre} · ` : "";
-                        return `${prefix}${dateStr} · ${sel.puntos} puntos · ${sel.rutas} rutas · ${sesionId.substring(0,10)}`;
+                        return `${prefix}${dateStr}${sel.puntos != null ? ` · ${sel.puntos} puntos` : ""}${sel.rutas != null ? ` · ${sel.rutas} rutas` : ""} · ${sesionId.substring(0,10)}`;
                       })() : "— Selecciona una sesión —"}
                     </span>
                     <span style={{ color:C.textMuted, transform:sesionDropdownOpen?"rotate(180deg)":"none", transition:"transform 0.15s" }}>▾</span>
@@ -6429,7 +6460,7 @@ function ModuleAsignaciones() {
                             style={{ display:"block", width:"100%", padding:"9px 14px", textAlign:"left", border:"none", borderBottom:"1px solid "+C.border, backgroundColor:isSel?C.accentLight:C.white, color:isSel?C.accent:C.text, fontSize:13, fontWeight:isSel?700:500, cursor:"pointer" }}
                             onMouseEnter={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = "#16223A"; }}
                             onMouseLeave={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = C.white; }}>
-                            {h.nombre && <span style={{ fontWeight:700, color:isSel?C.accent:C.text }}>{h.nombre} · </span>}{dateStr} · {h.puntos} puntos · {h.rutas} rutas · {h.sesion.substring(0,10)}
+                            {h.nombre && <span style={{ fontWeight:700, color:isSel?C.accent:C.text }}>{h.nombre} · </span>}{dateStr}{h.puntos != null ? ` · ${h.puntos} puntos` : ""}{h.rutas != null ? ` · ${h.rutas} rutas` : ""} · {h.sesion.substring(0,10)}
                           </button>
                         );
                       })}
@@ -6444,8 +6475,8 @@ function ModuleAsignaciones() {
                     <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:11, color:C.textMuted, flexWrap:"wrap" }}>
                       {sel.nombre && <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.accentLight, color:C.accent, fontWeight:700, fontSize:12 }}>{sel.nombre}</span>}
                       <span style={{ fontWeight:600, color:C.text }}>{dateStr}</span>
-                      <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.blueBg, color:C.blue, fontWeight:700 }}>{sel.puntos} puntos</span>
-                      <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.purpleBg, color:C.purple, fontWeight:700 }}>{sel.rutas} rutas</span>
+                      {sel.puntos != null && <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.blueBg, color:C.blue, fontWeight:700 }}>{sel.puntos} puntos</span>}
+                      {sel.rutas != null && <span style={{ padding:"2px 8px", borderRadius:4, backgroundColor:C.purpleBg, color:C.purple, fontWeight:700 }}>{sel.rutas} rutas</span>}
                       <button onClick={() => eliminarSesion(sesionId)} disabled={deletingSesion}
                         title="Eliminar esta sesión (puntos + asignaciones guardadas) — útil para limpiar duplicados"
                         style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:6, border:"1px solid "+C.red, backgroundColor:C.redBg, color:C.red, fontSize:11, fontWeight:700, cursor:deletingSesion?"not-allowed":"pointer", opacity:deletingSesion?0.6:1 }}>
