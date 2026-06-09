@@ -1666,11 +1666,9 @@ function ModuleEnvios() {
   const completadas = rutas.filter(r => r.status === "Completada").length;
   const enRiesgo = rutas.filter(r => getRisk(r)).length;
 
-  // Cost calculations from costos table
-  const costoTotalPeriodo = costosData.reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const costoUM = costosData.filter(r => r.tipo === "Última milla").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const costoHM = costosData.filter(r => r.tipo === "Half mile").reduce((s, r) => s + (parseFloat(r.monto) || 0), 0);
-  const costoPorPaquete = totalEntregados > 0 ? (costoTotalPeriodo / totalEntregados).toFixed(2) : 0;
+  // NOTA: el costo y su desglose por tipo (ÚM/HM/foráneo/PETCO) se calculan más
+  // abajo desde el motor real `rutaCosto`, NO desde costosData. costosData no
+  // trae el campo `tipo` poblado, por eso aquí ya no derivamos costos de ahí.
 
   // Tipos de ruta donde un operador repetido en el mismo día cobra solo una vez
   // (el costo unitario se comparte y los paquetes se suman). No aplica a tipos
@@ -1751,27 +1749,36 @@ function ModuleEnvios() {
     desgloseOp[b].rutas += 1;
   });
   const desgloseList = DESGLOSE_ORDEN.filter(t => desgloseOp[t]).map(t => desgloseOp[t]);
-  const desgloseTotalPaq = desgloseList.reduce((s, d) => s + d.paquetes, 0);
+  // Denominador para el costo/paquete real: EXCLUYE Half mile, porque esos
+  // paquetes son recolecciones intermedias que se entregan al cliente final en
+  // última milla. Regla: (costo total) / (entregados ÚM + foráneo + PETCO).
+  const desgloseTotalPaqFinal = desgloseList.filter(d => d.tipo !== "Half mile").reduce((s, d) => s + d.paquetes, 0);
 
-  // Cost by carrier
+  // Costo por carrier — re-cableado al motor real (rutaCosto), no a costosData.
+  // Divide costo y entregados por tipo. Costo ÚM = última milla; Costo HM = half
+  // mile. Foráneo/PETCO suman al total y sus entregas cuentan como finales.
+  // entregadosUM = entregas al cliente final (todo EXCEPTO HM); entregadosHM =
+  // recolecciones intermedias. Costo/paquete = costo total / entregadosUM.
   const costosPorCarrier = {};
-  costosData.forEach(c => {
-    const prov = (c.unidad || "").split(" - ")[0] || "Sin carrier";
-    if (!costosPorCarrier[prov]) costosPorCarrier[prov] = { carrier: prov, costo: 0, unidades: 0, costoUM: 0, costoHM: 0 };
-    costosPorCarrier[prov].costo += (parseFloat(c.monto) || 0);
-    costosPorCarrier[prov].unidades += (parseInt(c.litros) || 0);
-    if (c.tipo === "Última milla") costosPorCarrier[prov].costoUM += (parseFloat(c.monto) || 0);
-    if (c.tipo === "Half mile") costosPorCarrier[prov].costoHM += (parseFloat(c.monto) || 0);
-  });
-  // Add paquetes from rutas
-  rutas.forEach(r => {
-    const prov = r.carrier || "Sin carrier";
-    if (costosPorCarrier[prov]) {
-      costosPorCarrier[prov].entregados = (costosPorCarrier[prov].entregados || 0) + r.entregados;
-      costosPorCarrier[prov].total = (costosPorCarrier[prov].total || 0) + r.total;
+  rutaCosto.forEach(x => {
+    const prov = x.r.carrier || "Sin carrier";
+    if (!costosPorCarrier[prov]) costosPorCarrier[prov] = { carrier: prov, rutas: 0, costo: 0, costoUM: 0, costoHM: 0, entregadosUM: 0, entregadosHM: 0 };
+    const cc = costosPorCarrier[prov];
+    const bucket = bucketDeOperacion(x.r);
+    cc.rutas += 1;
+    cc.costo += x.costoContado;
+    if (bucket === "Half mile") {
+      cc.costoHM += x.costoContado;
+      cc.entregadosHM += (parseInt(x.r.recolecciones) || 0);
+    } else {
+      cc.entregadosUM += (parseInt(x.r.entregados) || 0);
+      if (bucket === "Última milla") cc.costoUM += x.costoContado;
     }
   });
   const carrierCostList = Object.values(costosPorCarrier).sort((a, b) => b.costo - a.costo);
+  const carrierTotCostoUM = carrierCostList.reduce((s, c) => s + c.costoUM, 0);
+  const carrierTotCostoHM = carrierCostList.reduce((s, c) => s + c.costoHM, 0);
+  const carrierTotEntHM = carrierCostList.reduce((s, c) => s + c.entregadosHM, 0);
 
   // ===== FIXED: Use XLSX directly from npm import instead of dynamic CDN import =====
   const handleFileUpload = (e) => {
@@ -1926,16 +1933,6 @@ function ModuleEnvios() {
         </div>
       )}
 
-      {/* Cost StatCards */}
-      {costoTotalPeriodo > 0 && (
-        <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
-          <StatCard label="Costo total periodo" value={"$" + (costoTotalPeriodo >= 1000000 ? (costoTotalPeriodo/1000000).toFixed(2) + "M" : costoTotalPeriodo >= 1000 ? (costoTotalPeriodo/1000).toFixed(0) + "K" : costoTotalPeriodo.toLocaleString())} icon={<IC.Dollar />} color={C.purple} />
-          <StatCard label="Costo / paquete" value={"$" + costoPorPaquete} subvalue={totalEntregados + " paquetes entregados"} icon={<IC.Package />} color={C.accent} />
-          <StatCard label="Última milla" value={"$" + (costoUM >= 1000 ? (costoUM/1000).toFixed(0) + "K" : costoUM.toLocaleString())} subvalue={costoTotalPeriodo > 0 ? ((costoUM/costoTotalPeriodo*100).toFixed(0) + "% del total") : ""} icon={<IC.Truck />} color={C.green} />
-          <StatCard label="Half mile" value={"$" + (costoHM >= 1000 ? (costoHM/1000).toFixed(0) + "K" : costoHM.toLocaleString())} subvalue={costoTotalPeriodo > 0 ? ((costoHM/costoTotalPeriodo*100).toFixed(0) + "% del total") : ""} icon={<IC.Map />} color={C.blue} />
-        </div>
-      )}
-
       {/* Desglose por tipo de operación (Última milla / Half mile / Foráneo / PETCO) */}
       {desgloseList.length > 0 && costoTotalDiaNuevo > 0 && (
         <div style={{ marginBottom: 20 }}>
@@ -1962,14 +1959,17 @@ function ModuleEnvios() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "2px solid " + C.border }}>
-                  {["Tipo de operación", "Rutas", "Paquetes", "Costo Total", "% del Costo", "Costo/Paquete"].map(h => (
+                  {["Tipo de operación", "Rutas", "Paquetes", "Costo Total", "% del Costo", "Costo/Paquete entregado"].map(h => (
                     <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {desgloseList.map((d, i) => {
-                  const cppq = d.paquetes > 0 ? (d.costo / d.paquetes).toFixed(2) : "—";
+                  const esHM = d.tipo === "Half mile";
+                  // Half mile no tiene costo/paquete propio: su costo se amortiza
+                  // sobre los entregados de última milla (no son entrega final).
+                  const cppq = esHM ? null : (d.paquetes > 0 ? (d.costo / d.paquetes).toFixed(2) : "—");
                   const pct = costoTotalDiaNuevo > 0 ? (d.costo / costoTotalDiaNuevo * 100).toFixed(1) : "0";
                   return (
                     <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
@@ -1978,23 +1978,26 @@ function ModuleEnvios() {
                         {d.tipo}
                       </td>
                       <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.rutas}</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.paquetes.toLocaleString()}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.paquetes.toLocaleString()}{esHM ? <span style={{ color: C.textMuted, fontSize: 11 }}> recol.</span> : ""}</td>
                       <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${Math.round(d.costo).toLocaleString()}</td>
                       <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: DESGLOSE_COLOR[d.tipo] }}>{pct}%</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.accent }}>{typeof cppq === "string" ? cppq : "$" + cppq}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.accent }}>{cppq === null ? <span title="El costo de half mile se amortiza en los entregados de última milla" style={{ color: C.textMuted, fontWeight: 500 }}>amortizado en ÚM</span> : (typeof cppq === "string" && cppq === "—" ? "—" : "$" + cppq)}</td>
                     </tr>
                   );
                 })}
                 <tr style={{ backgroundColor: "#FAFBFF", borderTop: "2px solid " + C.border }}>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{desgloseList.reduce((s, d) => s + d.rutas, 0)}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{desgloseTotalPaq.toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{desgloseTotalPaqFinal.toLocaleString()}<span style={{ color: C.textMuted, fontSize: 11 }}> finales</span></td>
                   <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${Math.round(costoTotalDiaNuevo).toLocaleString()}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>100%</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.accent }}>{desgloseTotalPaq > 0 ? "$" + (costoTotalDiaNuevo / desgloseTotalPaq).toFixed(2) : "—"}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.accent }}>{desgloseTotalPaqFinal > 0 ? "$" + (costoTotalDiaNuevo / desgloseTotalPaqFinal).toFixed(2) : "—"}</td>
                 </tr>
               </tbody>
             </table>
+            <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
+              Costo/paquete entregado = Costo total ÷ entregados finales (última milla + foráneo + PETCO). Half mile son recolecciones intermedias: su costo se amortiza en última milla y no cuentan como entrega final.
+            </div>
           </div>
         </div>
       )}
@@ -2002,41 +2005,51 @@ function ModuleEnvios() {
       {/* Cost by carrier table */}
       {carrierCostList.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>Costo por Carrier — Periodo seleccionado</div>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+            Costo por Carrier — Periodo seleccionado
+            <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(costo real calculado)</span>
+          </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
-                {["Carrier", "Unidades", "Costo ÚM", "Costo HM", "Costo Total", "Pqtes Entregados", "Costo/Paquete"].map(h => (
+                {["Carrier", "Rutas", "Costo ÚM", "Costo HM", "Costo Total", "Entregados ÚM", "Entregados HM", "Costo/Paquete"].map(h => (
                   <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {carrierCostList.map((cc, i) => {
-                const cppq = (cc.entregados || 0) > 0 ? (cc.costo / cc.entregados).toFixed(2) : "—";
+                // Costo/paquete = costo total ÷ entregados finales (ÚM/foráneo/PETCO),
+                // EXCLUYE los entregados HM (recolecciones intermedias).
+                const cppq = cc.entregadosUM > 0 ? (cc.costo / cc.entregadosUM).toFixed(2) : "—";
                 return (
                   <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
                     <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{cc.carrier}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{cc.unidades}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, color: C.green, fontWeight: 600 }}>${cc.costoUM.toLocaleString()}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, color: C.blue, fontWeight: 600 }}>${cc.costoHM.toLocaleString()}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${cc.costo.toLocaleString()}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{cc.entregados || 0}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.accent }}>{typeof cppq === "string" ? cppq : "$" + cppq}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{cc.rutas}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, color: C.green, fontWeight: 600 }}>${Math.round(cc.costoUM).toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, color: C.blue, fontWeight: 600 }}>${Math.round(cc.costoHM).toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${Math.round(cc.costo).toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{cc.entregadosUM.toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, color: C.textMuted }}>{cc.entregadosHM > 0 ? cc.entregadosHM.toLocaleString() : "—"}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.accent }}>{typeof cppq === "string" && cppq === "—" ? "—" : "$" + cppq}</td>
                   </tr>
                 );
               })}
               <tr style={{ backgroundColor: "#FAFBFF", borderTop: "2px solid " + C.border }}>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{carrierCostList.reduce((s, c) => s + c.unidades, 0)}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.green }}>${costoUM.toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.blue }}>${costoHM.toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${costoTotalPeriodo.toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{totalEntregados}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.accent }}>${costoPorPaquete}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{carrierCostList.reduce((s, c) => s + c.rutas, 0)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.green }}>${Math.round(carrierTotCostoUM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.blue }}>${Math.round(carrierTotCostoHM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${Math.round(costoTotalDiaNuevo).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{entregadosTotal.toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.textMuted }}>{carrierTotEntHM > 0 ? carrierTotEntHM.toLocaleString() : "—"}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.accent }}>{entregadosTotal > 0 ? "$" + costoPorPaqGlobal.toFixed(2) : "—"}</td>
               </tr>
             </tbody>
           </table>
+          <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
+            Costo/Paquete = Costo Total ÷ Entregados ÚM (incluye foráneo/PETCO como entrega final). Los Entregados HM son recolecciones intermedias: no entran al denominador, su costo se amortiza en última milla.
+          </div>
         </div>
       )}
 
