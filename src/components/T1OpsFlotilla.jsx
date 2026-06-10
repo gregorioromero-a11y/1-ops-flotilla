@@ -1420,7 +1420,7 @@ function ModuleEnvios() {
         ${tdsTipos}
         <td class="importe">${importeFila > 0 ? "$ " + importeFila.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2}) : "$ -"}</td>
         <td class="coment">${comentarios}</td>
-        <td class="desc" style="color:${desc > 0 ? "#2DD4BF" : desc < 0 ? "#F0556D" : "inherit"}">${desc > 0 ? "-$ " + desc.toLocaleString("en-US", {minimumFractionDigits: 2}) : desc < 0 ? "+$ " + Math.abs(desc).toLocaleString("en-US", {minimumFractionDigits: 2}) : ""}</td>
+        <td class="desc" style="color:${desc > 0 ? "#16A34A" : desc < 0 ? "#DC2626" : "inherit"}">${desc > 0 ? "-$ " + desc.toLocaleString("en-US", {minimumFractionDigits: 2}) : desc < 0 ? "+$ " + Math.abs(desc).toLocaleString("en-US", {minimumFractionDigits: 2}) : ""}</td>
       </tr>`;
     }).join("");
 
@@ -1523,14 +1523,14 @@ function ModuleEnvios() {
         ${totalesUnidadesPorTipo.map(n => `<td class="totalNum">${n}</td>`).join("")}
         <td class="importe" style="font-weight:800">$ ${subtotal.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
         <td></td>
-        <td class="desc" style="font-weight:800;color:${totalDescuento > 0 ? "#2DD4BF" : totalDescuento < 0 ? "#F0556D" : "inherit"}">${totalDescuento > 0 ? "-$ " + totalDescuento.toLocaleString("en-US", {minimumFractionDigits: 2}) : totalDescuento < 0 ? "+$ " + Math.abs(totalDescuento).toLocaleString("en-US", {minimumFractionDigits: 2}) : ""}</td>
+        <td class="desc" style="font-weight:800;color:${totalDescuento > 0 ? "#16A34A" : totalDescuento < 0 ? "#DC2626" : "inherit"}">${totalDescuento > 0 ? "-$ " + totalDescuento.toLocaleString("en-US", {minimumFractionDigits: 2}) : totalDescuento < 0 ? "+$ " + Math.abs(totalDescuento).toLocaleString("en-US", {minimumFractionDigits: 2}) : ""}</td>
       </tr>
     </tbody>
   </table>
   <div class="summary">
     <table>
       <tr><td class="val">$ ${subtotal.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">SUBTOTAL</td></tr>
-      <tr><td class="val" style="color:${totalDescuento > 0 ? "#2DD4BF" : totalDescuento < 0 ? "#F0556D" : "inherit"}">${totalDescuento > 0 ? "-$ " + totalDescuento.toLocaleString("en-US", {minimumFractionDigits: 2}) : totalDescuento < 0 ? "+$ " + Math.abs(totalDescuento).toLocaleString("en-US", {minimumFractionDigits: 2}) : "$ -"}</td><td class="lbl">${totalDescuento < 0 ? "CARGO ADICIONAL" : "DESCUENTO"}</td></tr>
+      <tr><td class="val" style="color:${totalDescuento > 0 ? "#16A34A" : totalDescuento < 0 ? "#DC2626" : "inherit"}">${totalDescuento > 0 ? "-$ " + totalDescuento.toLocaleString("en-US", {minimumFractionDigits: 2}) : totalDescuento < 0 ? "+$ " + Math.abs(totalDescuento).toLocaleString("en-US", {minimumFractionDigits: 2}) : "$ -"}</td><td class="lbl">${totalDescuento < 0 ? "CARGO ADICIONAL" : "DESCUENTO"}</td></tr>
       <tr><td class="val">$ ${subtotalNeto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">SUBTOTAL</td></tr>
       ${conIVA ? `<tr><td class="val">$ ${ivaMonto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">IVA</td></tr>` : ""}
       <tr><td class="val" style="font-weight:800">$ ${totalFinal.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td><td class="lbl">TOTAL</td></tr>
@@ -3631,7 +3631,7 @@ function ModuleCostos() {
   <div class="stats">
     <div class="stat"><div class="stat-label">Operadores</div><div class="stat-value">${filtrados.length}</div></div>
     <div class="stat"><div class="stat-label">Costo base</div><div class="stat-value" style="color:#16A34A">$${totalCosto.toLocaleString()}</div></div>
-    <div class="stat"><div class="stat-label">Penalizaciones</div><div class="stat-value" style="color:${totalPenal>=0?"#F0556D":"#2DD4BF"}">${totalPenal>=0?"+":""}$${totalPenal.toLocaleString()}</div></div>
+    <div class="stat"><div class="stat-label">Penalizaciones</div><div class="stat-value" style="color:${totalPenal>=0?"#DC2626":"#16A34A"}">${totalPenal>=0?"+":""}$${totalPenal.toLocaleString()}</div></div>
     <div class="stat"><div class="stat-label">Total real</div><div class="stat-value" style="color:#FF4500">$${totalReal.toLocaleString()}</div></div>
   </div>
 
@@ -3656,7 +3656,7 @@ function ModuleCostos() {
             <td>${r.tipo_operacion || "—"}</td>
             <td class="right">$${co.toLocaleString()}</td>
             <td style="font-family:monospace;font-size:8pt;color:#7C8495">${peStr || "—"}</td>
-            <td class="right" style="color:${pe>0?"#F0556D":pe<0?"#2DD4BF":"#8295B2"}">${pe!==0?(pe>0?"+":"")+"$"+pe.toLocaleString():"—"}</td>
+            <td class="right" style="color:${pe>0?"#DC2626":pe<0?"#16A34A":"#7C8495"}">${pe!==0?(pe>0?"+":"")+"$"+pe.toLocaleString():"—"}</td>
             <td class="right" style="font-weight:700;color:#1F2937">$${tot.toLocaleString()}</td>
           </tr>`;
         }).join("")}
