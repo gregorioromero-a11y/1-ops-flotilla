@@ -13,34 +13,44 @@ const supabase = createClient(
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93aHNibXRyb3h6aHNjcHpvenRzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NTI4NTMsImV4cCI6MjA4ODEyODg1M30.CU1IiseDJnjk8F8L2DaIDbU3UJk1RrRTK61nJe7Oiec"
 );
 
-// Paleta "control room / consola de despacho": fondo azul-tinta oscuro con
-// acentos semafóricos. green/teal ≥85%, ámbar 60-85%, rojo <60%, azul = volumen.
-const C = {
-  bg: "#0A0F1A",            // azul tinta casi negro (estructura)
-  sidebar: "#0E1626",       // panel oscuro
-  sidebarHover: "#1A2540",
-  sidebarActive: "#1E3A5F",
-  accent: "#4C8DFF",        // azul / dato principal (acciones)
-  accentDark: "#3B6FCC",
-  accentLight: "rgba(76,141,255,0.14)",
-  text: "#E8EEF9",          // texto principal
-  textMuted: "#8295B2",     // texto secundario
-  textFaint: "#5A6C8A",     // texto tenue
-  border: "#22304A",        // bordes/líneas
-  white: "#111A2B",         // base de paneles/cards (antes blanco)
-  panel: "#111A2B",
-  panelAlt: "#16223A",      // filas TOTAL / zebra sobre panel
+// Dos paletas disponibles vía switch: "dark" (control room / consola de
+// despacho, azul-tinta oscuro) y "light" (el estilo claro anterior).
+// `C` es un objeto MUTABLE: applyThemePalette() reescribe sus props in situ y un
+// re-render del árbol relee los nuevos valores (todos los estilos usan C.*).
+const PALETTE_DARK = {
+  bg: "#0A0F1A", sidebar: "#0E1626", sidebarHover: "#1A2540", sidebarActive: "#1E3A5F",
+  accent: "#4C8DFF", accentDark: "#3B6FCC", accentLight: "rgba(76,141,255,0.14)",
+  text: "#E8EEF9", textMuted: "#8295B2", textFaint: "#5A6C8A", border: "#22304A",
+  white: "#111A2B", panel: "#111A2B", panelAlt: "#16223A",
   panelGrad: "linear-gradient(160deg,#111A2B,#0E1626)",
-  green: "#2DD4BF",         // teal / bueno
-  greenBg: "rgba(45,212,191,0.15)",
-  yellow: "#F6A623",        // ámbar / alerta
-  yellowBg: "rgba(246,166,35,0.15)",
-  red: "#F0556D",           // rojo / malo-vencido
-  redBg: "rgba(240,85,109,0.15)",
-  blue: "#4C8DFF",          // azul / dato neutro-volumen
-  blueBg: "rgba(76,141,255,0.15)",
-  purple: "#A78BFA",        // violeta / on-time
-  purpleBg: "rgba(167,139,250,0.15)",
+  green: "#2DD4BF", greenBg: "rgba(45,212,191,0.15)",
+  yellow: "#F6A623", yellowBg: "rgba(246,166,35,0.15)",
+  red: "#F0556D", redBg: "rgba(240,85,109,0.15)",
+  blue: "#4C8DFF", blueBg: "rgba(76,141,255,0.15)",
+  purple: "#A78BFA", purpleBg: "rgba(167,139,250,0.15)",
+  selBg: "rgba(76,141,255,0.25)",
+};
+const PALETTE_LIGHT = {
+  bg: "#F8F9FC", sidebar: "#0C1425", sidebarHover: "#1A2540", sidebarActive: "#1E3A5F",
+  accent: "#E63B2E", accentDark: "#C42E23", accentLight: "#FDECEA",
+  text: "#0C1425", textMuted: "#7C8495", textFaint: "#9AA3B2", border: "#E2E6EE",
+  white: "#FFFFFF", panel: "#FFFFFF", panelAlt: "#FAFBFF",
+  panelGrad: "#FFFFFF",
+  green: "#16A34A", greenBg: "#DCFCE7",
+  yellow: "#D97706", yellowBg: "#FEF9C3",
+  red: "#DC2626", redBg: "#FEE2E2",
+  blue: "#2563EB", blueBg: "#DBEAFE",
+  purple: "#7C3AED", purpleBg: "#EDE9FE",
+  selBg: "#DBEAFE",
+};
+const C = { ...PALETTE_DARK };
+const applyThemePalette = (name) => {
+  Object.assign(C, name === "light" ? PALETTE_LIGHT : PALETTE_DARK);
+  if (typeof document !== "undefined") document.documentElement.dataset.theme = name;
+};
+const getSavedTheme = () => {
+  if (typeof window === "undefined") return "dark";
+  try { return localStorage.getItem("t1_theme") === "light" ? "light" : "dark"; } catch { return "dark"; }
 };
 
 const IC = {
@@ -155,7 +165,7 @@ function StatusBadge({ status }) {
     "Baja temporal": { bg: C.redBg, color: C.red },
     "Incapacidad": { bg: C.purpleBg, color: C.purple },
   };
-  const s = map[status] || { bg: "#16223A", color: C.textMuted };
+  const s = map[status] || { bg: C.panelAlt, color: C.textMuted };
   return (
     <span style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, backgroundColor: s.bg, color: s.color, display: "inline-flex", alignItems: "center", gap: 5 }}>
       <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: s.color }} />
@@ -405,7 +415,7 @@ function ModuleDashboard() {
               return (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                   <div style={{ width: 130, fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.carrier}</div>
-                  <div style={{ flex: 1, height: 22, backgroundColor: "#16223A", borderRadius: 6, overflow: "hidden", position: "relative" }}>
+                  <div style={{ flex: 1, height: 22, backgroundColor: C.panelAlt, borderRadius: 6, overflow: "hidden", position: "relative" }}>
                     <div style={{ width: pct + "%", height: "100%", backgroundColor: color, borderRadius: 6, transition: "width 0.5s", display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8 }}>
                       {pct > 20 && <span style={{ fontSize: 10, fontWeight: 700, color: "white" }}>{c.pctEntrega}%</span>}
                     </div>
@@ -425,7 +435,7 @@ function ModuleDashboard() {
               return carrierData.map((c, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                   <div style={{ width: 130, fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.carrier}</div>
-                  <div style={{ flex: 1, height: 22, backgroundColor: "#16223A", borderRadius: 6, overflow: "hidden" }}>
+                  <div style={{ flex: 1, height: 22, backgroundColor: C.panelAlt, borderRadius: 6, overflow: "hidden" }}>
                     <div style={{ display: "flex", height: "100%", borderRadius: 6 }}>
                       <div style={{ width: (c.entregados / maxTotal * 100) + "%", backgroundColor: C.green, display: "flex", alignItems: "center", justifyContent: "center" }}>
                         {c.entregados > maxTotal * 0.15 && <span style={{ fontSize: 9, fontWeight: 700, color: "white" }}>{c.entregados}</span>}
@@ -453,8 +463,8 @@ function ModuleDashboard() {
               return carrierData.map((c, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                   <div style={{ width: 130, fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.carrier}</div>
-                  <div style={{ flex: 1, height: 22, backgroundColor: "#16223A", borderRadius: 6, overflow: "hidden" }}>
-                    <div style={{ width: (c.devoluciones / maxDev * 100) + "%", height: "100%", backgroundColor: "#F6A623", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8 }}>
+                  <div style={{ flex: 1, height: 22, backgroundColor: C.panelAlt, borderRadius: 6, overflow: "hidden" }}>
+                    <div style={{ width: (c.devoluciones / maxDev * 100) + "%", height: "100%", backgroundColor: C.yellow, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8 }}>
                       {c.devoluciones > maxDev * 0.15 && <span style={{ fontSize: 10, fontWeight: 700, color: "white" }}>{c.devoluciones}</span>}
                     </div>
                   </div>
@@ -534,11 +544,11 @@ function CircleGauge({ value, size = 40 }) {
   const r = (size - 6) / 2;
   const circ = 2 * Math.PI * r;
   const offset = circ - (value / 100) * circ;
-  const color = value >= 90 ? C.green : value >= 75 ? "#4C8DFF" : value >= 50 ? C.yellow : C.red;
+  const color = value >= 90 ? C.green : value >= 75 ? C.blue : value >= 50 ? C.yellow : C.red;
   return (
     <div style={{ position: "relative", width: size, height: size, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
       <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
-        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#22304A" strokeWidth={3} />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={C.border} strokeWidth={3} />
         <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={3}
           strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" />
       </svg>
@@ -1413,7 +1423,7 @@ function ModuleEnvios() {
       const notas = (notasPorFecha[f] || []).join(" · ");
       const baseComent = esDomingo && sumaUnidades === 0 ? "Domingo" : "";
       const comentarios = [baseComent, notas].filter(Boolean).join(" — ");
-      const bg = esDomingo ? "rgba(246,166,35,0.15)" : "#111A2B";
+      const bg = esDomingo ? C.yellowBg : C.white;
       const tdsTipos = tipos.map(t => `<td class="num" style="background:${bg}">${cuentas[t] || ""}</td>`).join("");
       return `<tr style="background:${bg}">
         <td class="fecha">${fmtFecha(f)}</td>
@@ -1904,7 +1914,7 @@ function ModuleEnvios() {
     if (r.status === "Completada") return C.green;
     if (getRisk(r) === "high") return C.red;
     if (getRisk(r) === "medium") return C.yellow;
-    return "#F6A623";
+    return C.yellow;
   };
 
   return (
@@ -2013,7 +2023,7 @@ function ModuleEnvios() {
                     </tr>
                   );
                 })}
-                <tr style={{ backgroundColor: "#16223A", borderTop: "2px solid " + C.border }}>
+                <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{desgloseList.reduce((s, d) => s + d.rutas, 0)}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{desgloseTotalPaqFinal.toLocaleString()}<span style={{ color: C.textMuted, fontSize: 11 }}> finales</span></td>
@@ -2063,7 +2073,7 @@ function ModuleEnvios() {
                   </tr>
                 );
               })}
-              <tr style={{ backgroundColor: "#16223A", borderTop: "2px solid " + C.border }}>
+              <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{carrierCostList.reduce((s, c) => s + c.rutas, 0)}</td>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.green }}>${Math.round(carrierTotCostoUM).toLocaleString()}</td>
@@ -2104,7 +2114,7 @@ function ModuleEnvios() {
                   <td style={{ padding: "10px 14px", fontSize: 14, color: C.green, fontWeight: 700 }}>${Math.round(c.costoUM).toLocaleString()}</td>
                 </tr>
               ))}
-              <tr style={{ backgroundColor: "#16223A", borderTop: "2px solid " + C.border }}>
+              <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{umPorProveedor.reduce((s, c) => s + c.rutasUM, 0)}</td>
                 <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800, color: C.green }}>${Math.round(umMmTotUM).toLocaleString()}</td>
@@ -2137,7 +2147,7 @@ function ModuleEnvios() {
                   <td style={{ padding: "10px 14px", fontSize: 14, color: C.blue, fontWeight: 700 }}>${Math.round(c.costoHM).toLocaleString()}</td>
                 </tr>
               ))}
-              <tr style={{ backgroundColor: "#16223A", borderTop: "2px solid " + C.border }}>
+              <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{mmPorProveedor.reduce((s, c) => s + c.rutasHM, 0)}</td>
                 <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800, color: C.blue }}>${Math.round(umMmTotHM).toLocaleString()}</td>
@@ -2171,7 +2181,7 @@ function ModuleEnvios() {
                   <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${Math.round(c.total).toLocaleString()}</td>
                 </tr>
               ))}
-              <tr style={{ backgroundColor: "#16223A", borderTop: "2px solid " + C.border }}>
+              <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.green }}>${Math.round(umMmTotUM).toLocaleString()}</td>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.blue }}>${Math.round(umMmTotHM).toLocaleString()}</td>
@@ -2342,7 +2352,7 @@ function ModuleEnvios() {
             {filtered.map((r, i) => {
               const rutaIdx = rutas.indexOf(r);
               const dedupRow = getDedupInfo(r, rutaIdx);
-              const bgGrupo = dedupRow ? "rgba(167,139,250,0.15)" : "transparent";
+              const bgGrupo = dedupRow ? C.purpleBg : "transparent";
               // CRÍTICO: key debe ser estable por ruta (r.id). Con key={i} React
               // reutilizaba el mismo DOM <tr> para rutas distintas cuando cambia
               // el filtro/orden, y los inputs no controlados (penalización,
@@ -2351,11 +2361,11 @@ function ModuleEnvios() {
               // edición al operador equivocado.
               return (
               <tr key={r.id ?? "idx-" + i} style={{ borderBottom: `1px solid ${C.border}`, position: "relative", backgroundColor: bgGrupo }}
-                onMouseEnter={ev => { if (!dedupRow) ev.currentTarget.style.backgroundColor = "#16223A"; }}
+                onMouseEnter={ev => { if (!dedupRow) ev.currentTarget.style.backgroundColor = C.panelAlt; }}
                 onMouseLeave={ev => { ev.currentTarget.style.backgroundColor = bgGrupo; }}>
                 {/* Color bar */}
                 <td style={{ padding: 0, position: "relative", width: 4 }}>
-                  <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: dedupRow ? 5 : 4, backgroundColor: dedupRow ? "#A78BFA" : getBarColor(r) }} />
+                  <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: dedupRow ? 5 : 4, backgroundColor: dedupRow ? C.purple : getBarColor(r) }} />
                   <div style={{ paddingLeft: 12 }}>
                     <input type="checkbox" checked={selectedRows.has(i)} onChange={() => toggleRow(i)} style={{ cursor: "pointer", accentColor: C.accent }} />
                   </div>
@@ -2366,24 +2376,24 @@ function ModuleEnvios() {
                     <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{r.operador}</span>
                     {r._esAsistencia && (
                       <span title="Sólo asistencia: este operador tiene check-in en Registro Diario pero no tiene ruta cargada del Excel."
-                        style={{ fontSize: 9, fontWeight: 800, color: "#4C8DFF", padding: "2px 6px", borderRadius: 10, backgroundColor: "rgba(76,141,255,0.15)", letterSpacing: "0.05em" }}>
+                        style={{ fontSize: 9, fontWeight: 800, color: C.blue, padding: "2px 6px", borderRadius: 10, backgroundColor: C.blueBg, letterSpacing: "0.05em" }}>
                         ASISTENCIA
                       </span>
                     )}
                     {!r._esAsistencia && (String(r.idRuta || "").startsWith("MAN-") ? (
                       <span title="Ruta capturada manualmente desde el botón Captura manual."
-                        style={{ fontSize: 9, fontWeight: 800, color: "#2DD4BF", padding: "2px 6px", borderRadius: 10, backgroundColor: "rgba(45,212,191,0.15)", letterSpacing: "0.05em" }}>
+                        style={{ fontSize: 9, fontWeight: 800, color: C.green, padding: "2px 6px", borderRadius: 10, backgroundColor: C.greenBg, letterSpacing: "0.05em" }}>
                         MANUAL
                       </span>
                     ) : (
                       <span title="Ruta importada automáticamente desde la carga masiva de Excel."
-                        style={{ fontSize: 9, fontWeight: 800, color: "#8295B2", padding: "2px 6px", borderRadius: 10, backgroundColor: "#16223A", letterSpacing: "0.05em" }}>
+                        style={{ fontSize: 9, fontWeight: 800, color: C.textMuted, padding: "2px 6px", borderRadius: 10, backgroundColor: C.panelAlt, letterSpacing: "0.05em" }}>
                         EXCEL
                       </span>
                     ))}
                     {dedupRow && (
                       <span title={"Forma parte de un grupo de " + dedupRow.groupSize + " rutas del mismo operador hoy"}
-                        style={{ fontSize: 9, fontWeight: 800, color: "#A78BFA", padding: "2px 6px", borderRadius: 10, backgroundColor: "rgba(167,139,250,0.15)", letterSpacing: "0.05em" }}>
+                        style={{ fontSize: 9, fontWeight: 800, color: C.purple, padding: "2px 6px", borderRadius: 10, backgroundColor: C.purpleBg, letterSpacing: "0.05em" }}>
                         GRUPO {dedupRow.groupSize}
                       </span>
                     )}
@@ -2415,9 +2425,9 @@ function ModuleEnvios() {
                         title={isPerm ? "Permisible: puede no tener registro automático de operador" : ""}
                         style={{
                           fontSize: 12, padding: "4px 8px", borderRadius: 6,
-                          border: "1px solid " + (isPerm ? "#A78BFA" : C.border),
-                          backgroundColor: isPerm ? "rgba(167,139,250,0.15)" : C.white,
-                          color: isPerm ? "#A78BFA" : C.text,
+                          border: "1px solid " + (isPerm ? C.purple : C.border),
+                          backgroundColor: isPerm ? C.purpleBg : C.white,
+                          color: isPerm ? C.purple : C.text,
                           cursor: "pointer", fontWeight: isPerm ? 700 : 500,
                         }}>
                         <option value="Última milla">Última milla</option>
@@ -2447,15 +2457,15 @@ function ModuleEnvios() {
                   return <>
                     <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {info.flatRate ? (
-                        <div title={"Tarifa fija " + r.tipoRuta + ": $" + info.flatRateValue + " × " + info.paqOperados + " paquetes operados"} style={{ fontSize: 12, fontWeight: 700, color: "#4C8DFF", lineHeight: 1.2 }}>
+                        <div title={"Tarifa fija " + r.tipoRuta + ": $" + info.flatRateValue + " × " + info.paqOperados + " paquetes operados"} style={{ fontSize: 12, fontWeight: 700, color: C.blue, lineHeight: 1.2 }}>
                           ${info.baseCost.toLocaleString()}
-                          <div style={{ fontSize: 9, color: "#4C8DFF", fontWeight: 600 }}>${info.flatRateValue}/paq × {info.paqOperados}</div>
+                          <div style={{ fontSize: 9, color: C.blue, fontWeight: 600 }}>${info.flatRateValue}/paq × {info.paqOperados}</div>
                         </div>
                       ) : info.missing ? (
                         esPermisible(r) ? (
                           <div title={"Sin registro de operador (permisible: " + r.tipoRuta + ")"} style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, lineHeight: 1.2 }}>
-                            <span style={{ color: "#A78BFA" }}>●</span> Permisible
-                            <div style={{ fontSize: 9, color: "#A78BFA", fontWeight: 600 }}>{r.tipoRuta}</div>
+                            <span style={{ color: C.purple }}>●</span> Permisible
+                            <div style={{ fontSize: 9, color: C.purple, fontWeight: 600 }}>{r.tipoRuta}</div>
                           </div>
                         ) : (
                           <div title="Operador no encontrado en Registro Diario (solo check-in automático). Si es foráneo, PETCO o HalfMile, cambia el Tipo ruta." style={{ fontSize: 12, color: C.red, fontWeight: 700, display: "flex", alignItems: "center", gap: 3 }}>
@@ -2465,7 +2475,7 @@ function ModuleEnvios() {
                       ) : (
                         <div style={{ fontSize: 12, fontWeight: 700, color: C.green, lineHeight: 1.2 }}>
                           ${info.baseCost.toLocaleString()}
-                          <div style={{ fontSize: 9, color: info.fallback ? "#A78BFA" : C.textMuted, fontWeight: info.fallback ? 600 : 500 }}>
+                          <div style={{ fontSize: 9, color: info.fallback ? C.purple : C.textMuted, fontWeight: info.fallback ? 600 : 500 }}>
                             {info.tipo_unidad}
                             {info.fallback === "operador" && <span title="Costo inferido del último check-in del operador"> · ref.</span>}
                             {info.fallback === "carrier" && <span title="Operador sin historial. Costo estimado del carrier/transportista"> · est.</span>}
@@ -2502,7 +2512,7 @@ function ModuleEnvios() {
                         <div style={{ fontSize: 12, fontWeight: 800, color: descuento > 0 ? C.accent : C.text, lineHeight: 1.2 }}>
                           ${costoNuevo.toLocaleString()}
                           {descuento !== 0 && <div style={{ fontSize: 9, fontWeight: 600, color: descuento > 0 ? C.red : C.green }}>{descuento > 0 ? "−" : "+"}${Math.abs(descuento).toLocaleString()}</div>}
-                          {dedup && dedup.isPrimary && <div style={{ fontSize: 9, fontWeight: 600, color: "#A78BFA" }}>×{dedup.groupSize} rutas</div>}
+                          {dedup && dedup.isPrimary && <div style={{ fontSize: 9, fontWeight: 600, color: C.purple }}>×{dedup.groupSize} rutas</div>}
                         </div>
                       )}
                     </td>
@@ -2715,7 +2725,7 @@ function ModuleEnvios() {
                       style={{ width:"100%", padding:"8px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:14, fontWeight:700, boxSizing:"border-box", textAlign:"center" }} />
                   </div>
                   <div>
-                    <label style={{ display:"block", fontSize:11, fontWeight:700, color:"#F6A623", marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Intentados</label>
+                    <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.yellow, marginBottom:5, textTransform:"uppercase", letterSpacing:"0.05em" }}>Intentados</label>
                     <input type="number" min="0" value={manualForm.intentados}
                       onChange={e => setManualForm(f => ({ ...f, intentados: e.target.value }))}
                       style={{ width:"100%", padding:"8px 10px", borderRadius:6, border:"1px solid "+C.border, fontSize:14, fontWeight:700, boxSizing:"border-box", textAlign:"center" }} />
@@ -2761,7 +2771,7 @@ function ModuleEnvios() {
                 </div>
               </div>
               <div style={{ padding:"16px 24px", borderTop:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-                <div style={{ fontSize:12, fontWeight:600, color: manualMsg.startsWith("✓") ? C.green : manualMsg.startsWith("⚠") ? "#F6A623" : C.red, minHeight:18 }}>{manualMsg}</div>
+                <div style={{ fontSize:12, fontWeight:600, color: manualMsg.startsWith("✓") ? C.green : manualMsg.startsWith("⚠") ? C.yellow : C.red, minHeight:18 }}>{manualMsg}</div>
                 <div style={{ display:"flex", gap:10 }}>
                   <button onClick={() => !manualSaving && setManualOpen(false)} disabled={manualSaving}
                     style={{ padding:"9px 20px", borderRadius:8, border:"1px solid "+C.border, backgroundColor:C.white, color:C.text, fontSize:13, fontWeight:600, cursor:manualSaving?"not-allowed":"pointer" }}>
@@ -3041,7 +3051,7 @@ function ModuleUnidades() {
           <tbody>
             {mockUnidades.map((u, i) => (
               <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}
-                onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#16223A"}
+                onMouseEnter={ev => ev.currentTarget.style.backgroundColor = C.panelAlt}
                 onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
                 <td style={{ padding: "12px", fontSize: 13, fontWeight: 700, color: C.accent, fontFamily: "monospace" }}>{u.id}</td>
                 <td style={{ padding: "12px", fontSize: 13 }}>{u.tipo}</td>
@@ -3262,7 +3272,7 @@ function ModuleOperadores() {
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo (.xlsx, .xls, .csv)</label>
               <input type="file" accept=".xlsx,.xls,.csv" onChange={handleBulkFile}
-                style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: "#16223A" }} />
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt }} />
             </div>
           </div>
 
@@ -3272,7 +3282,7 @@ function ModuleOperadores() {
               <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid " + C.border, borderRadius: 8 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr style={{ borderBottom: "1px solid " + C.border, backgroundColor: "#16223A" }}>
+                    <tr style={{ borderBottom: "1px solid " + C.border, backgroundColor: C.panelAlt }}>
                       <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>#</th>
                       <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Nombre</th>
                       <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Correo</th>
@@ -3292,7 +3302,7 @@ function ModuleOperadores() {
                           <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: op.estatus === "ACTIVE" ? C.greenBg : C.redBg, color: op.estatus === "ACTIVE" ? C.green : C.red }}>{op.estatus}</span>
                         </td>
                         <td style={{ padding: "6px 12px" }}>
-                          <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, backgroundColor: "rgba(167,139,250,0.15)", color: C.purple }}>{bulkProveedor || "—"}</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, backgroundColor: C.purpleBg, color: C.purple }}>{bulkProveedor || "—"}</span>
                         </td>
                       </tr>
                     ))}
@@ -3389,7 +3399,7 @@ function ModuleOperadores() {
                 </td></tr>
               ) : filteredOps.map((o) => (
                 <tr key={o.id} style={{ borderBottom: "1px solid " + C.border }}
-                  onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#16223A"}
+                  onMouseEnter={ev => ev.currentTarget.style.backgroundColor = C.panelAlt}
                   onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
                   <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: C.text }}>{o.nombre}</td>
                   <td style={{ padding: "12px 14px", fontSize: 13, color: C.textMuted }}>{o.proveedor}</td>
@@ -3534,7 +3544,7 @@ function ModuleCostos() {
 
   const opColors = { "Última Milla": C.accent, CrossDock: C.blue, "Logística Inversa": C.purple };
   const opBgs   = { "Última Milla": C.accentLight, CrossDock: C.blueBg, "Logística Inversa": C.purpleBg };
-  const tipoColors = { Moto:{bg:"rgba(246,166,35,0.15)",c:"#F6A623"}, Sedan:{bg:"rgba(76,141,255,0.15)",c:"#4C8DFF"}, SmallVan:{bg:"rgba(167,139,250,0.15)",c:"#A78BFA"}, Van:{bg:"rgba(167,139,250,0.15)",c:"#A78BFA"}, "1.5":{bg:"rgba(246,166,35,0.15)",c:"#F6A623"}, "3.5":{bg:"rgba(246,166,35,0.15)",c:"#F6A623"}, Rabon:{bg:"rgba(246,166,35,0.15)",c:"#F6A623"}, Torton:{bg:"rgba(240,85,109,0.15)",c:"#F0556D"}, Tracto:{bg:"#16223A",c:"#8295B2"} };
+  const tipoColors = { Moto:{bg:C.yellowBg,c:C.yellow}, Sedan:{bg:C.blueBg,c:C.blue}, SmallVan:{bg:C.purpleBg,c:C.purple}, Van:{bg:C.purpleBg,c:C.purple}, "1.5":{bg:C.yellowBg,c:C.yellow}, "3.5":{bg:C.yellowBg,c:C.yellow}, Rabon:{bg:C.yellowBg,c:C.yellow}, Torton:{bg:C.redBg,c:C.red}, Tracto:{bg:C.panelAlt,c:C.textMuted} };
   const fmt = ts => { if (!ts) return "—"; const d = new Date(ts); return d.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"}); };
 
   const saveRegistroManual = async () => {
@@ -3803,7 +3813,7 @@ function ModuleCostos() {
             </div>
           )}
           {costoTotalForm > 0 && (
-            <div style={{ marginTop:14, padding:"12px 16px", borderRadius:8, backgroundColor:"rgba(45,212,191,0.15)", border:"1px solid "+C.green+"40" }}>
+            <div style={{ marginTop:14, padding:"12px 16px", borderRadius:8, backgroundColor:C.greenBg, border:"1px solid "+C.green+"40" }}>
               {lineas.filter(l=>l.tipo_unidad).map((l,i)=>{
                 const cu=parseFloat(getCarrierForLine(l)?.costo_unidad)||0, cant=parseInt(l.cantidad)||0;
                 return <div key={i} style={{ display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3 }}><span>{l.tipo_unidad} ({l.operacion}) × {cant}</span><span style={{fontWeight:700}}>${(cu*cant).toLocaleString()}</span></div>;
@@ -3837,14 +3847,14 @@ function ModuleCostos() {
             <tbody>
               {resumenList.map((r, i) => (
                 <tr key={i} style={{ borderTop:"1px solid "+C.border }}
-                  onMouseEnter={ev=>ev.currentTarget.style.backgroundColor="#16223A"}
+                  onMouseEnter={ev=>ev.currentTarget.style.backgroundColor=C.panelAlt}
                   onMouseLeave={ev=>ev.currentTarget.style.backgroundColor="transparent"}>
                   <td style={{ padding:"10px 14px", fontSize:12, color:C.textMuted, whiteSpace:"nowrap" }}>{r.fecha}</td>
                   <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{r.proveedor}</td>
                   <td style={{ padding:"10px 14px" }}>
                     <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
                       {Object.entries(r.tipos).map(([tipo, cnt]) => {
-                        const tc = tipoColors[tipo] || {bg:"#16223A",c:"#8295B2"};
+                        const tc = tipoColors[tipo] || {bg:C.panelAlt,c:C.textMuted};
                         return <span key={tipo} style={{ fontSize:10, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c, whiteSpace:"nowrap" }}>{tipo} ×{cnt}</span>;
                       })}
                     </div>
@@ -3853,7 +3863,7 @@ function ModuleCostos() {
                   <td style={{ padding:"10px 14px", fontSize:14, fontWeight:700, color:C.green }}>${r.costo.toLocaleString()}</td>
                 </tr>
               ))}
-              <tr style={{ backgroundColor:"#16223A", borderTop:"2px solid "+C.border }}>
+              <tr style={{ backgroundColor:C.panelAlt, borderTop:"2px solid "+C.border }}>
                 <td colSpan={2} style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>TOTAL</td>
                 <td style={{ padding:"10px 14px" }} />
                 <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>{resumenList.reduce((s,r)=>s+r.ops,0)}</td>
@@ -3903,16 +3913,16 @@ function ModuleCostos() {
                   {resumenProvList.map((rp, i) => {
                     const pct = totalCosto > 0 ? ((rp.costo / totalCosto) * 100).toFixed(1) : "0.0";
                     return (
-                      <tr key={i} style={{ borderTop:"1px solid "+C.border, cursor:"pointer", backgroundColor:filtroProv===rp.proveedor?"rgba(76,141,255,0.25)":"transparent" }}
+                      <tr key={i} style={{ borderTop:"1px solid "+C.border, cursor:"pointer", backgroundColor:filtroProv===rp.proveedor?C.selBg:"transparent" }}
                         onClick={() => setFiltroProv(filtroProv===rp.proveedor?"Todos":rp.proveedor)}
-                        onMouseEnter={ev=>{if(filtroProv!==rp.proveedor)ev.currentTarget.style.backgroundColor="#16223A"}}
-                        onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=filtroProv===rp.proveedor?"rgba(76,141,255,0.25)":"transparent"}}>
+                        onMouseEnter={ev=>{if(filtroProv!==rp.proveedor)ev.currentTarget.style.backgroundColor=C.panelAlt}}
+                        onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=filtroProv===rp.proveedor?C.selBg:"transparent"}}>
                         <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:C.text }}>{rp.proveedor}</td>
                         <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{rp.ops}</td>
                         <td style={{ padding:"10px 14px" }}>
                           <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
                             {Object.entries(rp.tipos).map(([tipo, cnt]) => {
-                              const tc = tipoColors[tipo] || {bg:"#16223A",c:"#8295B2"};
+                              const tc = tipoColors[tipo] || {bg:C.panelAlt,c:C.textMuted};
                               return <span key={tipo} style={{ fontSize:10, fontWeight:600, padding:"2px 8px", borderRadius:4, backgroundColor:tc.bg, color:tc.c, whiteSpace:"nowrap" }}>{tipo} ×{cnt}</span>;
                             })}
                           </div>
@@ -3941,7 +3951,7 @@ function ModuleCostos() {
                       </tr>
                     );
                   })}
-                  <tr style={{ backgroundColor:"#16223A", borderTop:"2px solid "+C.border }}>
+                  <tr style={{ backgroundColor:C.panelAlt, borderTop:"2px solid "+C.border }}>
                     <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>TOTAL</td>
                     <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>{filtrados.length}</td>
                     <td style={{ padding:"10px 14px" }} />
@@ -3989,14 +3999,14 @@ function ModuleCostos() {
                   const costoReal = getCostoFinal(r);
                   // Delta = base - final. Positivo = descuento, negativo = fee/sobrecargo.
                   const penal = costo - costoReal;
-                  const tc = tipoColors[r.tipo_unidad] || {bg:"#16223A",c:"#8295B2"};
+                  const tc = tipoColors[r.tipo_unidad] || {bg:C.panelAlt,c:C.textMuted};
                   const penalStr = r.penalizacion || "";
                   const hasFormula = penalStr.trim().length > 0;
                   const evaluatedVal = hasFormula ? evalFormula(penalStr, costo) : 0;
                   const penalInvalid = hasFormula && isNaN(evaluatedVal);
                   return (
                     <tr key={r.id} style={{ borderTop:"1px solid "+C.border }}
-                      onMouseEnter={ev=>ev.currentTarget.style.backgroundColor="#16223A"}
+                      onMouseEnter={ev=>ev.currentTarget.style.backgroundColor=C.panelAlt}
                       onMouseLeave={ev=>ev.currentTarget.style.backgroundColor="transparent"}>
                       <td style={{ padding:"10px 14px", color:C.textMuted, whiteSpace:"nowrap" }}>{r.fecha}</td>
                       <td style={{ padding:"10px 14px", color:C.textMuted, whiteSpace:"nowrap" }}>{fmt(r.timestamp)}</td>
@@ -4007,12 +4017,12 @@ function ModuleCostos() {
                             : <span>{r.nombre_operador}</span>}
                           {(r.latitud != null && r.longitud != null) ? (
                             <span title="Registro automático vía /checkin (con geolocalización)"
-                              style={{ fontSize:9, fontWeight:800, color:"#4C8DFF", padding:"2px 6px", borderRadius:10, backgroundColor:"rgba(76,141,255,0.15)", letterSpacing:"0.05em" }}>
+                              style={{ fontSize:9, fontWeight:800, color:C.blue, padding:"2px 6px", borderRadius:10, backgroundColor:C.blueBg, letterSpacing:"0.05em" }}>
                               AUTO
                             </span>
                           ) : (
                             <span title="Registro capturado manualmente desde el panel"
-                              style={{ fontSize:9, fontWeight:800, color:"#2DD4BF", padding:"2px 6px", borderRadius:10, backgroundColor:"rgba(45,212,191,0.15)", letterSpacing:"0.05em" }}>
+                              style={{ fontSize:9, fontWeight:800, color:C.green, padding:"2px 6px", borderRadius:10, backgroundColor:C.greenBg, letterSpacing:"0.05em" }}>
                               MANUAL
                             </span>
                           )}
@@ -4202,7 +4212,7 @@ function ModuleCarriers() {
         const isAdding = addingUnitTo === prov;
         return (
           <div key={pi} style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, marginBottom: 14, overflow: "hidden" }}>
-            <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "#16223A" }}>
+            <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: C.panelAlt }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: C.accent + "18", display: "flex", alignItems: "center", justifyContent: "center", color: C.accent }}><IC.Truck /></div>
                 <div>
@@ -4218,7 +4228,7 @@ function ModuleCarriers() {
               </div>
             </div>
             {isAdding && (
-              <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.border, backgroundColor: "#16223A", display: "flex", alignItems: "flex-end", gap: 12 }}>
+              <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.border, backgroundColor: C.panelAlt, display: "flex", alignItems: "flex-end", gap: 12 }}>
                 <div style={{ flex: 1 }}>
                   <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.text, marginBottom: 3 }}>Tipo de unidad</label>
                   <select value={unitForm.tipo_unidad} onChange={e => setUnitForm({...unitForm, tipo_unidad: e.target.value})} style={{ width: "100%", padding: "7px 8px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
@@ -4250,8 +4260,8 @@ function ModuleCarriers() {
                 </thead>
                 <tbody>
                   {units.map((c, ci) => {
-                    const tipoColors = { Moto: { bg: "rgba(246,166,35,0.15)", c: "#F6A623" }, Sedan: { bg: C.blueBg, c: C.blue }, SmallVan: { bg: C.purpleBg, c: C.purple }, Van: { bg: C.purpleBg, c: C.purple }, LargeVan: { bg: "rgba(167,139,250,0.15)", c: "#A78BFA" }, "5 Ton": { bg: C.yellowBg, c: C.yellow }, Rabon: { bg: "rgba(246,166,35,0.15)", c: "#F6A623" }, Torton: { bg: C.redBg, c: C.red }, Tracto: { bg: "#16223A", c: "#8295B2" } };
-                    const tc = tipoColors[c.tipo_unidad] || { bg: "#16223A", c: C.textMuted };
+                    const tipoColors = { Moto: { bg: C.yellowBg, c: C.yellow }, Sedan: { bg: C.blueBg, c: C.blue }, SmallVan: { bg: C.purpleBg, c: C.purple }, Van: { bg: C.purpleBg, c: C.purple }, LargeVan: { bg: C.purpleBg, c: C.purple }, "5 Ton": { bg: C.yellowBg, c: C.yellow }, Rabon: { bg: C.yellowBg, c: C.yellow }, Torton: { bg: C.redBg, c: C.red }, Tracto: { bg: C.panelAlt, c: C.textMuted } };
+                    const tc = tipoColors[c.tipo_unidad] || { bg: C.panelAlt, c: C.textMuted };
                     return (
                       <tr key={ci} style={{ borderBottom: "1px solid " + C.border }}>
                         <td style={{ padding: "12px 16px" }}>
@@ -4435,7 +4445,7 @@ function ModuleRuteo() {
       ctx.beginPath();
       ctx.moveTo(path[0].x, path[0].y);
       path.forEach(p => ctx.lineTo(p.x, p.y));
-      ctx.strokeStyle = "#A78BFA";
+      ctx.strokeStyle = C.purple;
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 3]);
       ctx.stroke();
@@ -4452,7 +4462,7 @@ function ModuleRuteo() {
         ctx.moveTo(path[0].x, path[0].y);
         path.forEach(p => ctx.lineTo(p.x, p.y));
         ctx.closePath();
-        ctx.strokeStyle = "#A78BFA";
+        ctx.strokeStyle = C.purple;
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 3]);
         ctx.fillStyle = "rgba(124,58,237,0.15)";
@@ -4542,7 +4552,7 @@ function ModuleRuteo() {
     pts.forEach((p, i) => {
       const cl = assigns[i] ?? 0;
       const isExcluded = cl === -1;
-      const color = isExcluded ? "#8295B2" : RCOLORS[cl % RCOLORS.length];
+      const color = isExcluded ? C.textMuted : RCOLORS[cl % RCOLORS.length];
       const isSel = selSet && selSet.has(i);
       const w = isSel ? 36 : 30;
       const h = isSel ? 50 : 42;
@@ -4550,7 +4560,7 @@ function ModuleRuteo() {
       const fontSize = isExcluded ? 11 : (labelTxt.length >= 2 ? 10 : 12);
       const pinHtml = `<div style="cursor:pointer;opacity:${isExcluded ? 0.55 : 1};filter:${isSel ? "drop-shadow(0 0 6px #FACC15)" : "drop-shadow(0 2px 4px rgba(0,0,0,0.4))"}">
         <svg width="${w}" height="${h}" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 1C6.477 1 2 5.477 2 11c0 8.5 10 19 10 19s10-10.5 10-19C24 5.477 19.523 1 12 1z" fill="${color}" stroke="${isSel ? "#F6A623" : "white"}" stroke-width="${isSel ? 2.5 : 1.5}"/>
+          <path d="M12 1C6.477 1 2 5.477 2 11c0 8.5 10 19 10 19s10-10.5 10-19C24 5.477 19.523 1 12 1z" fill="${color}" stroke="${isSel ? C.yellow : "white"}" stroke-width="${isSel ? 2.5 : 1.5}"/>
           <text x="12" y="12" text-anchor="middle" dominant-baseline="middle" fill="white" font-size="${fontSize}" font-weight="800" font-family="sans-serif">${labelTxt}</text>
         </svg>
       </div>`;
@@ -5335,12 +5345,12 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
           <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
             <div style={{ flex: "1 1 260px" }}>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo de coordenadas (.csv o .xlsx)</label>
-              <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: "#16223A" }} />
+              <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt }} />
               <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>Columnas requeridas: <b>Latitud</b> y <b>Longitud</b>. El resto se conserva.</div>
             </div>
             <div style={{ fontSize: 11, fontWeight: 700, color: C.text, flexShrink: 0 }}>
               <div style={{ marginBottom: 4 }}>Depósito fijo</div>
-              <div style={{ fontSize: 12, color: C.textMuted, padding: "9px 12px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: "#16223A", whiteSpace: "nowrap" }}>★ 19.3989, -99.1168</div>
+              <div style={{ fontSize: 12, color: C.textMuted, padding: "9px 12px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.panelAlt, whiteSpace: "nowrap" }}>★ 19.3989, -99.1168</div>
             </div>
           </div>
           {fileInfo && (
@@ -5393,9 +5403,9 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
               const clNum = +cl;
               const isExcl = clNum === -1;
               return (
-                <div key={cl} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 6px 3px 12px", borderRadius: 16, backgroundColor: (isExcl ? "#8295B2" : RCOLORS[clNum % RCOLORS.length]) + "18", border: "1px solid " + (isExcl ? "#8295B2" : RCOLORS[clNum % RCOLORS.length]) + "40" }}>
-                  <div style={{ width: 9, height: 9, borderRadius: "50%", backgroundColor: isExcl ? "#8295B2" : RCOLORS[clNum % RCOLORS.length] }} />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: isExcl ? "#8295B2" : RCOLORS[clNum % RCOLORS.length] }}>{isExcl ? "Excluidos" : "Ruta " + (clNum + 1)}</span>
+                <div key={cl} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 6px 3px 12px", borderRadius: 16, backgroundColor: (isExcl ? C.textMuted : RCOLORS[clNum % RCOLORS.length]) + "18", border: "1px solid " + (isExcl ? C.textMuted : RCOLORS[clNum % RCOLORS.length]) + "40" }}>
+                  <div style={{ width: 9, height: 9, borderRadius: "50%", backgroundColor: isExcl ? C.textMuted : RCOLORS[clNum % RCOLORS.length] }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: isExcl ? C.textMuted : RCOLORS[clNum % RCOLORS.length] }}>{isExcl ? "Excluidos" : "Ruta " + (clNum + 1)}</span>
                   <span style={{ fontSize: 11, color: C.textMuted }}>{cnt} pts</span>
                   {!isExcl && cnt >= 2 && (
                     <button onClick={() => { setSplitCluster(clNum); setSplitN(2); }} title={`Dividir Ruta ${clNum + 1} en N sub-rutas`}
@@ -5472,7 +5482,7 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                       const valido = nInt >= 2 && nInt <= cnt;
                       return (
                         <tr key={cl} style={{ borderBottom: "1px solid " + C.border }}
-                          onMouseEnter={e => e.currentTarget.style.backgroundColor = "#16223A"}
+                          onMouseEnter={e => e.currentTarget.style.backgroundColor = C.panelAlt}
                           onMouseLeave={e => e.currentTarget.style.backgroundColor = "transparent"}>
                           <td style={{ padding: "8px 14px" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -5522,7 +5532,7 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                 <button onClick={() => setMapMode("click")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + (mapMode === "click" ? C.accent : C.border), backgroundColor: mapMode === "click" ? C.accentLight : "transparent", color: mapMode === "click" ? C.accent : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                   👆 Selección individual
                 </button>
-                <button onClick={() => setMapMode("lasso")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + (mapMode === "lasso" ? "#A78BFA" : C.border), backgroundColor: mapMode === "lasso" ? "rgba(167,139,250,0.15)" : "transparent", color: mapMode === "lasso" ? "#A78BFA" : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                <button onClick={() => setMapMode("lasso")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + (mapMode === "lasso" ? C.purple : C.border), backgroundColor: mapMode === "lasso" ? C.purpleBg : "transparent", color: mapMode === "lasso" ? C.purple : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                   ✏️ Lasso (área)
                 </button>
                 {selectedIndices.size > 0 && (
@@ -5531,7 +5541,7 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                   </button>
                 )}
                 <button onClick={() => setMapStatic(s => !s)} title={mapStatic ? "Estático: todos los pines visibles SIEMPRE. Click para volver a agrupar con el zoom." : "Dinámico: pines se agrupan con el zoom. Click para mostrarlos TODOS sin agrupar."}
-                  style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + (mapStatic ? "#4C8DFF" : C.border), backgroundColor: mapStatic ? "rgba(76,141,255,0.15)" : "transparent", color: mapStatic ? "#4C8DFF" : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                  style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + (mapStatic ? C.blue : C.border), backgroundColor: mapStatic ? C.blueBg : "transparent", color: mapStatic ? C.blue : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
                   {mapStatic ? "📍 Estático" : "🔀 Dinámico"}
                 </button>
                 <button onClick={() => setMapMaximized(m => !m)} title={mapMaximized ? "Restaurar mapa" : "Maximizar mapa"} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: mapMaximized ? C.sidebar : "transparent", color: mapMaximized ? "white" : C.textMuted, fontSize: 16, cursor: "pointer", lineHeight: 1 }}>
@@ -5541,15 +5551,15 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
             </div>
             {/* Bulk assignment bar */}
             {selectedIndices.size > 0 && (
-              <div style={{ padding: "10px 18px", borderBottom: "1px solid " + C.border, backgroundColor: "rgba(246,166,35,0.15)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#F6A623" }}>{selectedIndices.size} punto(s) seleccionado(s)</span>
+              <div style={{ padding: "10px 18px", borderBottom: "1px solid " + C.border, backgroundColor: C.yellowBg, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: C.yellow }}>{selectedIndices.size} punto(s) seleccionado(s)</span>
                 <span style={{ fontSize: 12, color: C.textMuted }}>Reasignar a:</span>
                 <select value={bulkCluster} onChange={e => setBulkCluster(parseInt(e.target.value))} style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                   {Array.from({ length: numClusters }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
                 </select>
                 <button onClick={applyBulk} style={{ padding: "5px 16px", borderRadius: 6, border: "none", backgroundColor: C.green, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✓ Aplicar</button>
                 <div style={{ width: 1, height: 22, backgroundColor: C.border }} />
-                <button onClick={excludeFromRoute} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #94A3B8", backgroundColor: "#16223A", color: "#8295B2", fontSize: 12, fontWeight: 700, cursor: "pointer" }} title="Quitar de ruta — estos puntos no saldrán del almacén">✕ Excluir de ruta</button>
+                <button onClick={excludeFromRoute} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #94A3B8", backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }} title="Quitar de ruta — estos puntos no saldrán del almacén">✕ Excluir de ruta</button>
                 <button onClick={includeInRoute} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 12, fontWeight: 700, cursor: "pointer" }} title="Reincluir puntos excluidos en la ruta seleccionada">↻ Reincluir</button>
                 <span style={{ fontSize: 11, color: C.textMuted, marginLeft: "auto" }}>
                   {mapMode === "lasso" ? "Dibuja una curva sobre el mapa para seleccionar puntos" : "Clic en marcador para seleccionar/deseleccionar · acumulable"}
@@ -5582,15 +5592,15 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                   {puntos.map((p, i) => {
                     const cl = asignaciones[i] ?? 0;
                     const isExc = cl === -1;
-                    const color = isExc ? "#8295B2" : RCOLORS[cl % RCOLORS.length];
+                    const color = isExc ? C.textMuted : RCOLORS[cl % RCOLORS.length];
                     const isSel = selectedIndices.has(i);
                     return (
-                      <tr key={i} style={{ borderTop: "1px solid " + C.border, backgroundColor: isSel ? "rgba(246,166,35,0.15)" : "transparent" }}
-                        onMouseEnter={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = "#16223A"; }}
-                        onMouseLeave={ev => { ev.currentTarget.style.backgroundColor = isSel ? "rgba(246,166,35,0.15)" : "transparent"; }}>
+                      <tr key={i} style={{ borderTop: "1px solid " + C.border, backgroundColor: isSel ? C.yellowBg : "transparent" }}
+                        onMouseEnter={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = C.panelAlt; }}
+                        onMouseLeave={ev => { ev.currentTarget.style.backgroundColor = isSel ? C.yellowBg : "transparent"; }}>
                         <td style={{ padding: "7px 14px", fontSize: 12, color: C.textMuted }}>
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                            {isSel && <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: "#F6A623", display: "inline-block", flexShrink: 0 }} />}
+                            {isSel && <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: C.yellow, display: "inline-block", flexShrink: 0 }} />}
                             {i + 1}
                           </span>
                         </td>
@@ -5749,7 +5759,7 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
               <tbody>
                 {historico.map((h) => (
                   <tr key={h.sesion} style={{ borderBottom: "1px solid " + C.border }}
-                    onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#16223A"}
+                    onMouseEnter={ev => ev.currentTarget.style.backgroundColor = C.panelAlt}
                     onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
                     <td style={{ padding: "12px 14px", fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{h.sesion.substring(0, 14)}</td>
                     <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: h.nombre ? C.text : C.textMuted, fontStyle: h.nombre ? "normal" : "italic" }}>{h.nombre || "—"}</td>
@@ -6076,7 +6086,7 @@ function ModuleAsignaciones() {
     return opciones;
   };
 
-  const tipoColors = { Moto:{bg:"rgba(246,166,35,0.15)",c:"#F6A623"}, Sedan:{bg:"rgba(76,141,255,0.15)",c:"#4C8DFF"}, SmallVan:{bg:"rgba(167,139,250,0.15)",c:"#A78BFA"}, Van:{bg:"rgba(167,139,250,0.15)",c:"#A78BFA"}, "1.5":{bg:"rgba(246,166,35,0.15)",c:"#F6A623"}, "3.5":{bg:"rgba(246,166,35,0.15)",c:"#F6A623"}, Rabon:{bg:"rgba(246,166,35,0.15)",c:"#F6A623"}, Torton:{bg:"rgba(240,85,109,0.15)",c:"#F0556D"}, Tracto:{bg:"#16223A",c:"#8295B2"} };
+  const tipoColors = { Moto:{bg:C.yellowBg,c:C.yellow}, Sedan:{bg:C.blueBg,c:C.blue}, SmallVan:{bg:C.purpleBg,c:C.purple}, Van:{bg:C.purpleBg,c:C.purple}, "1.5":{bg:C.yellowBg,c:C.yellow}, "3.5":{bg:C.yellowBg,c:C.yellow}, Rabon:{bg:C.yellowBg,c:C.yellow}, Torton:{bg:C.redBg,c:C.red}, Tracto:{bg:C.panelAlt,c:C.textMuted} };
 
   // Auto-asignación respetando capacidad disponible.
   // Estrategia: rutas más pequeñas primero — así reciben los proveedores más baratos
@@ -6158,7 +6168,7 @@ function ModuleAsignaciones() {
     });
     const provList = Object.values(resProv).sort((a, b) => b.costo - a.costo);
 
-    const colorEstado = e => e === "Ideal" ? "#2DD4BF" : e === "Viable" ? "#F6A623" : e === "No sale" ? "#8295B2" : e === "Excede" ? "#F0556D" : "#8295B2";
+    const colorEstado = e => e === "Ideal" ? C.green : e === "Viable" ? C.yellow : e === "No sale" ? C.textMuted : e === "Excede" ? C.red : C.textMuted;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Asignaciones ${sesionId.substring(0,10)}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
@@ -6269,7 +6279,7 @@ function ModuleAsignaciones() {
         </div>
         {sesionId && rutas.length > 0 && (
           <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-            {saveMsg && <span style={{ fontSize:12, fontWeight:600, color:saveMsg.startsWith("✓")?C.green:saveMsg.startsWith("⚠")?"#F6A623":C.red }}>{saveMsg}</span>}
+            {saveMsg && <span style={{ fontSize:12, fontWeight:600, color:saveMsg.startsWith("✓")?C.green:saveMsg.startsWith("⚠")?C.yellow:C.red }}>{saveMsg}</span>}
             <button onClick={guardarAsignacion} disabled={saving} style={{ padding:"9px 18px", borderRadius:8, border:"none", backgroundColor:saving?C.textMuted:C.green, color:"white", fontSize:13, fontWeight:700, cursor:saving?"default":"pointer", display:"flex", alignItems:"center", gap:6 }}>
               {saving ? "Guardando..." : "✓ Guardar asignación"}
             </button>
@@ -6305,7 +6315,7 @@ function ModuleAsignaciones() {
                       <tr style={{ backgroundColor:C.bg }}>
                         <th style={{ padding:"10px 16px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", position:"sticky", left:0, backgroundColor:C.bg, zIndex:1 }}>Proveedor</th>
                         {tipos.map(t => {
-                          const tc = tipoColors[t] || {bg:"#16223A",c:"#8295B2"};
+                          const tc = tipoColors[t] || {bg:C.panelAlt,c:C.textMuted};
                           return <th key={t} style={{ padding:"10px 14px", textAlign:"center", fontSize:10, fontWeight:700, minWidth:90 }}>
                             <span style={{ padding:"3px 10px", borderRadius:5, backgroundColor:tc.bg, color:tc.c, fontWeight:700 }}>{t}</span>
                           </th>;
@@ -6315,7 +6325,7 @@ function ModuleAsignaciones() {
                     <tbody>
                       {provs.map((prov, pi) => (
                         <tr key={prov} style={{ borderTop:"1px solid "+C.border }}
-                          onMouseEnter={ev=>ev.currentTarget.style.backgroundColor="#16223A"}
+                          onMouseEnter={ev=>ev.currentTarget.style.backgroundColor=C.panelAlt}
                           onMouseLeave={ev=>ev.currentTarget.style.backgroundColor="transparent"}>
                           <td style={{ padding:"12px 16px", fontSize:13, fontWeight:700, color:C.text, whiteSpace:"nowrap", position:"sticky", left:0, backgroundColor:"inherit", zIndex:1 }}>{prov}</td>
                           {tipos.map(t => {
@@ -6381,7 +6391,7 @@ function ModuleAsignaciones() {
                         <tr style={{ backgroundColor:C.bg }}>
                           <th style={{ padding:"10px 16px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", position:"sticky", left:0, backgroundColor:C.bg, zIndex:1 }}>Proveedor</th>
                           {tipos.map(t => {
-                            const tc = tipoColors[t] || {bg:"#16223A",c:"#8295B2"};
+                            const tc = tipoColors[t] || {bg:C.panelAlt,c:C.textMuted};
                             return <th key={t} style={{ padding:"10px 14px", textAlign:"center", fontSize:10, fontWeight:700, minWidth:100 }}>
                               <span style={{ padding:"3px 10px", borderRadius:5, backgroundColor:tc.bg, color:tc.c, fontWeight:700 }}>{t}</span>
                             </th>;
@@ -6458,7 +6468,7 @@ function ModuleAsignaciones() {
                         return (
                           <button key={h.sesion} onClick={() => { loadSesion(h.sesion); setSesionDropdownOpen(false); }}
                             style={{ display:"block", width:"100%", padding:"9px 14px", textAlign:"left", border:"none", borderBottom:"1px solid "+C.border, backgroundColor:isSel?C.accentLight:C.white, color:isSel?C.accent:C.text, fontSize:13, fontWeight:isSel?700:500, cursor:"pointer" }}
-                            onMouseEnter={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = "#16223A"; }}
+                            onMouseEnter={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = C.panelAlt; }}
                             onMouseLeave={ev => { if (!isSel) ev.currentTarget.style.backgroundColor = C.white; }}>
                             {h.nombre && <span style={{ fontWeight:700, color:isSel?C.accent:C.text }}>{h.nombre} · </span>}{dateStr}{h.puntos != null ? ` · ${h.puntos} puntos` : ""}{h.rutas != null ? ` · ${h.rutas} rutas` : ""} · {h.sesion.substring(0,10)}
                           </button>
@@ -6512,7 +6522,7 @@ function ModuleAsignaciones() {
                   { label:"No salen", value:rutasNoSalen.length, color:rutasNoSalen.length>0?C.red:C.textMuted },
                   { label:"Paquetes asignados", value:paqAsignados+" / "+totalPaquetes, color:C.text },
                   { label:"Costo total", value:"$"+totalCostoAsignado.toLocaleString(), color:C.green },
-                  { label:"Costo promedio/paq", value:paqAsignados>0?"$"+costoPromPaq.toFixed(1):"—", color:costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?"#F6A623":C.red },
+                  { label:"Costo promedio/paq", value:paqAsignados>0?"$"+costoPromPaq.toFixed(1):"—", color:costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?C.yellow:C.red },
                 ].map(s => (
                   <div key={s.label} style={{ backgroundColor:C.white, borderRadius:10, padding:"14px 16px", border:"1px solid "+C.border }}>
                     <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>{s.label}</div>
@@ -6587,12 +6597,12 @@ function ModuleAsignaciones() {
                         const sinOpcion = opciones.length === 0;
                         const esIdeal = !noAsignar && costoPorPaq > 0 && costoPorPaq <= COSTO_IDEAL;
                         const esViable = !noAsignar && costoPorPaq > 0 && costoPorPaq <= COSTO_MAX;
-                        const tc = (a && !noAsignar) ? (tipoColors[a.tipo_unidad] || {bg:"#16223A",c:"#8295B2"}) : null;
+                        const tc = (a && !noAsignar) ? (tipoColors[a.tipo_unidad] || {bg:C.panelAlt,c:C.textMuted}) : null;
                         return [
-                          <tr key={idx} style={{ borderTop:"1px solid "+C.border, backgroundColor:noAsignar?"#16223A":sinOpcion?"rgba(240,85,109,0.15)":isExpanded?"rgba(76,141,255,0.20)":"transparent", cursor:"pointer", opacity:noAsignar?0.6:1 }}
+                          <tr key={idx} style={{ borderTop:"1px solid "+C.border, backgroundColor:noAsignar?C.panelAlt:sinOpcion?C.redBg:isExpanded?C.selBg:"transparent", cursor:"pointer", opacity:noAsignar?0.6:1 }}
                             onClick={() => setExpandedRuta(isExpanded?null:ruta.nombre)}
-                            onMouseEnter={ev=>{if(!isExpanded&&!sinOpcion&&!noAsignar)ev.currentTarget.style.backgroundColor="#16223A"}}
-                            onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=noAsignar?"#16223A":sinOpcion?"rgba(240,85,109,0.15)":isExpanded?"rgba(76,141,255,0.20)":"transparent"}}>
+                            onMouseEnter={ev=>{if(!isExpanded&&!sinOpcion&&!noAsignar)ev.currentTarget.style.backgroundColor=C.panelAlt}}
+                            onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=noAsignar?C.panelAlt:sinOpcion?C.redBg:isExpanded?C.selBg:"transparent"}}>
                             <td style={{ padding:"10px 8px 10px 14px", fontSize:12, color:C.textMuted }}>{isExpanded ? "▼" : "▶"}</td>
                             <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700 }}>{ruta.nombre}</td>
                             <td style={{ padding:"10px 14px" }}>
@@ -6605,7 +6615,7 @@ function ModuleAsignaciones() {
                             <td style={{ padding:"10px 14px", fontSize:14, fontWeight:700 }}>{(a && !noAsignar) ? a.unidades : "—"}</td>
                             <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700, color:(a&&!noAsignar)?C.green:C.textMuted }}>{(a && !noAsignar) ? "$"+costoTotal.toLocaleString() : "—"}</td>
                             <td style={{ padding:"10px 14px" }}>
-                              {(a && !noAsignar) ? <span style={{ fontSize:14, fontWeight:800, color:esIdeal?C.green:esViable?"#F6A623":C.red }}>${costoPorPaq.toFixed(1)}</span> : "—"}
+                              {(a && !noAsignar) ? <span style={{ fontSize:14, fontWeight:800, color:esIdeal?C.green:esViable?C.yellow:C.red }}>${costoPorPaq.toFixed(1)}</span> : "—"}
                             </td>
                             <td style={{ padding:"10px 14px" }}>
                               {noAsignar ? (
@@ -6613,9 +6623,9 @@ function ModuleAsignaciones() {
                               ) : sinOpcion ? (
                                 <span style={{ fontSize:11, fontWeight:700, color:C.red, padding:"3px 10px", borderRadius:20, backgroundColor:C.redBg }}>Sin opción</span>
                               ) : esIdeal ? (
-                                <span style={{ fontSize:11, fontWeight:700, color:C.green, padding:"3px 10px", borderRadius:20, backgroundColor:"rgba(45,212,191,0.15)" }}>Ideal</span>
+                                <span style={{ fontSize:11, fontWeight:700, color:C.green, padding:"3px 10px", borderRadius:20, backgroundColor:C.greenBg }}>Ideal</span>
                               ) : esViable ? (
-                                <span style={{ fontSize:11, fontWeight:700, color:"#F6A623", padding:"3px 10px", borderRadius:20, backgroundColor:"rgba(246,166,35,0.15)" }}>Viable</span>
+                                <span style={{ fontSize:11, fontWeight:700, color:C.yellow, padding:"3px 10px", borderRadius:20, backgroundColor:C.yellowBg }}>Viable</span>
                               ) : a ? (
                                 <span style={{ fontSize:11, fontWeight:700, color:C.red, padding:"3px 10px", borderRadius:20, backgroundColor:C.redBg }}>Excede máx</span>
                               ) : (
@@ -6637,10 +6647,10 @@ function ModuleAsignaciones() {
                                         <table style={{ width:"100%", borderCollapse:"collapse", borderRadius:8, overflow:"hidden", border:"1px solid "+C.border, backgroundColor:C.white }}>
                                           <thead>
                                             <tr>
-                                              <th style={{ padding:"8px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:"#16223A", borderBottom:"1px solid "+C.border, position:"sticky", left:0, zIndex:1 }}>Proveedor</th>
+                                              <th style={{ padding:"8px 14px", textAlign:"left", fontSize:10, fontWeight:700, color:C.textMuted, textTransform:"uppercase", backgroundColor:C.panelAlt, borderBottom:"1px solid "+C.border, position:"sticky", left:0, zIndex:1 }}>Proveedor</th>
                                               {tiposList.map(t => {
-                                                const ttc = tipoColors[t] || {bg:"#16223A",c:"#8295B2"};
-                                                return <th key={t} style={{ padding:"8px 10px", textAlign:"center", backgroundColor:"#16223A", borderBottom:"1px solid "+C.border, minWidth:80 }}>
+                                                const ttc = tipoColors[t] || {bg:C.panelAlt,c:C.textMuted};
+                                                return <th key={t} style={{ padding:"8px 10px", textAlign:"center", backgroundColor:C.panelAlt, borderBottom:"1px solid "+C.border, minWidth:80 }}>
                                                   <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:4, backgroundColor:ttc.bg, color:ttc.c }}>{t}</span>
                                                 </th>;
                                               })}
@@ -6660,10 +6670,10 @@ function ModuleAsignaciones() {
                                                   return (
                                                     <td key={tipo} style={{ padding:"4px 4px", textAlign:"center" }}>
                                                       <div onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { proveedor: prov, tipo_unidad: tipo, unidades: 1 }}); }}
-                                                        style={{ padding:"8px 6px", borderRadius:6, cursor:"pointer", border:"2px solid "+(isSel?C.blue:isIdeal?"#2DD4BF":isViable?"#F6A623":"#F0556D"), backgroundColor:isSel?C.blueBg:isIdeal?"rgba(45,212,191,0.15)":isViable?"rgba(246,166,35,0.15)":"rgba(240,85,109,0.15)", transition:"all 0.1s" }}
+                                                        style={{ padding:"8px 6px", borderRadius:6, cursor:"pointer", border:"2px solid "+(isSel?C.blue:isIdeal?C.green:isViable?C.yellow:C.red), backgroundColor:isSel?C.blueBg:isIdeal?C.greenBg:isViable?C.yellowBg:C.redBg, transition:"all 0.1s" }}
                                                         onMouseEnter={ev=>{if(!isSel)ev.currentTarget.style.transform="scale(1.05)"}}
                                                         onMouseLeave={ev=>{ev.currentTarget.style.transform="scale(1)"}}>
-                                                        <div style={{ fontSize:13, fontWeight:800, color:isIdeal?C.green:isViable?"#F6A623":C.red }}>${cpq.toFixed(1)}</div>
+                                                        <div style={{ fontSize:13, fontWeight:800, color:isIdeal?C.green:isViable?C.yellow:C.red }}>${cpq.toFixed(1)}</div>
                                                         <div style={{ fontSize:9, color:C.textMuted, marginTop:1 }}>${cost.toLocaleString()}/día</div>
                                                         {isSel && <div style={{ fontSize:8, fontWeight:800, color:C.blue, marginTop:2 }}>ASIGNADO</div>}
                                                       </div>
@@ -6676,9 +6686,9 @@ function ModuleAsignaciones() {
                                             <tr style={{ borderTop:"2px solid "+C.border }}>
                                               <td colSpan={tiposList.length + 1} style={{ padding:"6px 14px" }}>
                                                 <div onClick={(e) => { e.stopPropagation(); setAsignacion({...asignacion, [ruta.nombre]: { noAsignar: true }}); }}
-                                                  style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"8px 16px", borderRadius:6, cursor:"pointer", border:"2px solid "+(noAsignar?C.red:C.border), backgroundColor:noAsignar?"rgba(240,85,109,0.15)":"transparent" }}
-                                                  onMouseEnter={ev=>{if(!noAsignar)ev.currentTarget.style.backgroundColor="rgba(240,85,109,0.15)"}}
-                                                  onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=noAsignar?"rgba(240,85,109,0.15)":"transparent"}}>
+                                                  style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"8px 16px", borderRadius:6, cursor:"pointer", border:"2px solid "+(noAsignar?C.red:C.border), backgroundColor:noAsignar?C.redBg:"transparent" }}
+                                                  onMouseEnter={ev=>{if(!noAsignar)ev.currentTarget.style.backgroundColor=C.redBg}}
+                                                  onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=noAsignar?C.redBg:"transparent"}}>
                                                   <div style={{ width:14, height:14, borderRadius:7, border:"2px solid "+(noAsignar?C.red:C.border), backgroundColor:noAsignar?C.red:"transparent", display:"flex", alignItems:"center", justifyContent:"center" }}>
                                                     {noAsignar && <div style={{ width:5, height:5, borderRadius:3, backgroundColor:"white" }} />}
                                                   </div>
@@ -6697,7 +6707,7 @@ function ModuleAsignaciones() {
                           )
                         ];
                       })}
-                      <tr style={{ backgroundColor:"#16223A", borderTop:"2px solid "+C.border }}>
+                      <tr style={{ backgroundColor:C.panelAlt, borderTop:"2px solid "+C.border }}>
                         <td />
                         <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>TOTAL</td>
                         <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800 }}>{totalPaquetes}</td>
@@ -6705,7 +6715,7 @@ function ModuleAsignaciones() {
                           <span style={{ fontSize:11, fontWeight:600, color:C.green, marginRight:10 }}>
                             {rutas.filter(r => { const aa=asignacion[r.nombre]; if(!aa||aa.noAsignar) return false; const cc=carriers.find(c=>c.proveedor===aa.proveedor&&c.tipo_unidad===aa.tipo_unidad); const ct=(parseFloat(cc?.costo_unidad)||0)*(aa.unidades||1); return r.paquetes>0&&ct/r.paquetes<=COSTO_IDEAL; }).length} ideales
                           </span>
-                          <span style={{ fontSize:11, fontWeight:600, color:"#F6A623", marginRight:10 }}>
+                          <span style={{ fontSize:11, fontWeight:600, color:C.yellow, marginRight:10 }}>
                             {rutas.filter(r => { const aa=asignacion[r.nombre]; if(!aa||aa.noAsignar) return false; const cc=carriers.find(c=>c.proveedor===aa.proveedor&&c.tipo_unidad===aa.tipo_unidad); const ct=(parseFloat(cc?.costo_unidad)||0)*(aa.unidades||1); const cp=r.paquetes>0?ct/r.paquetes:Infinity; return cp>COSTO_IDEAL&&cp<=COSTO_MAX; }).length} viables
                           </span>
                           <span style={{ fontSize:11, fontWeight:600, color:C.textMuted, marginRight:10 }}>
@@ -6716,7 +6726,7 @@ function ModuleAsignaciones() {
                           </span>
                         </td>
                         <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:C.green }}>${totalCostoAsignado.toLocaleString()}</td>
-                        <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:paqAsignados>0?(costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?"#F6A623":C.red):C.textMuted }}>{paqAsignados>0?"$"+costoPromPaq.toFixed(1):"—"}</td>
+                        <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:paqAsignados>0?(costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?C.yellow:C.red):C.textMuted }}>{paqAsignados>0?"$"+costoPromPaq.toFixed(1):"—"}</td>
                         <td />
                       </tr>
                     </tbody>
@@ -6755,7 +6765,7 @@ function ModuleAsignaciones() {
                         <tbody>
                           {resList.map((rp, i) => {
                             const cpq = rp.paquetes > 0 ? rp.costo / rp.paquetes : 0;
-                            const rtc = tipoColors[rp.tipo_unidad] || {bg:"#16223A",c:"#8295B2"};
+                            const rtc = tipoColors[rp.tipo_unidad] || {bg:C.panelAlt,c:C.textMuted};
                             return (
                               <tr key={i} style={{ borderTop:"1px solid "+C.border }}>
                                 <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700 }}>{rp.proveedor}</td>
@@ -6764,18 +6774,18 @@ function ModuleAsignaciones() {
                                 <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800 }}>{rp.unidades}</td>
                                 <td style={{ padding:"10px 14px", fontSize:13, fontWeight:600 }}>{rp.paquetes}</td>
                                 <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:C.green }}>${rp.costo.toLocaleString()}</td>
-                                <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:cpq<=COSTO_IDEAL?C.green:cpq<=COSTO_MAX?"#F6A623":C.red }}>${cpq.toFixed(1)}</td>
+                                <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:cpq<=COSTO_IDEAL?C.green:cpq<=COSTO_MAX?C.yellow:C.red }}>${cpq.toFixed(1)}</td>
                               </tr>
                             );
                           })}
-                          <tr style={{ backgroundColor:"#16223A", borderTop:"2px solid "+C.border }}>
+                          <tr style={{ backgroundColor:C.panelAlt, borderTop:"2px solid "+C.border }}>
                             <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>TOTAL</td>
                             <td />
                             <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>{resList.reduce((s,r)=>s+r.rutas,0)}</td>
                             <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800 }}>{resList.reduce((s,r)=>s+r.unidades,0)}</td>
                             <td style={{ padding:"10px 14px", fontSize:13, fontWeight:800 }}>{totalPaquetes}</td>
                             <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:C.green }}>${totalCostoAsignado.toLocaleString()}</td>
-                            <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?"#F6A623":C.red }}>${costoPromPaq.toFixed(1)}</td>
+                            <td style={{ padding:"10px 14px", fontSize:14, fontWeight:800, color:costoPromPaq<=COSTO_IDEAL?C.green:costoPromPaq<=COSTO_MAX?C.yellow:C.red }}>${costoPromPaq.toFixed(1)}</td>
                           </tr>
                         </tbody>
                       </table>
@@ -7184,7 +7194,7 @@ function ModuleManifiesto() {
               <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
                 <div style={{ flex: "1 1 300px" }}>
                   <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo Excel o CSV con guías</label>
-                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleGuiasFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: "#16223A" }} />
+                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleGuiasFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt }} />
                   <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>Columna de guía detectada automáticamente. Columnas opcionales: Destino, Peso, Paquetes.</div>
                 </div>
               </div>
@@ -7200,7 +7210,7 @@ function ModuleManifiesto() {
               <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid " + C.border, borderRadius: 8 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr style={{ borderBottom: "1px solid " + C.border, backgroundColor: "#16223A" }}>
+                    <tr style={{ borderBottom: "1px solid " + C.border, backgroundColor: C.panelAlt }}>
                       {["#", "No. Guía", "Destino", "Peso", "Paquetes", ""].map(h => (
                         <th key={h} style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                       ))}
@@ -7230,7 +7240,7 @@ function ModuleManifiesto() {
               </div>
 
               {/* Summary + save */}
-              <div style={{ marginTop: 14, padding: "14px 18px", borderRadius: 8, backgroundColor: "rgba(45,212,191,0.15)", border: "1px solid " + C.green + "40", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ marginTop: 14, padding: "14px 18px", borderRadius: 8, backgroundColor: C.greenBg, border: "1px solid " + C.green + "40", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Operador: <strong>{selectedOp.nombre}</strong> · {selectedOp.proveedor}</div>
                   <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{guias.length} guías · {guias.reduce((s, g) => s + (parseInt(g.paquetes) || 1), 0)} paquetes totales</div>
@@ -7278,7 +7288,7 @@ function ModuleManifiesto() {
             <tbody>
               {filteredMan.map((m) => (
                 <tr key={m.id} style={{ borderBottom: "1px solid " + C.border }}
-                  onMouseEnter={ev => ev.currentTarget.style.backgroundColor = "#16223A"}
+                  onMouseEnter={ev => ev.currentTarget.style.backgroundColor = C.panelAlt}
                   onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
                   <td style={{ padding: "12px 14px", fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{m.id_manifiesto}</td>
                   <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{m.fecha}</td>
@@ -7291,14 +7301,14 @@ function ModuleManifiesto() {
                     {(() => {
                       const tp = m.tipo_operacion || "Última Milla";
                       const tpMap = { "Última Milla": { bg: C.accentLight, c: C.accent }, "CrossDock": { bg: C.blueBg, c: C.blue }, "Logística Inversa": { bg: C.purpleBg, c: C.purple } };
-                      const tc = tpMap[tp] || { bg: "#16223A", c: C.textMuted };
+                      const tc = tpMap[tp] || { bg: C.panelAlt, c: C.textMuted };
                       return <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, backgroundColor: tc.bg, color: tc.c }}>{tp}</span>;
                     })()}
                   </td>
                   <td style={{ padding: "12px 14px", fontSize: 14, fontWeight: 700, color: C.text }}>{m.total_guias}</td>
                   <td style={{ padding: "12px 14px", textAlign: "center" }}>
                     {m.observaciones && m.observaciones.trim() !== "" ? (
-                      <span title={m.observaciones} style={{ color: "#2DD4BF", fontSize: 18, cursor: "help" }}>✓</span>
+                      <span title={m.observaciones} style={{ color: C.green, fontSize: 18, cursor: "help" }}>✓</span>
                     ) : (
                       <span style={{ color: C.textMuted, fontSize: 13 }}>—</span>
                     )}
@@ -7918,7 +7928,7 @@ function ModuleConsultas() {
                         ))}
                       </tr>
                     ))}
-                    <tr style={{ backgroundColor:"#16223A", borderTop:"2px solid "+C.text }}>
+                    <tr style={{ backgroundColor:C.panelAlt, borderTop:"2px solid "+C.text }}>
                       <td style={{ padding:"10px 12px", fontWeight:800, color:C.text }}>TOTAL</td>
                       <td style={{ padding:"10px 12px", textAlign:"right", fontWeight:800, color:C.accent }}>{agrupado.rows.reduce((s,g)=>s+g.count,0).toLocaleString()}</td>
                       {agrupado.colsNum.map(c => (
@@ -7983,6 +7993,22 @@ function ModulePlaceholder({ title, desc }) {
 export default function T1OpsFlotilla() {
   const [activePage, setActivePage] = useState("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [theme, setTheme] = useState("dark");
+
+  // Aplica el tema guardado en el primer render del cliente (post-hydration para
+  // evitar mismatch con el SSR). Re-render por setTheme → todo relee C.*
+  useEffect(() => {
+    const saved = getSavedTheme();
+    applyThemePalette(saved);
+    setTheme(saved);
+  }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    applyThemePalette(next);
+    try { localStorage.setItem("t1_theme", next); } catch {}
+    setTheme(next);
+  };
 
   const renderModule = () => {
     switch (activePage) {
@@ -8084,6 +8110,16 @@ export default function T1OpsFlotilla() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            {/* Switch de tema claro/oscuro */}
+            <button onClick={toggleTheme} type="button"
+              title={theme === "dark" ? "Cambiar a tema claro" : "Cambiar a tema oscuro"}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 999, border: `1px solid ${C.border}`, backgroundColor: C.bg, cursor: "pointer" }}>
+              <span style={{ fontSize: 12, lineHeight: 1, opacity: theme === "light" ? 1 : 0.35 }}>☀️</span>
+              <div style={{ width: 30, height: 16, borderRadius: 999, backgroundColor: theme === "dark" ? C.accent : C.border, position: "relative", transition: "background-color .15s" }}>
+                <div style={{ position: "absolute", top: 2, left: theme === "dark" ? 16 : 2, width: 12, height: 12, borderRadius: "50%", backgroundColor: "#FFFFFF", boxShadow: "0 1px 2px rgba(0,0,0,0.4)", transition: "left .15s" }} />
+              </div>
+              <span style={{ fontSize: 12, lineHeight: 1, opacity: theme === "dark" ? 1 : 0.35 }}>🌙</span>
+            </button>
             <button style={{ position: "relative", padding: 8, borderRadius: 8, border: "none", backgroundColor: "transparent", cursor: "pointer", color: C.textMuted }}>
               <IC.Bell />
               <span style={{ position: "absolute", top: 4, right: 4, width: 8, height: 8, borderRadius: "50%", backgroundColor: C.accent }} />

@@ -1,23 +1,28 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
-const C = {
-  bg: "#0A0F1A",
-  accent: "#4C8DFF",
-  text: "#E8EEF9",
-  textMuted: "#8295B2",
-  white: "#111A2B",
-  panelGrad: "linear-gradient(160deg,#111A2B,#0E1626)",
-  inputBg: "#0E1626",
-  border: "#22304A",
-  red: "#F0556D",
-  redBg: "rgba(240,85,109,0.15)",
+const THEMES = {
+  dark: {
+    bg: "#0A0F1A", accent: "#4C8DFF", text: "#E8EEF9", textMuted: "#8295B2",
+    panelGrad: "linear-gradient(160deg,#111A2B,#0E1626)", inputBg: "#0E1626",
+    border: "#22304A", red: "#F0556D", redBg: "rgba(240,85,109,0.15)",
+  },
+  light: {
+    bg: "#F8F9FC", accent: "#E63B2E", text: "#0C1425", textMuted: "#7C8495",
+    panelGrad: "#FFFFFF", inputBg: "#FFFFFF",
+    border: "#E2E6EE", red: "#DC2626", redBg: "#FEE2E2",
+  },
 };
 
 export default function LoginScreen({ onLogin }) {
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [error, setError] = useState("");
+  const [theme, setTheme] = useState("dark");
+  useEffect(() => {
+    try { if (localStorage.getItem("t1_theme") === "light") setTheme("light"); } catch {}
+  }, []);
+  const C = THEMES[theme];
 
   const handleSubmit = (e) => {
     e.preventDefault();

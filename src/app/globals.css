@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Tema "control room / consola de despacho": fondo azul-tinta oscuro */
+/* Tema por defecto: "control room" oscuro. El switch alterna data-theme. */
 :root {
   color-scheme: dark;
 }
@@ -12,6 +12,16 @@ body {
   background: #0A0F1A;
   color: #E8EEF9;
   font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Tema claro (estilo anterior) */
+html[data-theme="light"] {
+  color-scheme: light;
+}
+html[data-theme="light"],
+html[data-theme="light"] body {
+  background: #F8F9FC;
+  color: #0C1425;
 }
 
 /* Números y títulos: Space Grotesk (aire técnico) */
@@ -33,4 +43,10 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #2E3F5C;
+}
+html[data-theme="light"] ::-webkit-scrollbar-track {
+  background: #F8F9FC;
+}
+html[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #CBD3E0;
 }
