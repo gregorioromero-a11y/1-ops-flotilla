@@ -7,6 +7,7 @@ const INACTIVITY_MS = 30 * 60 * 1000; // 30 minutos sin actividad → logout
 
 export default function Home() {
   const [authenticated, setAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
   const timerRef = useRef(null);
 
   // Cualquier carga / refresh de la página manda a login. NO se persiste
@@ -22,6 +23,7 @@ export default function Home() {
     const logout = () => {
       sessionStorage.removeItem("t1_auth");
       setAuthenticated(false);
+      setCurrentUser(null);
     };
 
     const reset = () => {
@@ -39,7 +41,7 @@ export default function Home() {
     };
   }, [authenticated]);
 
-  if (!authenticated) return <LoginScreen onLogin={() => setAuthenticated(true)} />;
+  if (!authenticated) return <LoginScreen onLogin={(u) => { setCurrentUser(u); setAuthenticated(true); }} />;
 
-  return <T1OpsFlotilla />;
+  return <T1OpsFlotilla user={currentUser} onLogout={() => { setAuthenticated(false); setCurrentUser(null); }} />;
 }

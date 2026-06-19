@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { canAccess, ROLE_LABELS } from "../lib/auth";
 
 // ============================================================
 // T1 ENVÍOS — OPS FLOTILLA KPI PLATFORM
@@ -7990,8 +7991,14 @@ function ModulePlaceholder({ title, desc }) {
 
 // ============ MAIN APP ============
 
-export default function T1OpsFlotilla() {
-  const [activePage, setActivePage] = useState("dashboard");
+export default function T1OpsFlotilla({ user, onLogout }) {
+  const role = user?.role || "admin";
+  // Secciones de nav filtradas por permisos del rol (oculta módulos no permitidos).
+  const visibleSections = navSections
+    .map(s => ({ ...s, items: s.items.filter(it => canAccess(role, it.id)) }))
+    .filter(s => s.items.length > 0);
+  const allowedIds = visibleSections.flatMap(s => s.items.map(it => it.id));
+  const [activePage, setActivePage] = useState(allowedIds.includes("dashboard") ? "dashboard" : (allowedIds[0] || "dashboard"));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [theme, setTheme] = useState("dark");
 
@@ -8011,6 +8018,16 @@ export default function T1OpsFlotilla() {
   };
 
   const renderModule = () => {
+    // Defensa: si el rol no puede ver el módulo activo, no renderizarlo.
+    if (!canAccess(role, activePage)) {
+      return (
+        <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🔒</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Sin acceso</div>
+          <div style={{ fontSize: 13 }}>Tu rol ({ROLE_LABELS[role] || role}) no tiene permiso para este módulo.</div>
+        </div>
+      );
+    }
     switch (activePage) {
       case "dashboard": return <ModuleDashboard />;
       case "envios": return <ModuleEnvios />;
@@ -8045,7 +8062,7 @@ export default function T1OpsFlotilla() {
 
         {/* Navigation */}
         <nav style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
-          {navSections.map((section, si) => (
+          {visibleSections.map((section, si) => (
             <div key={si} style={{ marginBottom: 4 }}>
               {!sidebarCollapsed && (
                 <div style={{ padding: "10px 20px 4px", fontSize: 9, fontWeight: 800, color: "rgba(255,255,255,0.25)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
@@ -8125,11 +8142,19 @@ export default function T1OpsFlotilla() {
               <span style={{ position: "absolute", top: 4, right: 4, width: 8, height: 8, borderRadius: "50%", backgroundColor: C.accent }} />
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 34, height: 34, borderRadius: "50%", backgroundColor: C.accent, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12, fontWeight: 800 }}>OPS</div>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>OPS T1 Envíos</div>
-                <div style={{ fontSize: 10, color: C.textMuted }}>Flotilla Propia</div>
+              <div style={{ width: 34, height: 34, borderRadius: "50%", backgroundColor: C.accent, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12, fontWeight: 800 }}>
+                {(user?.nombre || "OPS").substring(0, 2).toUpperCase()}
               </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{user?.nombre || "OPS T1 Envíos"}</div>
+                <div style={{ fontSize: 10, color: C.textMuted }}>{ROLE_LABELS[role] || "Flotilla Propia"}</div>
+              </div>
+              {onLogout && (
+                <button onClick={onLogout} type="button" title="Cerrar sesión"
+                  style={{ marginLeft: 4, padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.border}`, backgroundColor: C.bg, color: C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  Salir
+                </button>
+              )}
             </div>
           </div>
         </header>

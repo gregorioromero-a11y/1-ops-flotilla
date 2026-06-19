@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { authenticate } from "../lib/auth";
 
 const THEMES = {
   dark: {
@@ -26,8 +27,9 @@ export default function LoginScreen({ onLogin }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (user === "admin" && pass === "almacen2026") {
-      onLogin();
+    const authed = authenticate(user, pass);
+    if (authed) {
+      onLogin(authed);
     } else {
       setError("Usuario o contraseña incorrectos");
     }
