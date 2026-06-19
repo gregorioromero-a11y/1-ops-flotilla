@@ -7,12 +7,12 @@
 export const ROLE_MODULES = {
   admin: "*",
   operaciones: [
-    "dashboard", "envios", "unidades", "operadores",
+    "dashboard", "kpis", "envios", "unidades", "operadores",
     "t1envios", "warehouse", "halfmile", "sameday",
     "ruteo", "asignaciones", "manifiesto", "consultas",
   ],
-  costos: ["dashboard", "costos", "carriers", "asignaciones", "consultas"],
-  lectura: ["dashboard", "consultas"],
+  costos: ["dashboard", "kpis", "costos", "carriers", "asignaciones", "consultas"],
+  lectura: ["kpis"],
 };
 
 export const ROLE_LABELS = {

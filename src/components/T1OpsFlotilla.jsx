@@ -88,6 +88,7 @@ const IC = {
 const navSections = [
   { label: "DASHBOARD", items: [
     { id: "dashboard", label: "Dashboard OPS", icon: IC.Dashboard },
+    { id: "kpis", label: "Kpis", icon: IC.BarChart },
   ]},
   { label: "CAPTURA DE DATOS", items: [
     { id: "envios", label: "Registrar Envíos", icon: IC.Package, badge: "Nuevo" },
@@ -282,6 +283,22 @@ function OpsBar({ data }) {
 // ============ MODULES ============
 
 // --- DASHBOARD ---
+function ModuleKpis() {
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Kpis</h1>
+        <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Indicadores clave de operación</p>
+      </div>
+      <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
+        <div style={{ fontSize: 40, marginBottom: 12 }}>📊</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Módulo en construcción</div>
+        <div style={{ fontSize: 13, color: C.textMuted }}>Aquí irán los KPIs. Indícame cuáles quieres mostrar.</div>
+      </div>
+    </div>
+  );
+}
+
 function ModuleDashboard() {
   const [periodo, setPeriodo] = useState("Febrero 2026");
   const [carrierData, setCarrierData] = useState([]);
@@ -8030,6 +8047,7 @@ export default function T1OpsFlotilla({ user, onLogout }) {
     }
     switch (activePage) {
       case "dashboard": return <ModuleDashboard />;
+      case "kpis": return <ModuleKpis />;
       case "envios": return <ModuleEnvios />;
       case "unidades": return <ModuleUnidades />;
       case "operadores": return <ModuleOperadores />;
