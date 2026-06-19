@@ -283,35 +283,43 @@ function OpsBar({ data }) {
 
 // ============ MODULES ============
 
-// Gráfica de líneas SVG para KPIs por día. `data` en orden cronológico (asc).
-// `series` = [{ key, label, color }]. Escala Y 0..yMax.
-function KpiLineChart({ data, series, yMax, ticks, fmt, height = 300 }) {
-  const W = 920, H = height;
-  const padL = 46, padR = 18, padT = 14, padB = 36;
+// Gráfica de líneas SVG con DOBLE eje Y. `data` cronológico (asc).
+// `series` = [{ key, label, color, axis:"left"|"right" }]. Eje izq = %, der = $.
+function KpiLineChart({ data, series, leftMax, rightMax, leftFmt, rightFmt, leftAxisColor, rightAxisColor, height = 320 }) {
+  const W = 960, H = height;
+  const padL = 48, padR = 56, padT = 16, padB = 38;
   const n = data.length;
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const x = i => padL + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
-  const y = v => padT + (1 - Math.min(Math.max(v, 0), yMax) / yMax) * plotH;
+  const yOf = (v, max) => padT + (1 - Math.min(Math.max(v, 0), max) / max) * plotH;
+  const fracs = [0, 0.25, 0.5, 0.75, 1];
   const every = Math.max(1, Math.ceil(n / 8));
   if (!n) return <div style={{ padding: 24, textAlign: "center", color: C.textMuted, fontSize: 13 }}>Sin datos.</div>;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
-      {ticks.map(t => (
-        <g key={t}>
-          <line x1={padL} y1={y(t)} x2={W - padR} y2={y(t)} stroke={C.border} strokeWidth="1" />
-          <text x={padL - 8} y={y(t) + 3} textAnchor="end" fontSize="10" fill={C.textMuted}>{fmt(t)}</text>
-        </g>
-      ))}
+      {fracs.map(f => {
+        const yy = padT + (1 - f) * plotH;
+        return (
+          <g key={f}>
+            <line x1={padL} y1={yy} x2={W - padR} y2={yy} stroke={C.border} strokeWidth="1" />
+            {leftMax != null && <text x={padL - 8} y={yy + 3} textAnchor="end" fontSize="10" fill={leftAxisColor || C.textMuted}>{leftFmt(leftMax * f)}</text>}
+            {rightMax != null && <text x={W - padR + 8} y={yy + 3} textAnchor="start" fontSize="10" fill={rightAxisColor || C.textMuted}>{rightFmt(rightMax * f)}</text>}
+          </g>
+        );
+      })}
       {data.map((d, i) => (i % every === 0 || i === n - 1) ? (
         <text key={i} x={x(i)} y={H - padB + 18} textAnchor="middle" fontSize="9" fill={C.textMuted}>{d.fecha.substring(5)}</text>
       ) : null)}
-      {series.map(s => (
-        <g key={s.key}>
-          <polyline fill="none" stroke={s.color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"
-            points={data.map((d, i) => `${x(i)},${y(d[s.key])}`).join(" ")} />
-          {data.map((d, i) => <circle key={i} cx={x(i)} cy={y(d[s.key])} r="2.5" fill={s.color} />)}
-        </g>
-      ))}
+      {series.map(s => {
+        const max = s.axis === "right" ? rightMax : leftMax;
+        return (
+          <g key={s.key}>
+            <polyline fill="none" stroke={s.color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"
+              points={data.map((d, i) => `${x(i)},${yOf(d[s.key], max)}`).join(" ")} />
+            {data.map((d, i) => <circle key={i} cx={x(i)} cy={yOf(d[s.key], max)} r="2.5" fill={s.color} />)}
+          </g>
+        );
+      })}
     </svg>
   );
 }
@@ -434,7 +442,6 @@ function ModuleKpis() {
   const chartData = [...dias].reverse(); // cronológico asc para la gráfica
   const maxCostoPaq = dias.length ? Math.max(...dias.map(d => d.costoPaq || 0)) : 0;
   const costoYMax = Math.max(20, Math.ceil(maxCostoPaq / 20) * 20);
-  const costoTicks = [0, costoYMax / 4, costoYMax / 2, (costoYMax * 3) / 4, costoYMax];
 
   return (
     <div>
@@ -467,12 +474,12 @@ function ModuleKpis() {
               <StatCard label="Costo / paquete" value={fmtMoney(resumen.costoPaq)} subvalue={"promedio · " + resumen.dias + " días"} icon={<IC.Dollar />} color={C.purple} />
             </div>
           )}
-          {/* Gráfica de performance */}
-          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 16 }}>
+          {/* Gráfica combinada: performance (eje % izq) + costo/paquete (eje $ der) */}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
             <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-              <span>Performance por día <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 6 }}>(últimos 30 días)</span></span>
-              <div style={{ display: "flex", gap: 14, fontSize: 11, fontWeight: 600 }}>
-                {[{ l: "% Entrega", c: C.green }, { l: "ONTIME", c: C.purple }, { l: "% Retornos", c: C.red }].map(x => (
+              <span>Performance y costo por día <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 6 }}>(últimos 30 días · eje izq % · eje der $)</span></span>
+              <div style={{ display: "flex", gap: 14, fontSize: 11, fontWeight: 600, flexWrap: "wrap" }}>
+                {[{ l: "% Entrega", c: C.green }, { l: "ONTIME", c: C.purple }, { l: "% Retornos", c: C.red }, { l: "Costo/paq ($)", c: C.accent }].map(x => (
                   <span key={x.l} style={{ display: "flex", alignItems: "center", gap: 5, color: C.textMuted }}>
                     <span style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: x.c }} /> {x.l}
                   </span>
@@ -480,25 +487,18 @@ function ModuleKpis() {
               </div>
             </div>
             <div style={{ padding: 16 }}>
-              <KpiLineChart data={chartData} yMax={100} ticks={[0, 25, 50, 75, 100]} fmt={v => v + "%"}
+              <KpiLineChart data={chartData}
+                leftMax={100} leftFmt={v => Math.round(v) + "%"} leftAxisColor={C.textMuted}
+                rightMax={costoYMax} rightFmt={v => "$" + Math.round(v)} rightAxisColor={C.accent}
                 series={[
-                  { key: "pctEntrega", label: "% Entrega", color: C.green },
-                  { key: "ontime", label: "ONTIME", color: C.purple },
-                  { key: "retornos", label: "% Retornos", color: C.red },
+                  { key: "pctEntrega", label: "% Entrega", color: C.green, axis: "left" },
+                  { key: "ontime", label: "ONTIME", color: C.purple, axis: "left" },
+                  { key: "retornos", label: "% Retornos", color: C.red, axis: "left" },
+                  { key: "costoPaq", label: "Costo/paquete", color: C.accent, axis: "right" },
                 ]} />
             </div>
-          </div>
-          {/* Gráfica de costo / paquete */}
-          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
-            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
-              Costo por paquete <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 6 }}>(últimos 30 días)</span>
-            </div>
-            <div style={{ padding: 16 }}>
-              <KpiLineChart data={chartData} yMax={costoYMax} ticks={costoTicks} fmt={v => "$" + Math.round(v)} height={240}
-                series={[{ key: "costoPaq", label: "Costo/paquete", color: C.accent }]} />
-            </div>
             <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
-              Solo entregas finales (se excluye media milla). ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo/paquete = costo real calculado del día ÷ entregados finales.
+              Eje izquierdo = % (entrega / ONTIME / retornos); eje derecho = costo/paquete ($). Solo entregas finales (se excluye media milla). ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo/paquete = costo real calculado del día ÷ entregados finales.
             </div>
           </div>
         </>
