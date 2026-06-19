@@ -308,9 +308,12 @@ function ModuleKpis() {
     setLoading(true);
     try {
       const [rutas, costos] = await Promise.all([
-        fetchAll("rutas", "fecha_registro, fecha_salida, total, entregados, intentados, no_visitados, intercambios"),
+        fetchAll("rutas", "fecha_registro, fecha_salida, total, entregados, intentados, no_visitados, intercambios, tipo_ruta"),
         fetchAll("costos", "fecha, monto"),
       ]);
+      // Half mile / crossdock es pata intermedia (no entrega final): se excluye
+      // de paquetes y entregados en todos los KPIs.
+      const esHalfMile = r => { const t = (r.tipo_ruta || "").toLowerCase(); return t.includes("half") || t.includes("cross"); };
       // Costos por día (suma de monto de la tabla costos)
       const costoPorDia = {};
       costos.forEach(c => {
@@ -321,6 +324,7 @@ function ModuleKpis() {
       // Agregado de rutas por día
       const byDay = {};
       rutas.forEach(r => {
+        if (esHalfMile(r)) return; // excluir media milla
         const f = (r.fecha_registro || (r.fecha_salida || "").substring(0, 10) || "").substring(0, 10);
         if (!f) return;
         if (!byDay[f]) byDay[f] = { fecha: f, rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, intercambios: 0 };
@@ -440,7 +444,7 @@ function ModuleKpis() {
               </table>
             </div>
             <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
-              ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo/paquete = costo del día (tabla de costos) ÷ entregados. Fórmulas ajustables.
+              Solo entregas finales (última milla / foráneo / etc.); se excluye media milla (half mile / crossdock). ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo/paquete = costo del día (tabla de costos) ÷ entregados. Fórmulas ajustables.
             </div>
           </div>
         </>
