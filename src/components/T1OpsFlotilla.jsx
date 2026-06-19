@@ -284,17 +284,168 @@ function OpsBar({ data }) {
 
 // --- DASHBOARD ---
 function ModuleKpis() {
+  const [subtab, setSubtab] = useState("flotilla"); // "flotilla" | "mensajeria"
+  const [loading, setLoading] = useState(true);
+  const [dias, setDias] = useState([]);
+  const [resumen, setResumen] = useState(null);
+
+  useEffect(() => { loadFlotilla(); }, []);
+
+  const fetchAll = async (table, cols) => {
+    let all = [], from = 0; const size = 1000;
+    while (true) {
+      const { data, error } = await supabase.from(table).select(cols).range(from, from + size - 1);
+      if (error) { console.error(`[Kpis] ${table} error:`, error); break; }
+      if (!data || data.length === 0) break;
+      all = all.concat(data);
+      if (data.length < size) break;
+      from += size;
+    }
+    return all;
+  };
+
+  const loadFlotilla = async () => {
+    setLoading(true);
+    try {
+      const [rutas, costos] = await Promise.all([
+        fetchAll("rutas", "fecha_registro, fecha_salida, total, entregados, intentados, no_visitados, intercambios"),
+        fetchAll("costos", "fecha, monto"),
+      ]);
+      // Costos por día (suma de monto de la tabla costos)
+      const costoPorDia = {};
+      costos.forEach(c => {
+        const f = (c.fecha || "").substring(0, 10);
+        if (!f) return;
+        costoPorDia[f] = (costoPorDia[f] || 0) + (parseFloat(c.monto) || 0);
+      });
+      // Agregado de rutas por día
+      const byDay = {};
+      rutas.forEach(r => {
+        const f = (r.fecha_registro || (r.fecha_salida || "").substring(0, 10) || "").substring(0, 10);
+        if (!f) return;
+        if (!byDay[f]) byDay[f] = { fecha: f, rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, intercambios: 0 };
+        const d = byDay[f];
+        d.rutas += 1;
+        d.total += (parseInt(r.total) || 0);
+        d.entregados += (parseInt(r.entregados) || 0);
+        d.intentados += (parseInt(r.intentados) || 0);
+        d.noVisitados += (parseInt(r.no_visitados) || 0);
+        d.intercambios += (parseInt(r.intercambios) || 0);
+      });
+      const list = Object.values(byDay).map(d => {
+        const costo = costoPorDia[d.fecha] || 0;
+        return {
+          ...d, costo,
+          pctEntrega: d.total > 0 ? (d.entregados / d.total) * 100 : 0,
+          // ONTIME = entregas en 1er intento / total
+          ontime: d.total > 0 ? ((d.entregados - d.intercambios) / d.total) * 100 : 0,
+          // % Retornos = no entregados / total
+          retornos: d.total > 0 ? ((d.total - d.entregados) / d.total) * 100 : 0,
+          costoPaq: d.entregados > 0 ? costo / d.entregados : 0,
+        };
+      }).sort((a, b) => b.fecha.localeCompare(a.fecha));
+      const tot = list.reduce((a, d) => ({
+        total: a.total + d.total, entregados: a.entregados + d.entregados,
+        intercambios: a.intercambios + d.intercambios, costo: a.costo + d.costo,
+      }), { total: 0, entregados: 0, intercambios: 0, costo: 0 });
+      setResumen({
+        dias: list.length,
+        pctEntrega: tot.total > 0 ? (tot.entregados / tot.total) * 100 : 0,
+        ontime: tot.total > 0 ? ((tot.entregados - tot.intercambios) / tot.total) * 100 : 0,
+        retornos: tot.total > 0 ? ((tot.total - tot.entregados) / tot.total) * 100 : 0,
+        costo: tot.costo,
+        costoPaq: tot.entregados > 0 ? tot.costo / tot.entregados : 0,
+      });
+      setDias(list);
+    } catch (e) {
+      console.error("[Kpis] loadFlotilla error:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const colPct = v => v >= 85 ? C.green : v >= 60 ? C.yellow : C.red;       // entrega/ontime: alto = bueno
+  const colRet = v => v <= 10 ? C.green : v <= 25 ? C.yellow : C.red;       // retornos: bajo = bueno
+  const fmtMoney = n => "$" + Math.round(n).toLocaleString();
+  const TabBtn = ({ id, label }) => (
+    <button onClick={() => setSubtab(id)} style={{
+      padding: "8px 16px", borderRadius: 8, border: "1px solid " + (subtab === id ? C.accent : C.border),
+      backgroundColor: subtab === id ? C.accentLight : C.white, color: subtab === id ? C.accent : C.textMuted,
+      fontSize: 13, fontWeight: 700, cursor: "pointer",
+    }}>{label}</button>
+  );
+
   return (
     <div>
-      <div style={{ marginBottom: 24 }}>
+      <div style={{ marginBottom: 18 }}>
         <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Kpis</h1>
         <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Indicadores clave de operación</p>
       </div>
-      <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
-        <div style={{ fontSize: 40, marginBottom: 12 }}>📊</div>
-        <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Módulo en construcción</div>
-        <div style={{ fontSize: 13, color: C.textMuted }}>Aquí irán los KPIs. Indícame cuáles quieres mostrar.</div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+        <TabBtn id="flotilla" label="Flotilla Propia" />
+        <TabBtn id="mensajeria" label="Mensajería" />
       </div>
+
+      {subtab === "mensajeria" && (
+        <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>✉️</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>KPIs de Mensajería — en construcción</div>
+          <div style={{ fontSize: 13, color: C.textMuted }}>Pendiente definir fuente de datos y métricas.</div>
+        </div>
+      )}
+
+      {subtab === "flotilla" && (loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando…</div>
+      ) : (
+        <>
+          {resumen && (
+            <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+              <StatCard label="% Entrega" value={resumen.pctEntrega.toFixed(1) + "%"} subvalue={resumen.dias + " días"} icon={<IC.BarChart />} color={colPct(resumen.pctEntrega)} />
+              <StatCard label="ONTIME (1er intento)" value={resumen.ontime.toFixed(1) + "%"} subvalue="entregas en 1er intento" icon={<IC.Check />} color={colPct(resumen.ontime)} />
+              <StatCard label="% Retornos" value={resumen.retornos.toFixed(1) + "%"} subvalue="no entregados / total" icon={<IC.Package />} color={colRet(resumen.retornos)} />
+              <StatCard label="Costo total" value={fmtMoney(resumen.costo)} subvalue={"Costo/paq " + fmtMoney(resumen.costoPaq)} icon={<IC.Dollar />} color={C.purple} />
+            </div>
+          )}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+              Flotilla Propia — KPIs por día
+              <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(rutas + costos por fecha)</span>
+            </div>
+            <div style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ borderBottom: "2px solid " + C.border }}>
+                    {["Fecha", "Rutas", "Paquetes", "Entregados", "% Entrega", "ONTIME", "% Retornos", "Costo", "Costo/Paq"].map(h => (
+                      <th key={h} style={{ position: "sticky", top: 0, backgroundColor: C.white, padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {dias.length === 0 && (
+                    <tr><td colSpan={9} style={{ padding: 24, textAlign: "center", color: C.textMuted, fontSize: 13 }}>Sin datos de rutas.</td></tr>
+                  )}
+                  {dias.map((d, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>{d.fecha}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.rutas}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.total.toLocaleString()}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.entregados.toLocaleString()}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colPct(d.pctEntrega) }}>{d.pctEntrega.toFixed(1)}%</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colPct(d.ontime) }}>{d.ontime.toFixed(1)}%</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colRet(d.retornos) }}>{d.retornos.toFixed(1)}%</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{d.costo > 0 ? fmtMoney(d.costo) : "—"}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13, color: C.accent, fontWeight: 700 }}>{d.costo > 0 && d.entregados > 0 ? fmtMoney(d.costoPaq) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
+              ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo del día = suma de la tabla de costos. Ajustables según tu definición.
+            </div>
+          </div>
+        </>
+      ))}
     </div>
   );
 }
