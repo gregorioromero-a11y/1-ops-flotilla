@@ -56,6 +56,22 @@ export function buildCostEngine(asistencia, carriers) {
     return parseFloat(c?.costo_unidad) || 0;
   };
 
+  // Fallback: estima con la tarifa de última milla del carrier de la ruta.
+  const carrierFallback = (r) => {
+    if (!r.carrier || r.carrier === "—") return 0;
+    const cn = norm(r.carrier);
+    const cand = cars.filter(
+      (c) =>
+        norm(c.proveedor) === cn &&
+        c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—" &&
+        (c.operacion || "").toLowerCase().includes("ltima")
+    );
+    if (!cand.length) return 0;
+    const sedan = cand.find((c) => c.tipo_unidad === "Sedan");
+    const chosen = sedan || cand.slice().sort((a, b) => (parseFloat(a.costo_unidad) || 0) - (parseFloat(b.costo_unidad) || 0))[0];
+    return parseFloat(chosen.costo_unidad) || 0;
+  };
+
   const baseCost = (r) => {
     const rateFija = TARIFAS_FIJAS[r.tipoRuta];
     if (rateFija != null) {
@@ -63,36 +79,30 @@ export function buildCostEngine(asistencia, carriers) {
       return rateFija * paq;
     }
     const f = (r.salida || "").substring(0, 10);
-    if (!f || !r.operador) return 0;
-    const op = norm(r.operador);
-    const sd = byDayOp.get(f + "|" + op);
-    if (sd) return carrierCost(sd.proveedor, sd.tipo_unidad);
-    if (esPermisible(r)) {
-      const fb = byOp.get(op);
-      if (fb) return carrierCost(fb.proveedor, fb.tipo_unidad);
-      if (r.carrier && r.carrier !== "—") {
-        const cn = norm(r.carrier);
-        const cand = cars.filter(
-          (c) =>
-            norm(c.proveedor) === cn &&
-            c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—" &&
-            (c.operacion || "").toLowerCase().includes("ltima")
-        );
-        if (cand.length) {
-          const sedan = cand.find((c) => c.tipo_unidad === "Sedan");
-          const chosen = sedan || cand.slice().sort((a, b) => (parseFloat(a.costo_unidad) || 0) - (parseFloat(b.costo_unidad) || 0))[0];
-          return parseFloat(chosen.costo_unidad) || 0;
-        }
+    const op = r.operador ? norm(r.operador) : null;
+    if (f && op) {
+      const sd = byDayOp.get(f + "|" + op);
+      if (sd) return carrierCost(sd.proveedor, sd.tipo_unidad);
+      if (esPermisible(r)) {
+        const fb = byOp.get(op);
+        if (fb) return carrierCost(fb.proveedor, fb.tipo_unidad);
       }
     }
-    return 0;
+    // Sin asistencia (p. ej. marzo): estima con la tarifa del carrier.
+    return carrierFallback(r);
   };
 
   const costoNuevo = (r) => {
     const base = baseCost(r);
-    const hasF = (r.penalizacion || "").trim().length > 0;
-    const ev = evalFormula(r.penalizacion, base);
-    return hasF && !isNaN(ev) ? ev : base;
+    const expr = (r.penalizacion || "").trim();
+    if (!expr) return base;
+    const ev = evalFormula(expr, base);
+    if (isNaN(ev)) return base;
+    // Guarda anti-typo: una penalización que dispara el costo a más de 10× la
+    // base (p. ej. "1900*82" en vez de "1900*.82" → $155,800) es claramente un
+    // error de captura; se ignora y se usa la base.
+    if (base > 0 && ev > base * 10) return base;
+    return ev;
   };
 
   return { baseCost, costoNuevo };
