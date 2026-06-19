@@ -283,6 +283,39 @@ function OpsBar({ data }) {
 
 // ============ MODULES ============
 
+// Gráfica de líneas SVG para KPIs por día. `data` en orden cronológico (asc).
+// `series` = [{ key, label, color }]. Escala Y 0..yMax.
+function KpiLineChart({ data, series, yMax, ticks, fmt, height = 300 }) {
+  const W = 920, H = height;
+  const padL = 46, padR = 18, padT = 14, padB = 36;
+  const n = data.length;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const x = i => padL + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const y = v => padT + (1 - Math.min(Math.max(v, 0), yMax) / yMax) * plotH;
+  const every = Math.max(1, Math.ceil(n / 8));
+  if (!n) return <div style={{ padding: 24, textAlign: "center", color: C.textMuted, fontSize: 13 }}>Sin datos.</div>;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      {ticks.map(t => (
+        <g key={t}>
+          <line x1={padL} y1={y(t)} x2={W - padR} y2={y(t)} stroke={C.border} strokeWidth="1" />
+          <text x={padL - 8} y={y(t) + 3} textAnchor="end" fontSize="10" fill={C.textMuted}>{fmt(t)}</text>
+        </g>
+      ))}
+      {data.map((d, i) => (i % every === 0 || i === n - 1) ? (
+        <text key={i} x={x(i)} y={H - padB + 18} textAnchor="middle" fontSize="9" fill={C.textMuted}>{d.fecha.substring(5)}</text>
+      ) : null)}
+      {series.map(s => (
+        <g key={s.key}>
+          <polyline fill="none" stroke={s.color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"
+            points={data.map((d, i) => `${x(i)},${y(d[s.key])}`).join(" ")} />
+          {data.map((d, i) => <circle key={i} cx={x(i)} cy={y(d[s.key])} r="2.5" fill={s.color} />)}
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 // --- DASHBOARD ---
 function ModuleKpis() {
   const [subtab, setSubtab] = useState("flotilla"); // "flotilla" | "mensajeria"
@@ -398,6 +431,11 @@ function ModuleKpis() {
     }}>{label}</button>
   );
 
+  const chartData = [...dias].reverse(); // cronológico asc para la gráfica
+  const maxCostoPaq = dias.length ? Math.max(...dias.map(d => d.costoPaq || 0)) : 0;
+  const costoYMax = Math.max(20, Math.ceil(maxCostoPaq / 20) * 20);
+  const costoTicks = [0, costoYMax / 4, costoYMax / 2, (costoYMax * 3) / 4, costoYMax];
+
   return (
     <div>
       <div style={{ marginBottom: 18 }}>
@@ -429,41 +467,38 @@ function ModuleKpis() {
               <StatCard label="Costo / paquete" value={fmtMoney(resumen.costoPaq)} subvalue={"promedio · " + resumen.dias + " días"} icon={<IC.Dollar />} color={C.purple} />
             </div>
           )}
+          {/* Gráfica de performance */}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 16 }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+              <span>Performance por día <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 6 }}>(últimos 30 días)</span></span>
+              <div style={{ display: "flex", gap: 14, fontSize: 11, fontWeight: 600 }}>
+                {[{ l: "% Entrega", c: C.green }, { l: "ONTIME", c: C.purple }, { l: "% Retornos", c: C.red }].map(x => (
+                  <span key={x.l} style={{ display: "flex", alignItems: "center", gap: 5, color: C.textMuted }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: x.c }} /> {x.l}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div style={{ padding: 16 }}>
+              <KpiLineChart data={chartData} yMax={100} ticks={[0, 25, 50, 75, 100]} fmt={v => v + "%"}
+                series={[
+                  { key: "pctEntrega", label: "% Entrega", color: C.green },
+                  { key: "ontime", label: "ONTIME", color: C.purple },
+                  { key: "retornos", label: "% Retornos", color: C.red },
+                ]} />
+            </div>
+          </div>
+          {/* Gráfica de costo / paquete */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
             <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
-              Flotilla Propia — KPIs por día
-              <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(últimos 30 días)</span>
+              Costo por paquete <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 6 }}>(últimos 30 días)</span>
             </div>
-            <div style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ borderBottom: "2px solid " + C.border }}>
-                    {["Fecha", "Rutas", "Paquetes", "Entregados", "% Entrega", "ONTIME", "% Retornos", "Costo/Paq"].map(h => (
-                      <th key={h} style={{ position: "sticky", top: 0, backgroundColor: C.white, padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {dias.length === 0 && (
-                    <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", color: C.textMuted, fontSize: 13 }}>Sin datos de rutas.</td></tr>
-                  )}
-                  {dias.map((d, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
-                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>{d.fecha}</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.rutas}</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.total.toLocaleString()}</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.entregados.toLocaleString()}</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colPct(d.pctEntrega) }}>{d.pctEntrega.toFixed(1)}%</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colPct(d.ontime) }}>{d.ontime.toFixed(1)}%</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colRet(d.retornos) }}>{d.retornos.toFixed(1)}%</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13, color: C.accent, fontWeight: 700 }}>{d.costo > 0 && d.entregados > 0 ? fmtMoney(d.costoPaq) : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div style={{ padding: 16 }}>
+              <KpiLineChart data={chartData} yMax={costoYMax} ticks={costoTicks} fmt={v => "$" + Math.round(v)} height={240}
+                series={[{ key: "costoPaq", label: "Costo/paquete", color: C.accent }]} />
             </div>
             <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
-              Solo entregas finales (última milla / foráneo / etc.); se excluye media milla (half mile / crossdock). ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo/paquete = costo real calculado del día (rutas × asistencia × tarifas) ÷ entregados finales. Fórmulas ajustables.
+              Solo entregas finales (se excluye media milla). ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo/paquete = costo real calculado del día ÷ entregados finales.
             </div>
           </div>
         </>
