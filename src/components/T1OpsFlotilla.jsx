@@ -403,7 +403,7 @@ function ModuleKpis() {
               <StatCard label="% Entrega" value={resumen.pctEntrega.toFixed(1) + "%"} subvalue={resumen.dias + " días"} icon={<IC.BarChart />} color={colPct(resumen.pctEntrega)} />
               <StatCard label="ONTIME (1er intento)" value={resumen.ontime.toFixed(1) + "%"} subvalue="entregas en 1er intento" icon={<IC.Check />} color={colPct(resumen.ontime)} />
               <StatCard label="% Retornos" value={resumen.retornos.toFixed(1) + "%"} subvalue="no entregados / total" icon={<IC.Package />} color={colRet(resumen.retornos)} />
-              <StatCard label="Costo total" value={fmtMoney(resumen.costo)} subvalue={"Costo/paq " + fmtMoney(resumen.costoPaq)} icon={<IC.Dollar />} color={C.purple} />
+              <StatCard label="Costo / paquete" value={fmtMoney(resumen.costoPaq)} subvalue={"promedio · " + resumen.dias + " días"} icon={<IC.Dollar />} color={C.purple} />
             </div>
           )}
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
@@ -415,14 +415,14 @@ function ModuleKpis() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ borderBottom: "2px solid " + C.border }}>
-                    {["Fecha", "Rutas", "Paquetes", "Entregados", "% Entrega", "ONTIME", "% Retornos", "Costo", "Costo/Paq"].map(h => (
+                    {["Fecha", "Rutas", "Paquetes", "Entregados", "% Entrega", "ONTIME", "% Retornos", "Costo/Paq"].map(h => (
                       <th key={h} style={{ position: "sticky", top: 0, backgroundColor: C.white, padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {dias.length === 0 && (
-                    <tr><td colSpan={9} style={{ padding: 24, textAlign: "center", color: C.textMuted, fontSize: 13 }}>Sin datos de rutas.</td></tr>
+                    <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", color: C.textMuted, fontSize: 13 }}>Sin datos de rutas.</td></tr>
                   )}
                   {dias.map((d, i) => (
                     <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
@@ -433,7 +433,6 @@ function ModuleKpis() {
                       <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colPct(d.pctEntrega) }}>{d.pctEntrega.toFixed(1)}%</td>
                       <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colPct(d.ontime) }}>{d.ontime.toFixed(1)}%</td>
                       <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colRet(d.retornos) }}>{d.retornos.toFixed(1)}%</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{d.costo > 0 ? fmtMoney(d.costo) : "—"}</td>
                       <td style={{ padding: "10px 14px", fontSize: 13, color: C.accent, fontWeight: 700 }}>{d.costo > 0 && d.entregados > 0 ? fmtMoney(d.costoPaq) : "—"}</td>
                     </tr>
                   ))}
@@ -441,7 +440,7 @@ function ModuleKpis() {
               </table>
             </div>
             <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
-              ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo del día = suma de la tabla de costos. Ajustables según tu definición.
+              ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo/paquete = costo del día (tabla de costos) ÷ entregados. Fórmulas ajustables.
             </div>
           </div>
         </>
