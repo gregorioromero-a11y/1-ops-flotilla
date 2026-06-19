@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
+import { buildCostEngine, DEDUP_TIPOS } from "../lib/costEngine";
 
 // ============================================================
 // T1 ENVÍOS — OPS FLOTILLA KPI PLATFORM
@@ -307,28 +308,42 @@ function ModuleKpis() {
   const loadFlotilla = async () => {
     setLoading(true);
     try {
-      const [rutas, costos] = await Promise.all([
-        fetchAll("rutas", "fecha_registro, fecha_salida, total, entregados, intentados, no_visitados, intercambios, tipo_ruta"),
-        fetchAll("costos", "fecha, monto"),
+      const [rutas, asistencia, carriers] = await Promise.all([
+        fetchAll("rutas", "fecha_registro, fecha_salida, total, entregados, intentados, no_visitados, intercambios, recolecciones, tipo_ruta, operador, carrier, penalizacion"),
+        fetchAll("asistencia", "*"),
+        fetchAll("carriers", "*"),
       ]);
-      // Half mile / crossdock es pata intermedia (no entrega final): se excluye
-      // de paquetes y entregados en todos los KPIs.
-      const esHalfMile = r => { const t = (r.tipo_ruta || "").toLowerCase(); return t.includes("half") || t.includes("cross"); };
-      // Costos por día (suma de monto de la tabla costos)
-      const costoPorDia = {};
-      costos.forEach(c => {
-        const f = (c.fecha || "").substring(0, 10);
-        if (!f) return;
-        costoPorDia[f] = (costoPorDia[f] || 0) + (parseFloat(c.monto) || 0);
+      const engine = buildCostEngine(asistencia, carriers);
+      const esHM = r => { const t = (r.tipo_ruta || "").toLowerCase(); return t.includes("half") || t.includes("cross"); };
+      const nrm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
+
+      // Costo REAL por ruta (motor: rutas × asistencia × tarifas). Con dedup para
+      // PETCO/Foráneo Puebla: operador repetido el mismo día cobra una sola vez.
+      const dedupSeen = new Set();
+      const enriched = rutas.map(r => {
+        const er = {
+          tipoRuta: r.tipo_ruta, salida: r.fecha_salida, operador: r.operador,
+          entregados: r.entregados, recolecciones: r.recolecciones, carrier: r.carrier, penalizacion: r.penalizacion,
+        };
+        const costoNuevo = engine.costoNuevo(er);
+        let costoContado = costoNuevo;
+        if (DEDUP_TIPOS.has(r.tipo_ruta)) {
+          const fk = (r.fecha_salida || "").substring(0, 10) + "|" + nrm(r.operador) + "|" + r.tipo_ruta;
+          if (dedupSeen.has(fk)) costoContado = 0; else dedupSeen.add(fk);
+        }
+        return { r, costoContado };
       });
-      // Agregado de rutas por día
+
+      // Agregado por día: COSTO de todas las rutas (incl. media milla, su costo se
+      // amortiza); métricas de entrega solo de NO media milla (entregas finales).
       const byDay = {};
-      rutas.forEach(r => {
-        if (esHalfMile(r)) return; // excluir media milla
+      const day = f => (byDay[f] || (byDay[f] = { fecha: f, rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, intercambios: 0, costo: 0 }));
+      enriched.forEach(({ r, costoContado }) => {
         const f = (r.fecha_registro || (r.fecha_salida || "").substring(0, 10) || "").substring(0, 10);
         if (!f) return;
-        if (!byDay[f]) byDay[f] = { fecha: f, rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, intercambios: 0 };
-        const d = byDay[f];
+        const d = day(f);
+        d.costo += costoContado; // costo real (todas las operaciones)
+        if (esHM(r)) return;     // métricas de entrega: excluir media milla
         d.rutas += 1;
         d.total += (parseInt(r.total) || 0);
         d.entregados += (parseInt(r.entregados) || 0);
@@ -336,18 +351,13 @@ function ModuleKpis() {
         d.noVisitados += (parseInt(r.no_visitados) || 0);
         d.intercambios += (parseInt(r.intercambios) || 0);
       });
-      const list = Object.values(byDay).map(d => {
-        const costo = costoPorDia[d.fecha] || 0;
-        return {
-          ...d, costo,
-          pctEntrega: d.total > 0 ? (d.entregados / d.total) * 100 : 0,
-          // ONTIME = entregas en 1er intento / total
-          ontime: d.total > 0 ? ((d.entregados - d.intercambios) / d.total) * 100 : 0,
-          // % Retornos = no entregados / total
-          retornos: d.total > 0 ? ((d.total - d.entregados) / d.total) * 100 : 0,
-          costoPaq: d.entregados > 0 ? costo / d.entregados : 0,
-        };
-      }).sort((a, b) => b.fecha.localeCompare(a.fecha));
+      const list = Object.values(byDay).map(d => ({
+        ...d,
+        pctEntrega: d.total > 0 ? (d.entregados / d.total) * 100 : 0,
+        ontime: d.total > 0 ? ((d.entregados - d.intercambios) / d.total) * 100 : 0,
+        retornos: d.total > 0 ? ((d.total - d.entregados) / d.total) * 100 : 0,
+        costoPaq: d.entregados > 0 ? d.costo / d.entregados : 0,
+      })).sort((a, b) => b.fecha.localeCompare(a.fecha));
       const tot = list.reduce((a, d) => ({
         total: a.total + d.total, entregados: a.entregados + d.entregados,
         intercambios: a.intercambios + d.intercambios, costo: a.costo + d.costo,
@@ -444,7 +454,7 @@ function ModuleKpis() {
               </table>
             </div>
             <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
-              Solo entregas finales (última milla / foráneo / etc.); se excluye media milla (half mile / crossdock). ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo/paquete = costo del día (tabla de costos) ÷ entregados. Fórmulas ajustables.
+              Solo entregas finales (última milla / foráneo / etc.); se excluye media milla (half mile / crossdock). ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo/paquete = costo real calculado del día (rutas × asistencia × tarifas) ÷ entregados finales. Fórmulas ajustables.
             </div>
           </div>
         </>
