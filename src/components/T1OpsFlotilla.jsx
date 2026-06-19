@@ -351,13 +351,22 @@ function ModuleKpis() {
         d.noVisitados += (parseInt(r.no_visitados) || 0);
         d.intercambios += (parseInt(r.intercambios) || 0);
       });
-      const list = Object.values(byDay).map(d => ({
+      const fullList = Object.values(byDay).map(d => ({
         ...d,
         pctEntrega: d.total > 0 ? (d.entregados / d.total) * 100 : 0,
         ontime: d.total > 0 ? ((d.entregados - d.intercambios) / d.total) * 100 : 0,
         retornos: d.total > 0 ? ((d.total - d.entregados) / d.total) * 100 : 0,
         costoPaq: d.entregados > 0 ? d.costo / d.entregados : 0,
       })).sort((a, b) => b.fecha.localeCompare(a.fecha));
+      // Solo los últimos 30 días (ventana relativa a la fecha más reciente con datos)
+      let list = fullList;
+      if (fullList.length) {
+        const anchor = new Date(fullList[0].fecha + "T00:00:00");
+        const cutoff = new Date(anchor);
+        cutoff.setDate(cutoff.getDate() - 29); // 30 días inclusive
+        const cutoffStr = cutoff.toISOString().substring(0, 10);
+        list = fullList.filter(d => d.fecha >= cutoffStr);
+      }
       const tot = list.reduce((a, d) => ({
         total: a.total + d.total, entregados: a.entregados + d.entregados,
         intercambios: a.intercambios + d.intercambios, costo: a.costo + d.costo,
@@ -393,7 +402,7 @@ function ModuleKpis() {
     <div>
       <div style={{ marginBottom: 18 }}>
         <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Kpis</h1>
-        <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Indicadores clave de operación</p>
+        <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Indicadores clave de operación · últimos 30 días</p>
       </div>
       <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
         <TabBtn id="flotilla" label="Flotilla Propia" />
@@ -423,7 +432,7 @@ function ModuleKpis() {
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
             <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
               Flotilla Propia — KPIs por día
-              <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(rutas + costos por fecha)</span>
+              <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(últimos 30 días)</span>
             </div>
             <div style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
