@@ -3,6 +3,11 @@
 // NOTA: esto oculta módulos según el rol; no es seguridad de datos (Supabase usa
 // la llave anon en el cliente). Para seguridad real haría falta Supabase Auth + RLS.
 
+// Interruptor global de roles/permisos. Mientras se desarrolla la plataforma se
+// deja en false: TODOS los usuarios ven TODOS los módulos (acceso total).
+// Al final del desarrollo, ponerlo en true para activar el gating por rol.
+export const ROLES_ENABLED = false;
+
 // Qué módulos ve cada rol. "*" = todos. Ids deben coincidir con navSections.
 export const ROLE_MODULES = {
   admin: "*",
@@ -39,6 +44,7 @@ export function authenticate(u, p) {
 
 // ¿El rol puede ver este módulo?
 export function canAccess(role, moduleId) {
+  if (!ROLES_ENABLED) return true; // desarrollo: acceso total
   const mods = ROLE_MODULES[role];
   if (!mods) return false;
   return mods === "*" || mods.includes(moduleId);
