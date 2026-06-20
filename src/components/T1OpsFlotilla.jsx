@@ -546,7 +546,7 @@ function ModuleKpis() {
       let ordenes = [], from = 0; const size = 1000; let missing = false;
       while (true) {
         const { data, error } = await supabase.from("flotilla_ordenes")
-          .select("estatus, fecha_creacion, fecha_promesa, fecha_entrega").range(from, from + size - 1);
+          .select("estatus, fecha_promesa, fecha_entrega").order("tracking", { ascending: true }).range(from, from + size - 1);
         if (error) {
           const em = (error.message || "").toLowerCase();
           if (em.includes("does not exist") || error.code === "42P01" || em.includes("could not find the table") || em.includes("schema cache")) missing = true;
@@ -563,28 +563,36 @@ function ModuleKpis() {
       setFlotMissing(null);
 
       // Estatus: 360 = entregado al cliente, 123 = devuelto.
+      // TODAS las métricas usan la misma base por día = entregas (360) + devoluciones
+      // (123), agrupadas por el DÍA DEL EVENTO (fecha de entrega), para que cuadren
+      // con el costo del día. Órdenes en tránsito (sin 360/123) no cuentan.
       const es360 = s => { const x = (s || "").toLowerCase(); return x.startsWith("360") || x.includes("entregad"); };
       const es123 = s => { const x = (s || "").toLowerCase(); return x.startsWith("123") || x.includes("devuel") || x.includes("devolu"); };
       const byDay = {};
       ordenes.forEach(o => {
-        const f = (o.fecha_creacion || "").substring(0, 10);
-        if (!f) return;
-        const d = byDay[f] || (byDay[f] = { fecha: f, total: 0, e360: 0, d123: 0, onTimeCnt: 0 });
-        d.total++;
-        if (es360(o.estatus)) {
+        const e = es360(o.estatus), dev = es123(o.estatus);
+        if (!e && !dev) return; // solo entregas/devoluciones
+        // Día del evento: entregados → fecha de entrega; devueltos (sin fecha de
+        // entrega) → fecha promesa como proxy del día resuelto.
+        const fEvent = ((o.fecha_entrega || (dev ? o.fecha_promesa : "")) || "").substring(0, 10);
+        if (!fEvent) return;
+        const d = byDay[fEvent] || (byDay[fEvent] = { fecha: fEvent, e360: 0, d123: 0, onTimeCnt: 0 });
+        if (e) {
           d.e360++;
-          if (o.fecha_entrega && o.fecha_promesa && new Date(o.fecha_entrega) <= new Date(o.fecha_promesa)) d.onTimeCnt++;
+          const fe = (o.fecha_entrega || "").substring(0, 10);
+          const fp = (o.fecha_promesa || "").substring(0, 10);
+          if (fe && fp && fe <= fp) d.onTimeCnt++; // a tiempo = entregado en/antes del día prometido
         }
-        if (es123(o.estatus)) d.d123++;
+        if (dev) d.d123++;
       });
       const fullList = Object.values(byDay).map(d => {
         const costo = costoPorDia[d.fecha] || 0;
-        const denom = d.e360 + d.d123; // entregados (360) + devueltos (123)
+        const denom = d.e360 + d.d123; // entregas + devoluciones del día
         return {
-          fecha: d.fecha, total: d.total, e360: d.e360, d123: d.d123, onTimeCnt: d.onTimeCnt, costo,
-          pctEntrega: d.total > 0 ? (d.e360 / d.total) * 100 : 0,
+          fecha: d.fecha, total: denom, e360: d.e360, d123: d.d123, onTimeCnt: d.onTimeCnt, costo,
+          pctEntrega: denom > 0 ? (d.e360 / denom) * 100 : 0,
           ontime: d.e360 > 0 ? (d.onTimeCnt / d.e360) * 100 : 0,
-          retornos: d.total > 0 ? (d.d123 / d.total) * 100 : 0,
+          retornos: denom > 0 ? (d.d123 / denom) * 100 : 0,
           costoPaq: denom > 0 ? costo / denom : 0,
         };
       }).sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -699,7 +707,7 @@ function ModuleKpis() {
                 ]} />
             </div>
             <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
-              Eje izquierdo = % · eje derecho = costo/paquete ($). Performance desde la carga de órdenes (por fecha de creación): % Entrega = entregados (360) ÷ total · ONTIME = entregados a tiempo (entrega ≤ promesa) ÷ entregados · % Retornos = devueltos (123) ÷ total. Costo/paquete = costo real del día (motor rutas × asistencia × tarifas) ÷ (entregados 360 + devueltos 123).
+              Eje izquierdo = % · eje derecho = costo/paquete ($). Agrupado por día de entrega del evento. Base diaria = entregas (360) + devoluciones (123). % Entrega = 360 ÷ base · ONTIME = entregas a tiempo (entrega ≤ promesa) ÷ 360 · % Retornos = 123 ÷ base · Costo/paquete = costo real del día (motor rutas × asistencia × tarifas) ÷ base.
             </div>
           </div>
         </>
