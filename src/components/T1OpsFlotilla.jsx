@@ -97,7 +97,7 @@ const navSections = [
     { id: "operadores", label: "Operadores", icon: IC.Users },
     { id: "costos", label: "Registro Diario", icon: IC.Clock },
     { id: "carriers", label: "Carriers / Proveedores", icon: IC.Truck, badge: "Nuevo" },
-    { id: "cargamsj", label: "Carga Mensajería", icon: IC.Package, badge: "Nuevo" },
+    { id: "cargaflotilla", label: "Carga Flotilla Propia", icon: IC.Package, badge: "Nuevo" },
   ]},
   { label: "OPERACIONES", items: [
     { id: "t1envios", label: "T1 Envíos", icon: IC.Package },
@@ -309,7 +309,7 @@ function parseFechaFlex(v) {
 // Sube el Excel de órdenes, deduplica por Tracking (última versión gana) y hace
 // upsert a la tabla `mensajeria` de Supabase. Tolerante a headers truncados
 // (matching por substring) y guarda la fila cruda en `raw`.
-function ModuleMensajeriaCarga() {
+function ModuleFlotillaCarga() {
   const [uploading, setUploading] = useState(false);
   const [msg, setMsg] = useState("");
   const [summary, setSummary] = useState(null);
@@ -318,7 +318,7 @@ function ModuleMensajeriaCarga() {
 
   useEffect(() => { refreshCount(); }, []);
   const refreshCount = async () => {
-    const { count, error } = await supabase.from("mensajeria").select("tracking", { count: "exact", head: true });
+    const { count, error } = await supabase.from("flotilla_ordenes").select("tracking", { count: "exact", head: true });
     setTotalBase(error ? null : (count || 0));
   };
 
@@ -379,14 +379,14 @@ function ModuleMensajeriaCarga() {
       let subidas = 0, firstErr = null;
       for (let i = 0; i < rows.length; i += 500) {
         const batch = rows.slice(i, i + 500);
-        const { error } = await supabase.from("mensajeria").upsert(batch, { onConflict: "tracking" });
+        const { error } = await supabase.from("flotilla_ordenes").upsert(batch, { onConflict: "tracking" });
         if (error) { firstErr = error; break; }
         subidas += batch.length;
       }
       if (firstErr) {
         const em = (firstErr.message || "").toLowerCase();
         if (em.includes("does not exist") || firstErr.code === "42P01" || em.includes("could not find the table") || em.includes("schema cache")) {
-          setMsg("⚠ La tabla 'mensajeria' aún no existe en Supabase. Corre el SQL que te pasé y reintenta.");
+          setMsg("⚠ La tabla 'flotilla_ordenes' aún no existe en Supabase. Corre el SQL que te pasé y reintenta.");
         } else setMsg("⚠ Error al subir: " + firstErr.message);
       } else {
         setSummary({ leidas: json.length, sinTracking, dupsArchivo, subidas });
@@ -410,8 +410,8 @@ function ModuleMensajeriaCarga() {
   return (
     <div>
       <div style={{ marginBottom: 18 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Carga Mensajería</h1>
-        <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Sube el Excel de órdenes · se deduplica por Tracking · alimenta los KPIs de Mensajería</p>
+        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Carga Flotilla Propia</h1>
+        <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Sube el Excel de órdenes · se deduplica por Tracking · alimenta los KPIs de Flotilla Propia</p>
       </div>
 
       <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 24, marginBottom: 16 }}>
@@ -501,56 +501,9 @@ function ModuleKpis() {
   const [loading, setLoading] = useState(true);
   const [dias, setDias] = useState([]);
   const [resumen, setResumen] = useState(null);
-  const [msjLoading, setMsjLoading] = useState(false);
-  const [msjLoaded, setMsjLoaded] = useState(false);
-  const [msj, setMsj] = useState(null);
+  const [flotMissing, setFlotMissing] = useState(null); // "missing" | "empty" | null
 
   useEffect(() => { loadFlotilla(); }, []);
-  useEffect(() => { if (subtab === "mensajeria" && !msjLoaded) loadMensajeria(); }, [subtab]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const loadMensajeria = async () => {
-    setMsjLoading(true);
-    let all = [], from = 0; const size = 1000; let missing = false;
-    while (true) {
-      const { data, error } = await supabase.from("mensajeria")
-        .select("transportista, estatus, estatus_incidencia, fecha_promesa, fecha_entrega").range(from, from + size - 1);
-      if (error) {
-        const em = (error.message || "").toLowerCase();
-        if (em.includes("does not exist") || error.code === "42P01" || em.includes("could not find the table") || em.includes("schema cache")) missing = true;
-        else console.error("[Kpis msj]", error);
-        break;
-      }
-      if (!data || !data.length) break;
-      all = all.concat(data);
-      if (data.length < size) break;
-      from += size;
-    }
-    if (missing) { setMsj({ missing: true }); setMsjLoaded(true); setMsjLoading(false); return; }
-    const esEntregado = r => (r.estatus || "").toLowerCase().includes("entregado");
-    const es507 = r => /(^|\D)507(\D|$)/.test((r.estatus || "") + " " + (r.estatus_incidencia || ""));
-    const conInc = r => (r.estatus_incidencia || "").trim().length > 0;
-    const ontimeR = r => esEntregado(r) && r.fecha_entrega && r.fecha_promesa && new Date(r.fecha_entrega) <= new Date(r.fecha_promesa);
-    const total = all.length;
-    const entregadas = all.filter(esEntregado).length;
-    const ontime = all.filter(ontimeR).length;
-    const incidencias = all.filter(conInc).length;
-    const inc507 = all.filter(es507).length;
-    const carriers = {};
-    all.forEach(r => {
-      const c = r.transportista || "Sin transportista";
-      const x = carriers[c] || (carriers[c] = { carrier: c, total: 0, entregadas: 0, inc: 0 });
-      x.total++; if (esEntregado(r)) x.entregadas++; if (conInc(r)) x.inc++;
-    });
-    const porCarrier = Object.values(carriers).map(x => ({ ...x, pct: x.total > 0 ? (x.entregadas / x.total) * 100 : 0 })).sort((a, b) => b.total - a.total);
-    setMsj({
-      total, entregadas, ontime, incidencias, inc507,
-      pctEntrega: total > 0 ? (entregadas / total) * 100 : 0,
-      pctOntime: entregadas > 0 ? (ontime / entregadas) * 100 : 0,
-      pctRetornos: total > 0 ? ((total - entregadas) / total) * 100 : 0,
-      porCarrier,
-    });
-    setMsjLoaded(true); setMsjLoading(false);
-  };
 
   const fetchAll = async (table, cols) => {
     let all = [], from = 0; const size = 1000;
@@ -568,76 +521,93 @@ function ModuleKpis() {
   const loadFlotilla = async () => {
     setLoading(true);
     try {
+      // 1) Costo real por día (motor rutas × asistencia × tarifas) con dedup.
       const [rutas, asistencia, carriers] = await Promise.all([
-        fetchAll("rutas", "fecha_registro, fecha_salida, total, entregados, intentados, no_visitados, intercambios, recolecciones, tipo_ruta, operador, carrier, penalizacion"),
+        fetchAll("rutas", "fecha_registro, fecha_salida, recolecciones, tipo_ruta, operador, carrier, penalizacion, entregados"),
         fetchAll("asistencia", "*"),
         fetchAll("carriers", "*"),
       ]);
       const engine = buildCostEngine(asistencia, carriers);
-      const esHM = r => { const t = (r.tipo_ruta || "").toLowerCase(); return t.includes("half") || t.includes("cross"); };
       const nrm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
-
-      // Costo REAL por ruta (motor: rutas × asistencia × tarifas). Con dedup para
-      // PETCO/Foráneo Puebla: operador repetido el mismo día cobra una sola vez.
       const dedupSeen = new Set();
-      const enriched = rutas.map(r => {
-        const er = {
-          tipoRuta: r.tipo_ruta, salida: r.fecha_salida, operador: r.operador,
-          entregados: r.entregados, recolecciones: r.recolecciones, carrier: r.carrier, penalizacion: r.penalizacion,
-        };
-        const costoNuevo = engine.costoNuevo(er);
-        let costoContado = costoNuevo;
+      const costoPorDia = {};
+      rutas.forEach(r => {
+        const er = { tipoRuta: r.tipo_ruta, salida: r.fecha_salida, operador: r.operador, entregados: r.entregados, recolecciones: r.recolecciones, carrier: r.carrier, penalizacion: r.penalizacion };
+        let cc = engine.costoNuevo(er);
         if (DEDUP_TIPOS.has(r.tipo_ruta)) {
           const fk = (r.fecha_salida || "").substring(0, 10) + "|" + nrm(r.operador) + "|" + r.tipo_ruta;
-          if (dedupSeen.has(fk)) costoContado = 0; else dedupSeen.add(fk);
+          if (dedupSeen.has(fk)) cc = 0; else dedupSeen.add(fk);
         }
-        return { r, costoContado };
+        const f = (r.fecha_registro || (r.fecha_salida || "").substring(0, 10) || "").substring(0, 10);
+        if (f) costoPorDia[f] = (costoPorDia[f] || 0) + cc;
       });
 
-      // Agregado por día: COSTO de todas las rutas (incl. media milla, su costo se
-      // amortiza); métricas de entrega solo de NO media milla (entregas finales).
+      // 2) Órdenes de flotilla (performance + denominador del costo).
+      let ordenes = [], from = 0; const size = 1000; let missing = false;
+      while (true) {
+        const { data, error } = await supabase.from("flotilla_ordenes")
+          .select("estatus, fecha_creacion, fecha_promesa, fecha_entrega").range(from, from + size - 1);
+        if (error) {
+          const em = (error.message || "").toLowerCase();
+          if (em.includes("does not exist") || error.code === "42P01" || em.includes("could not find the table") || em.includes("schema cache")) missing = true;
+          else console.error("[Kpis] flotilla_ordenes error:", error);
+          break;
+        }
+        if (!data || !data.length) break;
+        ordenes = ordenes.concat(data);
+        if (data.length < size) break;
+        from += size;
+      }
+      if (missing) { setFlotMissing("missing"); setResumen(null); setDias([]); setLoading(false); return; }
+      if (!ordenes.length) { setFlotMissing("empty"); setResumen(null); setDias([]); setLoading(false); return; }
+      setFlotMissing(null);
+
+      // Estatus: 360 = entregado al cliente, 123 = devuelto.
+      const es360 = s => { const x = (s || "").toLowerCase(); return x.startsWith("360") || x.includes("entregad"); };
+      const es123 = s => { const x = (s || "").toLowerCase(); return x.startsWith("123") || x.includes("devuel") || x.includes("devolu"); };
       const byDay = {};
-      const day = f => (byDay[f] || (byDay[f] = { fecha: f, rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, intercambios: 0, costo: 0 }));
-      enriched.forEach(({ r, costoContado }) => {
-        const f = (r.fecha_registro || (r.fecha_salida || "").substring(0, 10) || "").substring(0, 10);
+      ordenes.forEach(o => {
+        const f = (o.fecha_creacion || "").substring(0, 10);
         if (!f) return;
-        const d = day(f);
-        d.costo += costoContado; // costo real (todas las operaciones)
-        if (esHM(r)) return;     // métricas de entrega: excluir media milla
-        d.rutas += 1;
-        d.total += (parseInt(r.total) || 0);
-        d.entregados += (parseInt(r.entregados) || 0);
-        d.intentados += (parseInt(r.intentados) || 0);
-        d.noVisitados += (parseInt(r.no_visitados) || 0);
-        d.intercambios += (parseInt(r.intercambios) || 0);
+        const d = byDay[f] || (byDay[f] = { fecha: f, total: 0, e360: 0, d123: 0, onTimeCnt: 0 });
+        d.total++;
+        if (es360(o.estatus)) {
+          d.e360++;
+          if (o.fecha_entrega && o.fecha_promesa && new Date(o.fecha_entrega) <= new Date(o.fecha_promesa)) d.onTimeCnt++;
+        }
+        if (es123(o.estatus)) d.d123++;
       });
-      const fullList = Object.values(byDay).map(d => ({
-        ...d,
-        pctEntrega: d.total > 0 ? (d.entregados / d.total) * 100 : 0,
-        ontime: d.total > 0 ? ((d.entregados - d.intercambios) / d.total) * 100 : 0,
-        retornos: d.total > 0 ? ((d.total - d.entregados) / d.total) * 100 : 0,
-        costoPaq: d.entregados > 0 ? d.costo / d.entregados : 0,
-      })).sort((a, b) => b.fecha.localeCompare(a.fecha));
-      // Solo los últimos 30 días (ventana relativa a la fecha más reciente con datos)
+      const fullList = Object.values(byDay).map(d => {
+        const costo = costoPorDia[d.fecha] || 0;
+        const denom = d.e360 + d.d123; // entregados (360) + devueltos (123)
+        return {
+          fecha: d.fecha, total: d.total, e360: d.e360, d123: d.d123, onTimeCnt: d.onTimeCnt, costo,
+          pctEntrega: d.total > 0 ? (d.e360 / d.total) * 100 : 0,
+          ontime: d.e360 > 0 ? (d.onTimeCnt / d.e360) * 100 : 0,
+          retornos: d.total > 0 ? (d.d123 / d.total) * 100 : 0,
+          costoPaq: denom > 0 ? costo / denom : 0,
+        };
+      }).sort((a, b) => b.fecha.localeCompare(a.fecha));
+      // Últimos 30 días (relativo a la fecha más reciente con datos)
       let list = fullList;
       if (fullList.length) {
         const anchor = new Date(fullList[0].fecha + "T00:00:00");
-        const cutoff = new Date(anchor);
-        cutoff.setDate(cutoff.getDate() - 29); // 30 días inclusive
+        const cutoff = new Date(anchor); cutoff.setDate(cutoff.getDate() - 29);
         const cutoffStr = cutoff.toISOString().substring(0, 10);
         list = fullList.filter(d => d.fecha >= cutoffStr);
       }
       const tot = list.reduce((a, d) => ({
-        total: a.total + d.total, entregados: a.entregados + d.entregados,
-        intercambios: a.intercambios + d.intercambios, costo: a.costo + d.costo,
-      }), { total: 0, entregados: 0, intercambios: 0, costo: 0 });
+        total: a.total + d.total, e360: a.e360 + d.e360, d123: a.d123 + d.d123,
+        onTime: a.onTime + d.onTimeCnt, costo: a.costo + d.costo,
+      }), { total: 0, e360: 0, d123: 0, onTime: 0, costo: 0 });
+      const denomTot = tot.e360 + tot.d123;
       setResumen({
         dias: list.length,
-        pctEntrega: tot.total > 0 ? (tot.entregados / tot.total) * 100 : 0,
-        ontime: tot.total > 0 ? ((tot.entregados - tot.intercambios) / tot.total) * 100 : 0,
-        retornos: tot.total > 0 ? ((tot.total - tot.entregados) / tot.total) * 100 : 0,
+        pctEntrega: tot.total > 0 ? (tot.e360 / tot.total) * 100 : 0,
+        ontime: tot.e360 > 0 ? (tot.onTime / tot.e360) * 100 : 0,
+        retornos: tot.total > 0 ? (tot.d123 / tot.total) * 100 : 0,
         costo: tot.costo,
-        costoPaq: tot.entregados > 0 ? tot.costo / tot.entregados : 0,
+        costoPaq: denomTot > 0 ? tot.costo / denomTot : 0,
       });
       setDias(list);
     } catch (e) {
@@ -673,68 +643,34 @@ function ModuleKpis() {
         <TabBtn id="mensajeria" label="Mensajería" />
       </div>
 
-      {subtab === "mensajeria" && (msjLoading ? (
-        <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando…</div>
-      ) : msj?.missing ? (
-        <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>🗄️</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Falta crear la tabla 'mensajeria'</div>
-          <div style={{ fontSize: 13, color: C.textMuted }}>Corre el SQL en Supabase y luego sube datos en "Carga Mensajería".</div>
-        </div>
-      ) : !msj || msj.total === 0 ? (
+      {subtab === "mensajeria" && (
         <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>✉️</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Aún no hay datos de mensajería</div>
-          <div style={{ fontSize: 13, color: C.textMuted }}>Sube un archivo en el módulo "Carga Mensajería".</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>KPIs de Mensajería — en construcción</div>
+          <div style={{ fontSize: 13, color: C.textMuted }}>Tendrá su propia carga de datos (aparte de Flotilla Propia).</div>
         </div>
-      ) : (
-        <>
-          <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
-            <StatCard label="Órdenes" value={msj.total.toLocaleString()} subvalue="en la base" icon={<IC.Package />} color={C.blue} />
-            <StatCard label="% Entrega" value={msj.pctEntrega.toFixed(1) + "%"} subvalue={msj.entregadas.toLocaleString() + " entregadas"} icon={<IC.BarChart />} color={colPct(msj.pctEntrega)} />
-            <StatCard label="ONTIME (vs promesa)" value={msj.pctOntime.toFixed(1) + "%"} subvalue={msj.ontime.toLocaleString() + " a tiempo"} icon={<IC.Check />} color={colPct(msj.pctOntime)} />
-            <StatCard label="% Retornos" value={msj.pctRetornos.toFixed(1) + "%"} subvalue="no entregadas / total" icon={<IC.Package />} color={colRet(msj.pctRetornos)} />
-            <StatCard label="Incidencias 507" value={msj.inc507.toLocaleString()} subvalue={msj.incidencias.toLocaleString() + " con incidencia"} icon={<IC.Bell />} color={msj.inc507 > 0 ? C.red : C.green} />
-          </div>
-          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
-            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
-              Por transportista
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "2px solid " + C.border }}>
-                  {["Transportista", "Órdenes", "Entregadas", "% Entrega", "Incidencias"].map(h => (
-                    <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {msj.porCarrier.map((c, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
-                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{c.total.toLocaleString()}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{c.entregadas.toLocaleString()}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colPct(c.pct) }}>{c.pct.toFixed(1)}%</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, color: c.inc > 0 ? C.red : C.textMuted }}>{c.inc.toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
-              Entregado = estatus contiene "Entregado". ONTIME = entregadas con fecha de entrega ≤ fecha promesa. % Retornos = no entregadas ÷ total. Incidencias 507 = estatus con código 507. Dedup por tracking.
-            </div>
-          </div>
-        </>
-      ))}
+      )}
 
       {subtab === "flotilla" && (loading ? (
         <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando…</div>
+      ) : flotMissing === "missing" ? (
+        <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🗄️</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Falta crear la tabla 'flotilla_ordenes'</div>
+          <div style={{ fontSize: 13, color: C.textMuted }}>Corre el SQL en Supabase y sube datos en "Carga Flotilla Propia".</div>
+        </div>
+      ) : flotMissing === "empty" ? (
+        <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Aún no hay órdenes de flotilla</div>
+          <div style={{ fontSize: 13, color: C.textMuted }}>Sube un archivo en el módulo "Carga Flotilla Propia".</div>
+        </div>
       ) : (
         <>
           {resumen && (
             <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
               <StatCard label="% Entrega" value={resumen.pctEntrega.toFixed(1) + "%"} subvalue={resumen.dias + " días"} icon={<IC.BarChart />} color={colPct(resumen.pctEntrega)} />
-              <StatCard label="ONTIME (1er intento)" value={resumen.ontime.toFixed(1) + "%"} subvalue="entregas en 1er intento" icon={<IC.Check />} color={colPct(resumen.ontime)} />
+              <StatCard label="ONTIME (vs promesa)" value={resumen.ontime.toFixed(1) + "%"} subvalue="entrega ≤ fecha promesa" icon={<IC.Check />} color={colPct(resumen.ontime)} />
               <StatCard label="% Retornos" value={resumen.retornos.toFixed(1) + "%"} subvalue="no entregados / total" icon={<IC.Package />} color={colRet(resumen.retornos)} />
               <StatCard label="Costo / paquete" value={fmtMoney(resumen.costoPaq)} subvalue={"promedio · " + resumen.dias + " días"} icon={<IC.Dollar />} color={C.purple} />
             </div>
@@ -763,7 +699,7 @@ function ModuleKpis() {
                 ]} />
             </div>
             <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
-              Eje izquierdo = % (entrega / ONTIME / retornos); eje derecho = costo/paquete ($). Solo entregas finales (se excluye media milla). ONTIME = (entregados − reintentos) ÷ total. % Retornos = (total − entregados) ÷ total. Costo/paquete = costo real calculado del día ÷ entregados finales.
+              Eje izquierdo = % · eje derecho = costo/paquete ($). Performance desde la carga de órdenes (por fecha de creación): % Entrega = entregados (360) ÷ total · ONTIME = entregados a tiempo (entrega ≤ promesa) ÷ entregados · % Retornos = devueltos (123) ÷ total. Costo/paquete = costo real del día (motor rutas × asistencia × tarifas) ÷ (entregados 360 + devueltos 123).
             </div>
           </div>
         </>
@@ -8521,7 +8457,7 @@ export default function T1OpsFlotilla({ user, onLogout }) {
     switch (activePage) {
       case "dashboard": return <ModuleDashboard />;
       case "kpis": return <ModuleKpis />;
-      case "cargamsj": return <ModuleMensajeriaCarga />;
+      case "cargaflotilla": return <ModuleFlotillaCarga />;
       case "envios": return <ModuleEnvios />;
       case "unidades": return <ModuleUnidades />;
       case "operadores": return <ModuleOperadores />;
