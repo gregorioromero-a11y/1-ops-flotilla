@@ -35,7 +35,7 @@ export const ROLES_SIEMPRE_RESTRINGIDOS = new Set(["kpis", "lectura"]);
 
 // Usuarios. Cambia estas contraseñas por las reales.
 export const USERS = [
-  { user: "admin", pass: "almacen2026", nombre: "Administrador", role: "admin" },
+  { user: "admin", pass: "almacen2026*", nombre: "Administrador", role: "admin" },
   { user: "operaciones", pass: "ops2026", nombre: "Operaciones", role: "operaciones" },
   { user: "costos", pass: "costos2026", nombre: "Costos", role: "costos" },
   { user: "lectura", pass: "lectura2026", nombre: "Lectura", role: "lectura" },
