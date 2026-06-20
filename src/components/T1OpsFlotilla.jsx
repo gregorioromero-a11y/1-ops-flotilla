@@ -97,6 +97,7 @@ const navSections = [
     { id: "operadores", label: "Operadores", icon: IC.Users },
     { id: "costos", label: "Registro Diario", icon: IC.Clock },
     { id: "carriers", label: "Carriers / Proveedores", icon: IC.Truck, badge: "Nuevo" },
+    { id: "cargamsj", label: "Carga Mensajería", icon: IC.Package, badge: "Nuevo" },
   ]},
   { label: "OPERACIONES", items: [
     { id: "t1envios", label: "T1 Envíos", icon: IC.Package },
@@ -283,6 +284,176 @@ function OpsBar({ data }) {
 
 // ============ MODULES ============
 
+// Parser de fecha tolerante: Date, serial Excel, "DD-MM-YYYY [HH:mm]", "DD/MM/YYYY".
+function parseFechaFlex(v) {
+  if (v == null || v === "") return null;
+  if (v instanceof Date) return isNaN(v) ? null : v;
+  if (typeof v === "number") {
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+    return isNaN(d) ? null : d;
+  }
+  const s = String(v).trim();
+  if (!s) return null;
+  const m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})(?:[ T](\d{1,2})[:.](\d{2}))?/);
+  if (m) {
+    let [, dd, mm, yy, hh, mi] = m;
+    if (yy.length === 2) yy = "20" + yy;
+    const d = new Date(+yy, +mm - 1, +dd, +(hh || 0), +(mi || 0));
+    return isNaN(d) ? null : d;
+  }
+  const d = new Date(s);
+  return isNaN(d) ? null : d;
+}
+
+// --- CARGA MENSAJERÍA ---
+// Sube el Excel de órdenes, deduplica por Tracking (última versión gana) y hace
+// upsert a la tabla `mensajeria` de Supabase. Tolerante a headers truncados
+// (matching por substring) y guarda la fila cruda en `raw`.
+function ModuleMensajeriaCarga() {
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [summary, setSummary] = useState(null);
+  const [mapping, setMapping] = useState(null);
+  const [totalBase, setTotalBase] = useState(null);
+
+  useEffect(() => { refreshCount(); }, []);
+  const refreshCount = async () => {
+    const { count, error } = await supabase.from("mensajeria").select("tracking", { count: "exact", head: true });
+    setTotalBase(error ? null : (count || 0));
+  };
+
+  const findCol = (headers, kws) => headers.find(h => { const n = h.toLowerCase(); return kws.some(k => n.includes(k)); });
+  const sVal = v => { const s = String(v ?? "").trim(); return s || null; };
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setUploading(true); setMsg(""); setSummary(null);
+    try {
+      const XLSX = await import("xlsx");
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(buf), { type: "array", cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      if (!json.length) { setMsg("⚠ El archivo está vacío."); setUploading(false); return; }
+      const headers = Object.keys(json[0]);
+      const col = {
+        tracking: findCol(headers, ["tracking"]),
+        orden: findCol(headers, ["orden"]),
+        transportista: headers.find(h => h.toLowerCase().includes("transportista") && !h.includes("2") && !h.toLowerCase().includes("secund")) || findCol(headers, ["transportista"]),
+        estatus: findCol(headers, ["estatus de pro", "estatus de proc", "estatus del proc", "estatus proc"]) || findCol(headers, ["estatus de"]),
+        incidencia: findCol(headers, ["incidencia"]),
+        promesa: findCol(headers, ["prome"]),
+        entrega: findCol(headers, ["fecha de ent", "fecha entrega", "fecha de entrega"]),
+        creacion: findCol(headers, ["creaci"]),
+        semana: findCol(headers, ["semana"]),
+        estado: findCol(headers, ["estado"]),
+        municipio: findCol(headers, ["municipio"]),
+        cp: findCol(headers, ["codigo posta", "código posta", "cp"]),
+      };
+      setMapping(col);
+      if (!col.tracking) { setMsg("⚠ No encontré columna de Tracking. Headers detectados: " + headers.join(" | ")); setUploading(false); return; }
+      const byTrk = new Map();
+      let sinTracking = 0;
+      json.forEach(row => {
+        const trk = String(row[col.tracking] ?? "").trim();
+        if (!trk) { sinTracking++; return; }
+        byTrk.set(trk, row); // última versión gana
+      });
+      const dupsArchivo = json.length - sinTracking - byTrk.size;
+      const toISO = v => { const d = parseFechaFlex(v); return d ? d.toISOString() : null; };
+      const rows = Array.from(byTrk.entries()).map(([trk, row]) => ({
+        tracking: trk,
+        no_orden: col.orden ? sVal(row[col.orden]) : null,
+        transportista: col.transportista ? sVal(row[col.transportista]) : null,
+        estado: col.estado ? sVal(row[col.estado]) : null,
+        municipio: col.municipio ? sVal(row[col.municipio]) : null,
+        cp: col.cp ? sVal(row[col.cp]) : null,
+        semana: col.semana ? sVal(row[col.semana]) : null,
+        fecha_creacion: col.creacion ? toISO(row[col.creacion]) : null,
+        fecha_promesa: col.promesa ? toISO(row[col.promesa]) : null,
+        fecha_entrega: col.entrega ? toISO(row[col.entrega]) : null,
+        estatus: col.estatus ? sVal(row[col.estatus]) : null,
+        estatus_incidencia: col.incidencia ? sVal(row[col.incidencia]) : null,
+        raw: row,
+      }));
+      let subidas = 0, firstErr = null;
+      for (let i = 0; i < rows.length; i += 500) {
+        const batch = rows.slice(i, i + 500);
+        const { error } = await supabase.from("mensajeria").upsert(batch, { onConflict: "tracking" });
+        if (error) { firstErr = error; break; }
+        subidas += batch.length;
+      }
+      if (firstErr) {
+        const em = (firstErr.message || "").toLowerCase();
+        if (em.includes("does not exist") || firstErr.code === "42P01" || em.includes("could not find the table") || em.includes("schema cache")) {
+          setMsg("⚠ La tabla 'mensajeria' aún no existe en Supabase. Corre el SQL que te pasé y reintenta.");
+        } else setMsg("⚠ Error al subir: " + firstErr.message);
+      } else {
+        setSummary({ leidas: json.length, sinTracking, dupsArchivo, subidas });
+        setMsg(`✓ ${subidas} órdenes cargadas/actualizadas (dedup por tracking).`);
+        refreshCount();
+      }
+    } catch (err) {
+      setMsg("⚠ Error: " + (err?.message || err));
+    } finally {
+      setUploading(false);
+      if (e.target) e.target.value = "";
+    }
+  };
+
+  const mapRow = mapping ? [
+    ["Tracking", mapping.tracking], ["No. orden", mapping.orden], ["Transportista", mapping.transportista],
+    ["Estatus", mapping.estatus], ["Incidencia", mapping.incidencia], ["Fecha promesa", mapping.promesa],
+    ["Fecha entrega", mapping.entrega], ["Fecha creación", mapping.creacion], ["Semana", mapping.semana],
+  ] : [];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 18 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Carga Mensajería</h1>
+        <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Sube el Excel de órdenes · se deduplica por Tracking · alimenta los KPIs de Mensajería</p>
+      </div>
+
+      <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 24, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+          <label style={{ padding: "10px 18px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: uploading ? "default" : "pointer", opacity: uploading ? 0.6 : 1 }}>
+            {uploading ? "Procesando…" : "Seleccionar archivo (.xlsx/.csv)"}
+            <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} disabled={uploading} style={{ display: "none" }} />
+          </label>
+          <span style={{ fontSize: 13, color: C.textMuted }}>
+            Base actual: <strong style={{ color: C.text }}>{totalBase == null ? "—" : totalBase.toLocaleString()}</strong> órdenes
+          </span>
+        </div>
+        {msg && <div style={{ marginTop: 14, fontSize: 13, fontWeight: 600, color: msg.startsWith("✓") ? C.green : C.red }}>{msg}</div>}
+        {summary && (
+          <div style={{ marginTop: 12, display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12, color: C.textMuted }}>
+            <span>Filas leídas: <strong style={{ color: C.text }}>{summary.leidas}</strong></span>
+            <span>Duplicados en archivo: <strong style={{ color: C.text }}>{summary.dupsArchivo}</strong></span>
+            <span>Sin tracking (omitidas): <strong style={{ color: C.text }}>{summary.sinTracking}</strong></span>
+            <span>Subidas/actualizadas: <strong style={{ color: C.green }}>{summary.subidas}</strong></span>
+          </div>
+        )}
+      </div>
+
+      {mapping && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+          <div style={{ padding: "12px 18px", borderBottom: "1px solid " + C.border, fontSize: 12, fontWeight: 700, color: C.text }}>
+            Mapeo de columnas detectado <span style={{ fontWeight: 500, color: C.textMuted }}>(si algo está mal, dime y lo ajusto)</span>
+          </div>
+          <div style={{ padding: "10px 18px", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 6 }}>
+            {mapRow.map(([k, v]) => (
+              <div key={k} style={{ fontSize: 12 }}>
+                <span style={{ color: C.textMuted }}>{k}: </span>
+                <span style={{ color: v ? C.text : C.red, fontWeight: 600 }}>{v || "no encontrada"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Gráfica de líneas SVG con DOBLE eje Y. `data` cronológico (asc).
 // `series` = [{ key, label, color, axis:"left"|"right" }]. Eje izq = %, der = $.
 function KpiLineChart({ data, series, leftMax, rightMax, leftFmt, rightFmt, leftAxisColor, rightAxisColor, height = 320 }) {
@@ -330,8 +501,56 @@ function ModuleKpis() {
   const [loading, setLoading] = useState(true);
   const [dias, setDias] = useState([]);
   const [resumen, setResumen] = useState(null);
+  const [msjLoading, setMsjLoading] = useState(false);
+  const [msjLoaded, setMsjLoaded] = useState(false);
+  const [msj, setMsj] = useState(null);
 
   useEffect(() => { loadFlotilla(); }, []);
+  useEffect(() => { if (subtab === "mensajeria" && !msjLoaded) loadMensajeria(); }, [subtab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadMensajeria = async () => {
+    setMsjLoading(true);
+    let all = [], from = 0; const size = 1000; let missing = false;
+    while (true) {
+      const { data, error } = await supabase.from("mensajeria")
+        .select("transportista, estatus, estatus_incidencia, fecha_promesa, fecha_entrega").range(from, from + size - 1);
+      if (error) {
+        const em = (error.message || "").toLowerCase();
+        if (em.includes("does not exist") || error.code === "42P01" || em.includes("could not find the table") || em.includes("schema cache")) missing = true;
+        else console.error("[Kpis msj]", error);
+        break;
+      }
+      if (!data || !data.length) break;
+      all = all.concat(data);
+      if (data.length < size) break;
+      from += size;
+    }
+    if (missing) { setMsj({ missing: true }); setMsjLoaded(true); setMsjLoading(false); return; }
+    const esEntregado = r => (r.estatus || "").toLowerCase().includes("entregado");
+    const es507 = r => /(^|\D)507(\D|$)/.test((r.estatus || "") + " " + (r.estatus_incidencia || ""));
+    const conInc = r => (r.estatus_incidencia || "").trim().length > 0;
+    const ontimeR = r => esEntregado(r) && r.fecha_entrega && r.fecha_promesa && new Date(r.fecha_entrega) <= new Date(r.fecha_promesa);
+    const total = all.length;
+    const entregadas = all.filter(esEntregado).length;
+    const ontime = all.filter(ontimeR).length;
+    const incidencias = all.filter(conInc).length;
+    const inc507 = all.filter(es507).length;
+    const carriers = {};
+    all.forEach(r => {
+      const c = r.transportista || "Sin transportista";
+      const x = carriers[c] || (carriers[c] = { carrier: c, total: 0, entregadas: 0, inc: 0 });
+      x.total++; if (esEntregado(r)) x.entregadas++; if (conInc(r)) x.inc++;
+    });
+    const porCarrier = Object.values(carriers).map(x => ({ ...x, pct: x.total > 0 ? (x.entregadas / x.total) * 100 : 0 })).sort((a, b) => b.total - a.total);
+    setMsj({
+      total, entregadas, ontime, incidencias, inc507,
+      pctEntrega: total > 0 ? (entregadas / total) * 100 : 0,
+      pctOntime: entregadas > 0 ? (ontime / entregadas) * 100 : 0,
+      pctRetornos: total > 0 ? ((total - entregadas) / total) * 100 : 0,
+      porCarrier,
+    });
+    setMsjLoaded(true); setMsjLoading(false);
+  };
 
   const fetchAll = async (table, cols) => {
     let all = [], from = 0; const size = 1000;
@@ -454,13 +673,59 @@ function ModuleKpis() {
         <TabBtn id="mensajeria" label="Mensajería" />
       </div>
 
-      {subtab === "mensajeria" && (
+      {subtab === "mensajeria" && (msjLoading ? (
+        <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando…</div>
+      ) : msj?.missing ? (
+        <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🗄️</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Falta crear la tabla 'mensajeria'</div>
+          <div style={{ fontSize: 13, color: C.textMuted }}>Corre el SQL en Supabase y luego sube datos en "Carga Mensajería".</div>
+        </div>
+      ) : !msj || msj.total === 0 ? (
         <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>✉️</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>KPIs de Mensajería — en construcción</div>
-          <div style={{ fontSize: 13, color: C.textMuted }}>Pendiente definir fuente de datos y métricas.</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Aún no hay datos de mensajería</div>
+          <div style={{ fontSize: 13, color: C.textMuted }}>Sube un archivo en el módulo "Carga Mensajería".</div>
         </div>
-      )}
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+            <StatCard label="Órdenes" value={msj.total.toLocaleString()} subvalue="en la base" icon={<IC.Package />} color={C.blue} />
+            <StatCard label="% Entrega" value={msj.pctEntrega.toFixed(1) + "%"} subvalue={msj.entregadas.toLocaleString() + " entregadas"} icon={<IC.BarChart />} color={colPct(msj.pctEntrega)} />
+            <StatCard label="ONTIME (vs promesa)" value={msj.pctOntime.toFixed(1) + "%"} subvalue={msj.ontime.toLocaleString() + " a tiempo"} icon={<IC.Check />} color={colPct(msj.pctOntime)} />
+            <StatCard label="% Retornos" value={msj.pctRetornos.toFixed(1) + "%"} subvalue="no entregadas / total" icon={<IC.Package />} color={colRet(msj.pctRetornos)} />
+            <StatCard label="Incidencias 507" value={msj.inc507.toLocaleString()} subvalue={msj.incidencias.toLocaleString() + " con incidencia"} icon={<IC.Bell />} color={msj.inc507 > 0 ? C.red : C.green} />
+          </div>
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+              Por transportista
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid " + C.border }}>
+                  {["Transportista", "Órdenes", "Entregadas", "% Entrega", "Incidencias"].map(h => (
+                    <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {msj.porCarrier.map((c, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
+                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{c.total.toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{c.entregadas.toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: colPct(c.pct) }}>{c.pct.toFixed(1)}%</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, color: c.inc > 0 ? C.red : C.textMuted }}>{c.inc.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
+              Entregado = estatus contiene "Entregado". ONTIME = entregadas con fecha de entrega ≤ fecha promesa. % Retornos = no entregadas ÷ total. Incidencias 507 = estatus con código 507. Dedup por tracking.
+            </div>
+          </div>
+        </>
+      ))}
 
       {subtab === "flotilla" && (loading ? (
         <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando…</div>
@@ -8256,6 +8521,7 @@ export default function T1OpsFlotilla({ user, onLogout }) {
     switch (activePage) {
       case "dashboard": return <ModuleDashboard />;
       case "kpis": return <ModuleKpis />;
+      case "cargamsj": return <ModuleMensajeriaCarga />;
       case "envios": return <ModuleEnvios />;
       case "unidades": return <ModuleUnidades />;
       case "operadores": return <ModuleOperadores />;
