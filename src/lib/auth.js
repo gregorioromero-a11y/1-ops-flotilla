@@ -18,6 +18,7 @@ export const ROLE_MODULES = {
   ],
   costos: ["dashboard", "kpis", "costos", "carriers", "asignaciones", "consultas"],
   lectura: ["kpis"],
+  kpis: ["kpis"],
 };
 
 export const ROLE_LABELS = {
@@ -25,7 +26,12 @@ export const ROLE_LABELS = {
   operaciones: "Operaciones",
   costos: "Costos",
   lectura: "Lectura",
+  kpis: "KPIs",
 };
+
+// Roles que SIEMPRE se restringen, aunque el gating global esté apagado en
+// desarrollo (para tener usuarios acotados desde ya, p. ej. el de KPIs).
+export const ROLES_SIEMPRE_RESTRINGIDOS = new Set(["kpis", "lectura"]);
 
 // Usuarios. Cambia estas contraseñas por las reales.
 export const USERS = [
@@ -33,6 +39,7 @@ export const USERS = [
   { user: "operaciones", pass: "ops2026", nombre: "Operaciones", role: "operaciones" },
   { user: "costos", pass: "costos2026", nombre: "Costos", role: "costos" },
   { user: "lectura", pass: "lectura2026", nombre: "Lectura", role: "lectura" },
+  { user: "kpis", pass: "kpis2026", nombre: "KPIs", role: "kpis" },
 ];
 
 // Devuelve { user, nombre, role } si las credenciales son válidas, o null.
@@ -44,7 +51,8 @@ export function authenticate(u, p) {
 
 // ¿El rol puede ver este módulo?
 export function canAccess(role, moduleId) {
-  if (!ROLES_ENABLED) return true; // desarrollo: acceso total
+  // En desarrollo todos ven todo, EXCEPTO los roles siempre restringidos.
+  if (!ROLES_ENABLED && !ROLES_SIEMPRE_RESTRINGIDOS.has(role)) return true;
   const mods = ROLE_MODULES[role];
   if (!mods) return false;
   return mods === "*" || mods.includes(moduleId);
