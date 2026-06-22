@@ -36,6 +36,7 @@ export const ROLES_SIEMPRE_RESTRINGIDOS = new Set(["kpis", "lectura"]);
 // Usuarios. Cambia estas contraseñas por las reales.
 export const USERS = [
   { user: "almacen", pass: "almacen2026*", nombre: "Administrador", role: "admin" },
+  { user: "admin", pass: "almacen2026*", nombre: "Administrador", role: "admin" }, // alias
   { user: "operaciones", pass: "ops2026", nombre: "Operaciones", role: "operaciones" },
   { user: "costos", pass: "costos2026", nombre: "Costos", role: "costos" },
   { user: "lectura", pass: "lectura2026", nombre: "Lectura", role: "lectura" },
@@ -43,9 +44,12 @@ export const USERS = [
 ];
 
 // Devuelve { user, nombre, role } si las credenciales son válidas, o null.
+// Tolerante a mayúsculas/espacios en el usuario y a espacios sobrantes en la
+// contraseña (autocompletado).
 export function authenticate(u, p) {
   const uNorm = String(u || "").trim().toLowerCase();
-  const found = USERS.find((x) => x.user.toLowerCase() === uNorm && x.pass === p);
+  const pNorm = String(p || "").trim();
+  const found = USERS.find((x) => x.user.toLowerCase() === uNorm && x.pass === pNorm);
   return found ? { user: found.user, nombre: found.nombre, role: found.role } : null;
 }
 
