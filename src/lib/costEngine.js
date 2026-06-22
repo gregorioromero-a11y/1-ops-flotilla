@@ -97,12 +97,11 @@ export function buildCostEngine(asistencia, carriers) {
     const expr = (r.penalizacion || "").trim();
     if (!expr) return base;
     const ev = evalFormula(expr, base);
-    if (isNaN(ev)) return base;
-    // Guarda anti-typo: una penalización que dispara el costo a más de 10× la
-    // base (p. ej. "1900*82" en vez de "1900*.82" → $155,800) es claramente un
-    // error de captura; se ignora y se usa la base.
-    if (base > 0 && ev > base * 10) return base;
-    return ev;
+    // Aplica la penalización TAL CUAL (igual que el módulo Registrar Envíos),
+    // para que el costo de KPIs coincida con lo capturado. Si una penalización
+    // se ve absurda es porque está mal escrita en Registrar Envíos (p. ej.
+    // "2300*80" en vez de "2300*.80") y debe corregirse ahí.
+    return isNaN(ev) ? base : ev;
   };
 
   return { baseCost, costoNuevo };
