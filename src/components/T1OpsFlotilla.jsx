@@ -8626,7 +8626,7 @@ function ModuleFacturacion() {
       const b = bucketOf(f.razon_social);
       if (!prov[b]) prov[b] = { montoTotal: 0, montoIva: 0, envios: 0, nc: 0 };
       if (f.es_nc) prov[b].nc += f.subtotal;
-      else { prov[b].montoTotal += f.subtotal; prov[b].montoIva += f.subtotal + f.iva; }
+      else { prov[b].montoTotal += f.subtotal; prov[b].montoIva += f.importe_neto > 0 ? f.importe_neto : (f.subtotal + f.iva); }
     });
     envios.forEach(e => { const b = bucketOf(e.proveedor); if (!prov[b]) prov[b] = { montoTotal: 0, montoIva: 0, envios: 0, nc: 0 }; prov[b].envios += 1; });
     const totMonto = Object.values(prov).reduce((a, p) => a + p.montoTotal, 0);
@@ -8702,9 +8702,16 @@ function ModuleFacturacion() {
       const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
       // Resumen proveedor
-      const s1 = provRows.map(b => ({ Proveedor: b, "Monto total": calc.prov[b].montoTotal, "Monto con IVA": calc.prov[b].montoIva, "Envíos": calc.prov[b].envios, "Costo x envío": calc.prov[b].envios ? calc.prov[b].montoTotal / calc.prov[b].envios : 0, "NC proveedor": calc.prov[b].nc }));
-      s1.push({ Proveedor: "TOTAL", "Monto total": calc.totMonto, "Monto con IVA": calc.totMontoIva, "Envíos": calc.totEnvios, "Costo x envío": calc.costoGlobal, "NC proveedor": calc.totNc });
+      const s1 = provRows.map(b => ({ Proveedor: b, "Sub-Total": calc.prov[b].montoTotal, "Importe Neto": calc.prov[b].montoIva, "Envíos": calc.prov[b].envios, "Costo x envío": calc.prov[b].envios ? calc.prov[b].montoTotal / calc.prov[b].envios : 0, "NC proveedor": calc.prov[b].nc }));
+      s1.push({ Proveedor: "TOTAL", "Sub-Total": calc.totMonto, "Importe Neto": calc.totMontoIva, "Envíos": calc.totEnvios, "Costo x envío": calc.costoGlobal, "NC proveedor": calc.totNc });
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(s1), "Costos proveedor");
+      // Ingresos vs Gastos (Flotilla Propia)
+      const sIG = [
+        { Concepto: "Ingresos (cobranza base)", "Sin IVA": cobTot.sinIva, "Con IVA": cobTot.total },
+        { Concepto: "Gastos (facturas Flotilla Propia)", "Sin IVA": calc.totMonto, "Con IVA": calc.totMontoIva },
+        { Concepto: "Resultado (ingreso - gasto)", "Sin IVA": cobTot.sinIva - calc.totMonto, "Con IVA": cobTot.total - calc.totMontoIva },
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sIG), "Ingresos vs Gastos");
       // Cobranza
       const s2 = cobRows.map(([k, v]) => ({ Empresa: k, Guías: v.guias, "Monto sin IVA": v.sinIva, IVA: v.total - v.sinIva, Total: v.total }));
       s2.push({ Empresa: "Total general", Guías: cobTot.guias, "Monto sin IVA": cobTot.sinIva, IVA: cobTot.total - cobTot.sinIva, Total: cobTot.total });
@@ -8813,7 +8820,7 @@ function ModuleFacturacion() {
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
             {[
               { label: "Costo global x envío", value: factFmt(calc.costoGlobal), sub: `${factFmtInt(calc.totEnvios)} envíos · Flotilla Propia` },
-              { label: "Monto facturas Flotilla Propia", value: factFmt(calc.totMonto), sub: `con IVA ${factFmt(calc.totMontoIva)}` },
+              { label: "Gasto Flotilla Propia (Sub-Total)", value: factFmt(calc.totMonto), sub: `Importe Neto ${factFmt(calc.totMontoIva)}` },
               { label: "NC proveedores (informativo)", value: factFmt(calc.totNc), sub: "no se resta (lo hace finanzas)" },
               { label: "Cobranza total con IVA", value: factFmt(cobTot.total), sub: `${factFmtInt(cobTot.guias)} guías` },
               { label: "NC a cliente (Σ costo)", value: factFmt(ncTot.costo), sub: `${factFmtInt(ncTot.guias)} guías` },
@@ -8826,13 +8833,44 @@ function ModuleFacturacion() {
             ))}
           </div>
 
+          {/* Relación Ingresos / Gastos */}
+          <div style={card}>
+            {cardHead("Relación Ingresos / Gastos — Flotilla Propia", "Ingresos = cobranza de la base · Gastos = facturas Flotilla Propia (Sub-Total / Importe Neto)")}
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
+                <thead><tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                  <th style={th}>Concepto</th><th style={thR}>Sin IVA</th><th style={thR}>Con IVA</th>
+                </tr></thead>
+                <tbody>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <td style={{ ...td, fontWeight: 600 }}>Ingresos (cobranza base)</td>
+                    <td style={tdR}>{factFmt(cobTot.sinIva)}</td>
+                    <td style={tdR}>{factFmt(cobTot.total)}</td>
+                  </tr>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <td style={{ ...td, fontWeight: 600 }}>Gastos (facturas Flotilla Propia)</td>
+                    <td style={tdR}>{factFmt(calc.totMonto)}</td>
+                    <td style={tdR}>{factFmt(calc.totMontoIva)}</td>
+                  </tr>
+                  {(() => { const rSin = cobTot.sinIva - calc.totMonto, rCon = cobTot.total - calc.totMontoIva; return (
+                    <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 800 }}>
+                      <td style={{ ...td, fontWeight: 800 }}>Resultado (ingreso − gasto)</td>
+                      <td style={{ ...tdR, color: rSin >= 0 ? C.green : C.red }}>{factFmt(rSin)}</td>
+                      <td style={{ ...tdR, color: rCon >= 0 ? C.green : C.red }}>{factFmt(rCon)}</td>
+                    </tr>
+                  ); })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           {/* Resumen 1: costos por proveedor */}
           <div style={card}>
             {cardHead("Costos por proveedor — Flotilla Propia", "Mensajería y Seguridad no se incluyen (otro centro de costos)")}
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
                 <thead><tr style={{ borderBottom: `2px solid ${C.border}` }}>
-                  <th style={th}>Proveedor</th><th style={thR}>Monto total</th><th style={thR}>Monto con IVA</th><th style={thR}>Envíos</th><th style={thR}>Costo x envío</th><th style={thR}>NC proveedor</th>
+                  <th style={th}>Proveedor</th><th style={thR}>Sub-Total</th><th style={thR}>Importe Neto</th><th style={thR}>Envíos</th><th style={thR}>Costo x envío</th><th style={thR}>NC proveedor</th>
                 </tr></thead>
                 <tbody>
                   {provRows.map(b => { const p = calc.prov[b]; return (
