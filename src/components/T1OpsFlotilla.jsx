@@ -8574,6 +8574,72 @@ function factParseNC(aoa) {
 const factFmt = (n) => "$" + (Number(n) || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const factFmtInt = (n) => (Number(n) || 0).toLocaleString("es-MX");
 
+// Tabla de datos con buscador + paginación, para mostrar las bases crudas
+// (envíos / NC) con el mismo formato de columnas que los archivos originales.
+function FactDataTable({ title, sub, columns, rows }) {
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(0);
+  const PAGE = 100;
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return rows;
+    return rows.filter(r => columns.some(c => String(r[c.key] ?? "").toLowerCase().includes(t)));
+  }, [q, rows, columns]);
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE));
+  const cur = Math.min(page, pages - 1);
+  const slice = filtered.slice(cur * PAGE, cur * PAGE + PAGE);
+  const th = { padding: "9px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.03em", whiteSpace: "nowrap" };
+  const td = { padding: "8px 12px", fontSize: 12.5, color: C.text, whiteSpace: "nowrap" };
+
+  if (!rows.length) {
+    return (
+      <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 40, textAlign: "center", color: C.textMuted, fontSize: 13 }}>
+        {title}: aún no hay datos. Carga el archivo correspondiente arriba.
+      </div>
+    );
+  }
+  return (
+    <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+      <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{title}</div>
+          {sub && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{sub}</div>}
+        </div>
+        <input value={q} onChange={e => { setQ(e.target.value); setPage(0); }} placeholder="Buscar…"
+          style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 12, width: 200 }} />
+        <span style={{ fontSize: 11, color: C.textMuted, whiteSpace: "nowrap" }}>{filtered.length.toLocaleString("es-MX")} filas</span>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ borderBottom: `2px solid ${C.border}` }}>
+            {columns.map(c => <th key={c.key} style={{ ...th, textAlign: c.align === "right" ? "right" : "left" }}>{c.label}</th>)}
+          </tr></thead>
+          <tbody>
+            {slice.map((r, i) => (
+              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                {columns.map(c => (
+                  <td key={c.key} style={{ ...td, textAlign: c.align === "right" ? "right" : "left", fontVariantNumeric: c.align === "right" ? "tabular-nums" : "normal" }}>
+                    {c.fmt ? c.fmt(r[c.key]) : (r[c.key] ?? "")}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {pages > 1 && (
+        <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 }}>
+          <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={cur === 0}
+            style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 12, cursor: cur === 0 ? "default" : "pointer", opacity: cur === 0 ? 0.5 : 1 }}>← Anterior</button>
+          <span style={{ fontSize: 12, color: C.textMuted }}>Página {cur + 1} de {pages}</span>
+          <button onClick={() => setPage(p => Math.min(pages - 1, p + 1))} disabled={cur >= pages - 1}
+            style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 12, cursor: cur >= pages - 1 ? "default" : "pointer", opacity: cur >= pages - 1 ? 0.5 : 1 }}>Siguiente →</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ModuleFacturacion() {
   const monthDefault = (() => { try { return new Date().toISOString().slice(0, 7); } catch { return ""; } })();
   const [periodo, setPeriodo] = useState(monthDefault);
@@ -8585,6 +8651,7 @@ function ModuleFacturacion() {
   const [showMap, setShowMap] = useState(false);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState(null); // { ok, text }
+  const [tab, setTab] = useState("resumen"); // resumen | envios | nc
 
   const handleFile = async (kind, e) => {
     const file = e.target.files?.[0]; if (!file) return;
@@ -8656,6 +8723,22 @@ function ModuleFacturacion() {
   const ncRows = Object.entries(calc.ncByEmp).sort((a, b) => b[1].costo - a[1].costo);
   const cobTot = cobRows.reduce((a, [, v]) => ({ guias: a.guias + v.guias, sinIva: a.sinIva + v.sinIva, total: a.total + v.total }), { guias: 0, sinIva: 0, total: 0 });
   const ncTot = ncRows.reduce((a, [, v]) => ({ costo: a.costo + v.costo, guias: a.guias + v.guias }), { costo: 0, guias: 0 });
+
+  // Vista cruda de envíos con COSTO global inyectado (como en la base original)
+  const enviosView = useMemo(() => envios.map(e => ({ ...e, costo: calc.costoGlobal })), [envios, calc.costoGlobal]);
+  const envCols = [
+    { key: "guia", label: "GUIA" }, { key: "pedido", label: "PEDIDO" }, { key: "id_unidad", label: "ID UNIDAD" },
+    { key: "tienda", label: "NOMBRE DE TIENDA" }, { key: "empresa", label: "EMPRESA" }, { key: "proveedor", label: "PROVEEDOR" },
+    { key: "fecha", label: "FECHA" }, { key: "estatus", label: "ESTATUS FINAL" },
+    { key: "valor_declarado", label: "VALOR DECL.", align: "right", fmt: factFmt }, { key: "costo", label: "COSTO", align: "right", fmt: factFmt },
+    { key: "peso", label: "PESO", align: "right", fmt: factFmtInt }, { key: "seguro", label: "SEGURO", align: "right", fmt: factFmt },
+    { key: "precio_sin_iva", label: "PRECIO SIN IVA", align: "right", fmt: factFmt }, { key: "precio_total", label: "PRECIO TOTAL", align: "right", fmt: factFmt },
+    { key: "total_con_iva", label: "TOTAL CON IVA", align: "right", fmt: factFmt }, { key: "alcaldia", label: "ALCALDIA" },
+  ];
+  const ncCols = [
+    { key: "guia", label: "GUIA" }, { key: "articulo", label: "ARTÍCULO" }, { key: "costo", label: "COSTO", align: "right", fmt: factFmt },
+    { key: "id_tienda", label: "ID TIENDA" }, { key: "empresa", label: "EMPRESA" }, { key: "proveedor", label: "PROVEEDOR" }, { key: "motivo", label: "MOTIVO" },
+  ];
 
   // ---- GUARDAR EN SUPABASE ----
   const guardar = async () => {
@@ -8810,7 +8893,25 @@ function ModuleFacturacion() {
         </div>
       )}
 
-      {!hayDatos ? (
+      {/* Sub-pestañas */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+        {[["resumen", "Resúmenes"], ["envios", "Base de envíos"], ["nc", "Base de NC"]].map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)}
+            style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${tab === id ? C.accent : C.border}`, background: tab === id ? C.accent : C.white, color: tab === id ? "#fff" : C.textMuted, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "envios" && (
+        <FactDataTable title="Base de datos — Envíos" sub={`${envios.length.toLocaleString("es-MX")} envíos · COSTO global ${factFmt(calc.costoGlobal)} (sin IVA) aplicado a cada guía`} columns={envCols} rows={enviosView} />
+      )}
+
+      {tab === "nc" && (
+        <FactDataTable title="Base de datos — Notas de Crédito" sub={`${nc.length.toLocaleString("es-MX")} guías · Suma de Costo ${factFmt(ncTot.costo)}`} columns={ncCols} rows={nc} />
+      )}
+
+      {tab === "resumen" && (!hayDatos ? (
         <div style={{ ...card, padding: 40, textAlign: "center", color: C.textMuted, fontSize: 13 }}>
           Carga los 3 archivos para ver los resúmenes. La columna <strong>COSTO</strong> se calcula como el monto total de facturas de Flotilla Propia entre el número de envíos de la base.
         </div>
@@ -8952,7 +9053,7 @@ function ModuleFacturacion() {
             </div>
           </div>
         </>
-      )}
+      ))}
     </div>
   );
 }
