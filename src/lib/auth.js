@@ -16,7 +16,8 @@ export const ROLE_MODULES = {
     "t1envios", "warehouse", "halfmile", "sameday",
     "ruteo", "asignaciones", "manifiesto", "consultas",
   ],
-  costos: ["dashboard", "kpis", "costos", "carriers", "asignaciones", "consultas"],
+  costos: ["dashboard", "kpis", "costos", "carriers", "asignaciones", "consultas", "facturacion"],
+  facturacion: ["facturacion"],
   lectura: ["kpis"],
   kpis: ["kpis"],
 };
@@ -25,13 +26,14 @@ export const ROLE_LABELS = {
   admin: "Administrador",
   operaciones: "Operaciones",
   costos: "Costos",
+  facturacion: "Facturación",
   lectura: "Lectura",
   kpis: "KPIs",
 };
 
 // Roles que SIEMPRE se restringen, aunque el gating global esté apagado en
 // desarrollo (para tener usuarios acotados desde ya, p. ej. el de KPIs).
-export const ROLES_SIEMPRE_RESTRINGIDOS = new Set(["kpis", "lectura"]);
+export const ROLES_SIEMPRE_RESTRINGIDOS = new Set(["kpis", "lectura", "facturacion"]);
 
 // Usuarios. Cambia estas contraseñas por las reales.
 export const USERS = [
@@ -41,6 +43,7 @@ export const USERS = [
   { user: "costos", pass: "costos2026", nombre: "Costos", role: "costos" },
   { user: "lectura", pass: "lectura2026", nombre: "Lectura", role: "lectura" },
   { user: "kpis", pass: "kpis2026", nombre: "KPIs", role: "kpis" },
+  { user: "facturacion", pass: "facturacion2026", nombre: "Facturación", role: "facturacion" },
 ];
 
 // Devuelve { user, nombre, role } si las credenciales son válidas, o null.

@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
 import { buildCostEngine, DEDUP_TIPOS } from "../lib/costEngine";
@@ -110,6 +110,9 @@ const navSections = [
     { id: "asignaciones", label: "Asignaciones", icon: IC.ClipboardCheck, badge: "Nuevo" },
     { id: "manifiesto", label: "Manifiesto", icon: IC.ClipboardCheck, badge: "Nuevo" },
     { id: "consultas", label: "Consultas", icon: IC.BarChart, badge: "Nuevo" },
+  ]},
+  { label: "FACTURACIÓN", items: [
+    { id: "facturacion", label: "Facturación", icon: IC.Dollar, badge: "Nuevo" },
   ]},
   { label: "SISTEMA", items: [
     { id: "config", label: "Configuración", icon: IC.Settings },
@@ -8408,6 +8411,514 @@ function ModuleConsultas() {
 }
 
 // --- PLACEHOLDER ---
+// ============================================================
+// MÓDULO FACTURACIÓN
+// Carga 3 archivos (Base de datos / Base de facturas / Base de NC), calcula:
+//  · COSTO global por envío = Σ subtotal facturas FLOTILLA PROPIA (no NC) / Σ envíos de la base
+//  · Resumen 1: costos por proveedor (solo Flotilla Propia) + NC de proveedor (independiente)
+//  · Resumen 2: cobranza por cliente (empresa)  · Resumen 3: NC por empresa
+// Persiste en Supabase (fact_envios / fact_facturas / fact_nc) por `periodo` y exporta a Excel.
+// MENSAJERÍA y SEGURIDAD se leen pero NO entran al cálculo de costos (otro centro de costos).
+// ============================================================
+
+const FACT_BUCKETS = ["ADET", "CARRY", "CARRYT", "FAST INTEGRAL", "L EN MOVIMIENTO", "PAQUETE LIT", "RAPIDOS", "VERDE LOGISTICA", "PARTRUNNER", "CONECTAMOS", "OTROS"];
+
+const factNorm = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+const factNum = (v) => {
+  if (typeof v === "number") return isNaN(v) ? 0 : v;
+  const s = String(v ?? "").replace(/[^0-9.\-]/g, "");
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+};
+const factGuessBucket = (raw) => {
+  const n = factNorm(raw);
+  if (!n) return "OTROS";
+  if (n.includes("adet")) return "ADET";
+  if (n.includes("carryt") || n.includes("datatraffic")) return "CARRYT";
+  if (n.includes("carry") || n.includes("empresarial del sur")) return "CARRY";
+  if (n.includes("fast")) return "FAST INTEGRAL";
+  if (n.includes("movimiento") || n.includes("oronzor") || n.includes("alanis")) return "L EN MOVIMIENTO";
+  if (n.includes("paquet")) return "PAQUETE LIT";
+  if (n.includes("rapido") || n.includes("rapidos")) return "RAPIDOS";
+  if (n.includes("verde")) return "VERDE LOGISTICA";
+  if (n.includes("partr")) return "PARTRUNNER";
+  if (n.includes("conectamos")) return "CONECTAMOS";
+  return "OTROS";
+};
+const factFindHeaderRow = (aoa, keywords) => {
+  for (let i = 0; i < Math.min(aoa.length, 20); i++) {
+    const joined = (aoa[i] || []).map(factNorm).join("|");
+    if (keywords.every(k => joined.includes(k))) return i;
+  }
+  return 0;
+};
+const factColIdx = (headerRow, kws) => (headerRow || []).findIndex(h => { const n = factNorm(h); return kws.some(k => n.includes(k)); });
+
+function factParseEnvios(aoa) {
+  const hi = factFindHeaderRow(aoa, ["guia", "empresa", "proveedor"]);
+  const H = aoa[hi] || [];
+  const ci = {
+    guia: factColIdx(H, ["guia"]), pedido: factColIdx(H, ["pedido"]),
+    unidad: factColIdx(H, ["id de unid", "unidad"]), tienda: factColIdx(H, ["tienda"]),
+    empresa: factColIdx(H, ["empresa"]), proveedor: factColIdx(H, ["proveedor"]),
+    fecha: factColIdx(H, ["fecha"]), estatus: factColIdx(H, ["estatus"]),
+    valor: factColIdx(H, ["valor declar"]), peso: factColIdx(H, ["peso"]),
+    seguro: factColIdx(H, ["seguro"]), precioSin: factColIdx(H, ["precio sin"]),
+    precioTotal: factColIdx(H, ["precio tot"]), totalConIva: factColIdx(H, ["total con"]),
+    alcaldia: factColIdx(H, ["alcald"]),
+  };
+  const get = (r, idx) => idx >= 0 ? r[idx] : "";
+  const rows = [];
+  for (let i = hi + 1; i < aoa.length; i++) {
+    const r = aoa[i]; if (!r) continue;
+    const guia = String(get(r, ci.guia) ?? "").trim();
+    if (!guia) continue;
+    rows.push({
+      guia,
+      pedido: String(get(r, ci.pedido) ?? "").trim(),
+      id_unidad: String(get(r, ci.unidad) ?? "").trim(),
+      tienda: String(get(r, ci.tienda) ?? "").trim(),
+      empresa: String(get(r, ci.empresa) ?? "").trim(),
+      proveedor: String(get(r, ci.proveedor) ?? "").trim(),
+      fecha: String(get(r, ci.fecha) ?? "").trim(),
+      estatus: String(get(r, ci.estatus) ?? "").trim(),
+      valor_declarado: factNum(get(r, ci.valor)),
+      peso: factNum(get(r, ci.peso)),
+      seguro: factNum(get(r, ci.seguro)),
+      precio_sin_iva: factNum(get(r, ci.precioSin)),
+      precio_total: factNum(get(r, ci.precioTotal)),
+      total_con_iva: factNum(get(r, ci.totalConIva)),
+      alcaldia: String(get(r, ci.alcaldia) ?? "").trim(),
+      raw: Object.fromEntries(H.map((h, idx) => [h || `col${idx}`, r[idx]])),
+    });
+  }
+  return rows;
+}
+
+function factParseFacturas(aoa) {
+  const hi = factFindHeaderRow(aoa, ["proveedor", "razon", "sub"]);
+  const H = aoa[hi] || [];
+  const ci = {
+    proveedor: factColIdx(H, ["proveedor"]), razon: factColIdx(H, ["razon"]),
+    nar: factColIdx(H, ["nar"]), factura: factColIdx(H, ["no. de factura", "no de factura", "factura"]),
+    subtotal: factColIdx(H, ["sub-total", "subtotal", "sub total"]), iva: factColIdx(H, ["iva"]),
+    ret: factColIdx(H, ["ret"]), neto: factColIdx(H, ["importe neto", "neto"]),
+    concepto: factColIdx(H, ["concepto"]),
+  };
+  const get = (r, idx) => idx >= 0 ? r[idx] : "";
+  let seccion = "FLOTILLA PROPIA";
+  const rows = [];
+  for (let i = hi + 1; i < aoa.length; i++) {
+    const r = aoa[i] || [];
+    const nonEmpty = r.filter(c => String(c ?? "").trim() !== "").length;
+    const joined = factNorm(r.join(" "));
+    if (nonEmpty <= 2) {
+      if (joined.includes("mensajeria")) { seccion = "MENSAJERIA"; continue; }
+      if (joined.includes("seguridad")) { seccion = "SEGURIDAD"; continue; }
+      if (joined.includes("flotilla")) { seccion = "FLOTILLA PROPIA"; continue; }
+      if (nonEmpty === 0) continue;
+    }
+    if (joined.includes("razon social") || joined.includes("no. de factura")) continue; // header repetido
+    const razon = String(get(r, ci.razon) ?? "").trim();
+    const subRaw = get(r, ci.subtotal);
+    if (!razon && (subRaw === "" || subRaw == null)) continue;
+    const concepto = String(get(r, ci.concepto) ?? "").trim();
+    rows.push({
+      seccion,
+      proveedor_codigo: String(get(r, ci.proveedor) ?? "").trim(),
+      razon_social: razon,
+      nar: String(get(r, ci.nar) ?? "").trim(),
+      no_factura: String(get(r, ci.factura) ?? "").trim(),
+      concepto,
+      es_nc: factNorm(concepto).includes("nota de credito"),
+      subtotal: factNum(subRaw),
+      iva: factNum(get(r, ci.iva)),
+      ret_isr: factNum(get(r, ci.ret)),
+      importe_neto: factNum(get(r, ci.neto)),
+      raw: Object.fromEntries(H.map((h, idx) => [h || `col${idx}`, r[idx]])),
+    });
+  }
+  return rows;
+}
+
+function factParseNC(aoa) {
+  const hi = factFindHeaderRow(aoa, ["guia", "costo", "empresa"]);
+  const H = aoa[hi] || [];
+  const ci = {
+    guia: factColIdx(H, ["guia"]), articulo: factColIdx(H, ["articulo"]),
+    costo: factColIdx(H, ["costo"]), idtienda: factColIdx(H, ["id tienda", "tienda"]),
+    empresa: factColIdx(H, ["empresa"]), proveedor: factColIdx(H, ["proveedor"]),
+    motivo: factColIdx(H, ["motivo"]),
+  };
+  const get = (r, idx) => idx >= 0 ? r[idx] : "";
+  const rows = [];
+  for (let i = hi + 1; i < aoa.length; i++) {
+    const r = aoa[i]; if (!r) continue;
+    const guia = String(get(r, ci.guia) ?? "").trim();
+    const empresa = String(get(r, ci.empresa) ?? "").trim();
+    if (!guia && !empresa) continue;
+    rows.push({
+      guia,
+      articulo: String(get(r, ci.articulo) ?? "").trim(),
+      costo: factNum(get(r, ci.costo)),
+      id_tienda: String(get(r, ci.idtienda) ?? "").trim(),
+      empresa,
+      proveedor: String(get(r, ci.proveedor) ?? "").trim(),
+      motivo: String(get(r, ci.motivo) ?? "").trim(),
+      raw: Object.fromEntries(H.map((h, idx) => [h || `col${idx}`, r[idx]])),
+    });
+  }
+  return rows;
+}
+
+const factFmt = (n) => "$" + (Number(n) || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const factFmtInt = (n) => (Number(n) || 0).toLocaleString("es-MX");
+
+function ModuleFacturacion() {
+  const monthDefault = (() => { try { return new Date().toISOString().slice(0, 7); } catch { return ""; } })();
+  const [periodo, setPeriodo] = useState(monthDefault);
+  const [envios, setEnvios] = useState([]);
+  const [facturas, setFacturas] = useState([]);
+  const [nc, setNc] = useState([]);
+  const [fileNames, setFileNames] = useState({ envios: "", facturas: "", nc: "" });
+  const [overrides, setOverrides] = useState({}); // factNorm(rawProveedor) -> bucket
+  const [showMap, setShowMap] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState(null); // { ok, text }
+
+  const handleFile = async (kind, e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setBusy(kind); setMsg(null);
+    try {
+      const XLSX = await import("xlsx");
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(buf), { type: "array", cellDates: false });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: "" });
+      if (!aoa.length) { setMsg({ ok: false, text: "⚠ El archivo está vacío." }); setBusy(""); return; }
+      if (kind === "envios") { const rows = factParseEnvios(aoa); setEnvios(rows); setMsg({ ok: true, text: `✓ Base de datos: ${rows.length} envíos leídos.` }); }
+      else if (kind === "facturas") { const rows = factParseFacturas(aoa); setFacturas(rows); const fp = rows.filter(r => r.seccion === "FLOTILLA PROPIA").length; setMsg({ ok: true, text: `✓ Facturas: ${rows.length} filas (${fp} Flotilla Propia).` }); }
+      else if (kind === "nc") { const rows = factParseNC(aoa); setNc(rows); setMsg({ ok: true, text: `✓ NC: ${rows.length} filas leídas.` }); }
+      setFileNames(p => ({ ...p, [kind]: file.name }));
+    } catch (err) {
+      setMsg({ ok: false, text: "⚠ Error al leer: " + (err?.message || err) });
+    } finally {
+      setBusy(""); if (e.target) e.target.value = "";
+    }
+  };
+
+  const bucketOf = (raw) => overrides[factNorm(raw)] || factGuessBucket(raw);
+
+  // Lista de proveedores crudos detectados (facturas Flotilla Propia + envíos) para el mapeo editable.
+  const rawProviders = useMemo(() => {
+    const m = new Map();
+    facturas.filter(f => f.seccion === "FLOTILLA PROPIA").forEach(f => { if (f.razon_social) m.set(factNorm(f.razon_social), f.razon_social); });
+    envios.forEach(e => { if (e.proveedor) m.set(factNorm(e.proveedor), e.proveedor); });
+    return Array.from(m.entries()).map(([k, label]) => ({ key: k, label })).sort((a, b) => a.label.localeCompare(b.label));
+  }, [facturas, envios]);
+
+  // ---- CÁLCULO PRINCIPAL ----
+  const calc = useMemo(() => {
+    const fp = facturas.filter(f => f.seccion === "FLOTILLA PROPIA");
+    // Resumen 1: por proveedor (bucket)
+    const prov = {}; FACT_BUCKETS.forEach(b => prov[b] = { montoTotal: 0, montoIva: 0, envios: 0, nc: 0 });
+    fp.forEach(f => {
+      const b = bucketOf(f.razon_social);
+      if (!prov[b]) prov[b] = { montoTotal: 0, montoIva: 0, envios: 0, nc: 0 };
+      if (f.es_nc) prov[b].nc += f.subtotal;
+      else { prov[b].montoTotal += f.subtotal; prov[b].montoIva += f.subtotal + f.iva; }
+    });
+    envios.forEach(e => { const b = bucketOf(e.proveedor); if (!prov[b]) prov[b] = { montoTotal: 0, montoIva: 0, envios: 0, nc: 0 }; prov[b].envios += 1; });
+    const totMonto = Object.values(prov).reduce((a, p) => a + p.montoTotal, 0);
+    const totMontoIva = Object.values(prov).reduce((a, p) => a + p.montoIva, 0);
+    const totNc = Object.values(prov).reduce((a, p) => a + p.nc, 0);
+    const totEnvios = envios.length;
+    const costoGlobal = totEnvios > 0 ? totMonto / totEnvios : 0;
+
+    // Resumen 2: cobranza por cliente (empresa)
+    const cob = {};
+    envios.forEach(e => {
+      const k = e.empresa || "(sin empresa)";
+      if (!cob[k]) cob[k] = { guias: 0, sinIva: 0, total: 0 };
+      const sinIva = e.precio_total > 0 ? e.precio_total : (e.total_con_iva > 0 ? e.total_con_iva / 1.16 : 0);
+      cob[k].guias += 1; cob[k].sinIva += sinIva; cob[k].total += e.total_con_iva;
+    });
+
+    // Resumen 3: NC por empresa
+    const ncByEmp = {};
+    nc.forEach(n => { const k = n.empresa || "(sin empresa)"; if (!ncByEmp[k]) ncByEmp[k] = { costo: 0, guias: 0 }; ncByEmp[k].costo += n.costo; ncByEmp[k].guias += 1; });
+
+    return { prov, totMonto, totMontoIva, totNc, totEnvios, costoGlobal, cob, ncByEmp };
+  }, [facturas, envios, nc, overrides]);
+
+  const provRows = FACT_BUCKETS.filter(b => calc.prov[b] && (calc.prov[b].montoTotal || calc.prov[b].envios || calc.prov[b].nc));
+  const cobRows = Object.entries(calc.cob).sort((a, b) => b[1].total - a[1].total);
+  const ncRows = Object.entries(calc.ncByEmp).sort((a, b) => b[1].costo - a[1].costo);
+  const cobTot = cobRows.reduce((a, [, v]) => ({ guias: a.guias + v.guias, sinIva: a.sinIva + v.sinIva, total: a.total + v.total }), { guias: 0, sinIva: 0, total: 0 });
+  const ncTot = ncRows.reduce((a, [, v]) => ({ costo: a.costo + v.costo, guias: a.guias + v.guias }), { costo: 0, guias: 0 });
+
+  // ---- GUARDAR EN SUPABASE ----
+  const guardar = async () => {
+    if (!periodo.trim()) { setMsg({ ok: false, text: "⚠ Escribe un periodo antes de guardar." }); return; }
+    if (!envios.length && !facturas.length && !nc.length) { setMsg({ ok: false, text: "⚠ Carga al menos un archivo." }); return; }
+    setBusy("save"); setMsg(null);
+    const per = periodo.trim();
+    try {
+      const tableErr = (err) => {
+        const em = (err.message || "").toLowerCase();
+        if (em.includes("does not exist") || err.code === "42P01" || em.includes("could not find the table") || em.includes("schema cache"))
+          return "⚠ Faltan las tablas en Supabase. Corre supabase_facturacion.sql y reintenta.";
+        return "⚠ Error al guardar: " + err.message;
+      };
+      const pushBatches = async (table, rows) => {
+        await supabase.from(table).delete().eq("periodo", per);
+        for (let i = 0; i < rows.length; i += 500) {
+          const { error } = await supabase.from(table).insert(rows.slice(i, i + 500));
+          if (error) throw error;
+        }
+      };
+      if (envios.length) {
+        const rows = envios.map(e => ({ periodo: per, guia: e.guia, pedido: e.pedido, id_unidad: e.id_unidad, tienda: e.tienda, empresa: e.empresa, proveedor: e.proveedor, bucket: bucketOf(e.proveedor), fecha: e.fecha, estatus: e.estatus, valor_declarado: e.valor_declarado, costo: calc.costoGlobal, peso: e.peso, seguro: e.seguro, precio_sin_iva: e.precio_sin_iva, precio_total: e.precio_total, total_con_iva: e.total_con_iva, alcaldia: e.alcaldia, raw: e.raw }));
+        await pushBatches("fact_envios", rows);
+      }
+      if (facturas.length) {
+        const rows = facturas.map(f => ({ periodo: per, seccion: f.seccion, proveedor_codigo: f.proveedor_codigo, razon_social: f.razon_social, bucket: f.seccion === "FLOTILLA PROPIA" ? bucketOf(f.razon_social) : null, nar: f.nar, no_factura: f.no_factura, concepto: f.concepto, es_nc: f.es_nc, subtotal: f.subtotal, iva: f.iva, ret_isr: f.ret_isr, importe_neto: f.importe_neto, raw: f.raw }));
+        await pushBatches("fact_facturas", rows);
+      }
+      if (nc.length) {
+        const rows = nc.map(n => ({ periodo: per, guia: n.guia, articulo: n.articulo, costo: n.costo, id_tienda: n.id_tienda, empresa: n.empresa, proveedor: n.proveedor, motivo: n.motivo, raw: n.raw }));
+        await pushBatches("fact_nc", rows);
+      }
+      setMsg({ ok: true, text: `✓ Guardado en Supabase para el periodo "${per}".` });
+    } catch (err) {
+      setMsg({ ok: false, text: typeof err === "object" && err.message ? ((err.message || "").toLowerCase().includes("does not exist") || err.code === "42P01" || (err.message || "").toLowerCase().includes("schema cache") || (err.message || "").toLowerCase().includes("could not find the table") ? "⚠ Faltan las tablas en Supabase. Corre supabase_facturacion.sql y reintenta." : "⚠ Error al guardar: " + err.message) : "⚠ Error al guardar." });
+    } finally { setBusy(""); }
+  };
+
+  // ---- EXPORTAR A EXCEL ----
+  const exportar = async () => {
+    setBusy("export");
+    try {
+      const XLSX = await import("xlsx");
+      const wb = XLSX.utils.book_new();
+      // Resumen proveedor
+      const s1 = provRows.map(b => ({ Proveedor: b, "Monto total": calc.prov[b].montoTotal, "Monto con IVA": calc.prov[b].montoIva, "Envíos": calc.prov[b].envios, "Costo x envío": calc.prov[b].envios ? calc.prov[b].montoTotal / calc.prov[b].envios : 0, "NC proveedor": calc.prov[b].nc }));
+      s1.push({ Proveedor: "TOTAL", "Monto total": calc.totMonto, "Monto con IVA": calc.totMontoIva, "Envíos": calc.totEnvios, "Costo x envío": calc.costoGlobal, "NC proveedor": calc.totNc });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(s1), "Costos proveedor");
+      // Cobranza
+      const s2 = cobRows.map(([k, v]) => ({ Empresa: k, Guías: v.guias, "Monto sin IVA": v.sinIva, IVA: v.total - v.sinIva, Total: v.total }));
+      s2.push({ Empresa: "Total general", Guías: cobTot.guias, "Monto sin IVA": cobTot.sinIva, IVA: cobTot.total - cobTot.sinIva, Total: cobTot.total });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(s2), "Cobranza cliente");
+      // NC por empresa
+      const s3 = ncRows.map(([k, v]) => ({ Empresa: k, "Guías NC": v.guias, "Suma de Costo": v.costo }));
+      s3.push({ Empresa: "Total general", "Guías NC": ncTot.guias, "Suma de Costo": ncTot.costo });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(s3), "NC por empresa");
+      // Base de datos con COSTO
+      if (envios.length) {
+        const sb = envios.map(e => ({ GUIA: e.guia, PEDIDO: e.pedido, "ID DE UNIDAD": e.id_unidad, TIENDA: e.tienda, EMPRESA: e.empresa, PROVEEDOR: e.proveedor, FECHA: e.fecha, ESTATUS: e.estatus, "VALOR DECLARADO": e.valor_declarado, COSTO: calc.costoGlobal, PESO: e.peso, SEGURO: e.seguro, "PRECIO SIN IVA": e.precio_sin_iva, "PRECIO TOTAL": e.precio_total, "TOTAL CON IVA": e.total_con_iva, ALCALDIA: e.alcaldia }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sb), "Base de datos");
+      }
+      if (facturas.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(facturas.map(({ raw, ...r }) => r)), "Facturas");
+      if (nc.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(nc.map(({ raw, ...r }) => r)), "NC");
+      XLSX.writeFile(wb, `Facturacion_${(periodo || "periodo").replace(/[^\w\-]/g, "_")}.xlsx`);
+    } catch (err) {
+      setMsg({ ok: false, text: "⚠ Error al exportar: " + (err?.message || err) });
+    } finally { setBusy(""); }
+  };
+
+  const hayDatos = envios.length || facturas.length || nc.length;
+  const upBtn = (kind, label) => (
+    <label style={{ flex: 1, minWidth: 220, padding: "16px 18px", borderRadius: 10, border: `1px dashed ${C.border}`, background: C.panelAlt, cursor: busy ? "default" : "pointer", display: "block" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 11, color: fileNames[kind] ? C.green : C.textMuted }}>{busy === kind ? "Procesando…" : (fileNames[kind] || "Seleccionar .xlsx / .csv")}</div>
+      <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => handleFile(kind, e)} disabled={!!busy} style={{ display: "none" }} />
+    </label>
+  );
+
+  const th = { padding: "9px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.03em", whiteSpace: "nowrap" };
+  const thR = { ...th, textAlign: "right" };
+  const td = { padding: "9px 12px", fontSize: 13, color: C.text };
+  const tdR = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
+  const card = { background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 18 };
+  const cardHead = (t, sub) => (
+    <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
+      <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{t}</div>
+      {sub && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 18 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Facturación</h1>
+        <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Base de datos · Base de facturas · Base de NC → costos por proveedor, cobranza por cliente y NC por empresa</p>
+      </div>
+
+      {/* Carga */}
+      <div style={{ ...card, padding: 18 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+          {upBtn("envios", "1 · Base de datos (envíos)")}
+          {upBtn("facturas", "2 · Base de facturas")}
+          {upBtn("nc", "3 · Base de NC")}
+        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Periodo</div>
+            <input value={periodo} onChange={e => setPeriodo(e.target.value)} placeholder="2026-06"
+              style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 13, width: 140 }} />
+          </div>
+          <button onClick={guardar} disabled={!!busy || !hayDatos}
+            style={{ padding: "10px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontSize: 13, fontWeight: 700, cursor: busy || !hayDatos ? "default" : "pointer", opacity: busy || !hayDatos ? 0.5 : 1, alignSelf: "flex-end" }}>
+            {busy === "save" ? "Guardando…" : "Guardar en Supabase"}
+          </button>
+          <button onClick={exportar} disabled={!!busy || !hayDatos}
+            style={{ padding: "10px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 13, fontWeight: 700, cursor: busy || !hayDatos ? "default" : "pointer", opacity: busy || !hayDatos ? 0.5 : 1, alignSelf: "flex-end" }}>
+            {busy === "export" ? "Exportando…" : "Exportar Excel"}
+          </button>
+          {rawProviders.length > 0 && (
+            <button onClick={() => setShowMap(s => !s)}
+              style={{ padding: "10px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", alignSelf: "flex-end" }}>
+              {showMap ? "Ocultar" : "Mapeo proveedores"} ({rawProviders.length})
+            </button>
+          )}
+        </div>
+        {msg && <div style={{ marginTop: 12, fontSize: 13, fontWeight: 600, color: msg.ok ? C.green : C.red }}>{msg.text}</div>}
+      </div>
+
+      {/* Mapeo de proveedores */}
+      {showMap && rawProviders.length > 0 && (
+        <div style={card}>
+          {cardHead("Mapeo de proveedores → proveedor canónico", "Ajusta si algún proveedor de la base o de facturas quedó en el bucket equivocado")}
+          <div style={{ padding: 12, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8 }}>
+            {rawProviders.map(p => (
+              <div key={p.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                <span style={{ flex: 1, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={p.label}>{p.label}</span>
+                <select value={bucketOf(p.label)} onChange={e => setOverrides(o => ({ ...o, [p.key]: e.target.value }))}
+                  style={{ padding: "5px 8px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 12 }}>
+                  {FACT_BUCKETS.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!hayDatos ? (
+        <div style={{ ...card, padding: 40, textAlign: "center", color: C.textMuted, fontSize: 13 }}>
+          Carga los 3 archivos para ver los resúmenes. La columna <strong>COSTO</strong> se calcula como el monto total de facturas de Flotilla Propia entre el número de envíos de la base.
+        </div>
+      ) : (
+        <>
+          {/* KPIs */}
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+            {[
+              { label: "Costo global x envío", value: factFmt(calc.costoGlobal), sub: `${factFmtInt(calc.totEnvios)} envíos · Flotilla Propia` },
+              { label: "Monto facturas Flotilla Propia", value: factFmt(calc.totMonto), sub: `con IVA ${factFmt(calc.totMontoIva)}` },
+              { label: "NC proveedores (informativo)", value: factFmt(calc.totNc), sub: "no se resta (lo hace finanzas)" },
+              { label: "Cobranza total con IVA", value: factFmt(cobTot.total), sub: `${factFmtInt(cobTot.guias)} guías` },
+              { label: "NC a cliente (Σ costo)", value: factFmt(ncTot.costo), sub: `${factFmtInt(ncTot.guias)} guías` },
+            ].map((k, i) => (
+              <div key={i} style={{ flex: 1, minWidth: 180, background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: "16px 18px" }}>
+                <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, marginBottom: 8 }}>{k.label}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: C.text, letterSpacing: "-0.02em" }}>{k.value}</div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{k.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Resumen 1: costos por proveedor */}
+          <div style={card}>
+            {cardHead("Costos por proveedor — Flotilla Propia", "Mensajería y Seguridad no se incluyen (otro centro de costos)")}
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+                <thead><tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                  <th style={th}>Proveedor</th><th style={thR}>Monto total</th><th style={thR}>Monto con IVA</th><th style={thR}>Envíos</th><th style={thR}>Costo x envío</th><th style={thR}>NC proveedor</th>
+                </tr></thead>
+                <tbody>
+                  {provRows.map(b => { const p = calc.prov[b]; return (
+                    <tr key={b} style={{ borderBottom: `1px solid ${C.border}` }}>
+                      <td style={{ ...td, fontWeight: 600 }}>{b}</td>
+                      <td style={tdR}>{factFmt(p.montoTotal)}</td>
+                      <td style={tdR}>{factFmt(p.montoIva)}</td>
+                      <td style={tdR}>{factFmtInt(p.envios)}</td>
+                      <td style={tdR}>{p.envios ? factFmt(p.montoTotal / p.envios) : "—"}</td>
+                      <td style={{ ...tdR, color: p.nc ? C.yellow : C.textMuted }}>{factFmt(p.nc)}</td>
+                    </tr>
+                  ); })}
+                  <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 800 }}>
+                    <td style={{ ...td, fontWeight: 800 }}>TOTAL</td>
+                    <td style={tdR}>{factFmt(calc.totMonto)}</td>
+                    <td style={tdR}>{factFmt(calc.totMontoIva)}</td>
+                    <td style={tdR}>{factFmtInt(calc.totEnvios)}</td>
+                    <td style={tdR}>{factFmt(calc.costoGlobal)}</td>
+                    <td style={tdR}>{factFmt(calc.totNc)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Resumen 2: cobranza por cliente */}
+          <div style={card}>
+            {cardHead("Cobranza por cliente", "Calculado desde la Base de datos por EMPRESA")}
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
+                <thead><tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                  <th style={th}>Empresa</th><th style={thR}>Guías</th><th style={thR}>Monto sin IVA</th><th style={thR}>IVA</th><th style={thR}>Total</th>
+                </tr></thead>
+                <tbody>
+                  {cobRows.map(([k, v]) => (
+                    <tr key={k} style={{ borderBottom: `1px solid ${C.border}` }}>
+                      <td style={{ ...td, fontWeight: 600 }}>{k}</td>
+                      <td style={tdR}>{factFmtInt(v.guias)}</td>
+                      <td style={tdR}>{factFmt(v.sinIva)}</td>
+                      <td style={tdR}>{factFmt(v.total - v.sinIva)}</td>
+                      <td style={tdR}>{factFmt(v.total)}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 800 }}>
+                    <td style={{ ...td, fontWeight: 800 }}>Total general</td>
+                    <td style={tdR}>{factFmtInt(cobTot.guias)}</td>
+                    <td style={tdR}>{factFmt(cobTot.sinIva)}</td>
+                    <td style={tdR}>{factFmt(cobTot.total - cobTot.sinIva)}</td>
+                    <td style={tdR}>{factFmt(cobTot.total)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Resumen 3: NC por empresa */}
+          <div style={card}>
+            {cardHead("NC por empresa", "Suma de Costo de la Base de NC")}
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 420 }}>
+                <thead><tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                  <th style={th}>Empresa</th><th style={thR}>Guías NC</th><th style={thR}>Suma de Costo</th>
+                </tr></thead>
+                <tbody>
+                  {ncRows.map(([k, v]) => (
+                    <tr key={k} style={{ borderBottom: `1px solid ${C.border}` }}>
+                      <td style={{ ...td, fontWeight: 600 }}>{k}</td>
+                      <td style={tdR}>{factFmtInt(v.guias)}</td>
+                      <td style={tdR}>{factFmt(v.costo)}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 800 }}>
+                    <td style={{ ...td, fontWeight: 800 }}>Total general</td>
+                    <td style={tdR}>{factFmtInt(ncTot.guias)}</td>
+                    <td style={tdR}>{factFmt(ncTot.costo)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ModulePlaceholder({ title, desc }) {
   return (
     <div>
@@ -8479,6 +8990,7 @@ export default function T1OpsFlotilla({ user, onLogout }) {
       case "asignaciones": return <ModuleAsignaciones />;
       case "manifiesto": return <ModuleManifiesto />;
       case "consultas": return <ModuleConsultas />;
+      case "facturacion": return <ModuleFacturacion />;
       case "config": return <ModulePlaceholder title="Configuración" desc="Ajustes del sistema" />;
       default: return <ModuleDashboard />;
     }
