@@ -8454,45 +8454,47 @@ const factFindHeaderRow = (aoa, keywords) => {
 };
 const factColIdx = (headerRow, kws) => (headerRow || []).findIndex(h => { const n = factNorm(h); return kws.some(k => n.includes(k)); });
 
-function factParseEnvios(aoa) {
-  const hi = factFindHeaderRow(aoa, ["guia", "empresa", "proveedor"]);
-  const H = aoa[hi] || [];
-  const ci = {
-    guia: factColIdx(H, ["guia"]), pedido: factColIdx(H, ["pedido"]),
-    unidad: factColIdx(H, ["id de unid", "unidad"]), tienda: factColIdx(H, ["tienda"]),
-    empresa: factColIdx(H, ["empresa"]), proveedor: factColIdx(H, ["proveedor"]),
-    fecha: factColIdx(H, ["fecha"]), estatus: factColIdx(H, ["estatus"]),
-    valor: factColIdx(H, ["valor declar"]), peso: factColIdx(H, ["peso"]),
-    seguro: factColIdx(H, ["seguro"]), precioSin: factColIdx(H, ["precio sin"]),
-    precioTotal: factColIdx(H, ["precio tot"]), totalConIva: factColIdx(H, ["total con"]),
-    alcaldia: factColIdx(H, ["alcald"]),
+// Busca el encabezado real cuyo nombre cumple todas las palabras `all` y ninguna
+// de `not`. Devuelve la cadena del header (no un índice) → a prueba de posición.
+const factFindKey = (headers, all, not) => headers.find(h => {
+  const n = factNorm(h);
+  return all.every(k => n.includes(k)) && (!not || !not.some(k => n.includes(k)));
+});
+
+// Recibe filas como OBJETOS (sheet_to_json con range=encabezado): leemos por
+// nombre de columna, lo que evita el desalineo por posición que hacía que
+// "PRECIO TOTAL" cayera sobre la columna de IVA.
+function factParseEnvios(json) {
+  const H = Object.keys(json[0] || {});
+  const col = {
+    guia: factFindKey(H, ["guia"]), pedido: factFindKey(H, ["pedido"]),
+    id_unidad: factFindKey(H, ["id", "unid"]) || factFindKey(H, ["unidad"]),
+    tienda: factFindKey(H, ["tienda"]), empresa: factFindKey(H, ["empresa"]),
+    proveedor: factFindKey(H, ["proveedor"]), fecha: factFindKey(H, ["fecha"]),
+    estatus: factFindKey(H, ["estatus"]), valor_declarado: factFindKey(H, ["valor", "declar"]) || factFindKey(H, ["valor"]),
+    peso: factFindKey(H, ["peso"]), seguro: factFindKey(H, ["seguro"]),
+    precio_sin_iva: factFindKey(H, ["precio", "sin"]),
+    precio_total: factFindKey(H, ["precio", "total"], ["iva"]),
+    total_con_iva: factFindKey(H, ["total", "iva"], ["precio"]) || factFindKey(H, ["total", "con"]),
+    alcaldia: factFindKey(H, ["alcald"]),
   };
-  const get = (r, idx) => idx >= 0 ? r[idx] : "";
+  const s = (r, k) => k ? String(r[k] ?? "").trim() : "";
+  const n = (r, k) => k ? factNum(r[k]) : 0;
   const rows = [];
-  for (let i = hi + 1; i < aoa.length; i++) {
-    const r = aoa[i]; if (!r) continue;
-    const guia = String(get(r, ci.guia) ?? "").trim();
+  for (const r of json) {
+    const guia = s(r, col.guia);
     if (!guia) continue;
     rows.push({
-      guia,
-      pedido: String(get(r, ci.pedido) ?? "").trim(),
-      id_unidad: String(get(r, ci.unidad) ?? "").trim(),
-      tienda: String(get(r, ci.tienda) ?? "").trim(),
-      empresa: String(get(r, ci.empresa) ?? "").trim(),
-      proveedor: String(get(r, ci.proveedor) ?? "").trim(),
-      fecha: String(get(r, ci.fecha) ?? "").trim(),
-      estatus: String(get(r, ci.estatus) ?? "").trim(),
-      valor_declarado: factNum(get(r, ci.valor)),
-      peso: factNum(get(r, ci.peso)),
-      seguro: factNum(get(r, ci.seguro)),
-      precio_sin_iva: factNum(get(r, ci.precioSin)),
-      precio_total: factNum(get(r, ci.precioTotal)),
-      total_con_iva: factNum(get(r, ci.totalConIva)),
-      alcaldia: String(get(r, ci.alcaldia) ?? "").trim(),
-      raw: Object.fromEntries(H.map((h, idx) => [h || `col${idx}`, r[idx]])),
+      guia, pedido: s(r, col.pedido), id_unidad: s(r, col.id_unidad),
+      tienda: s(r, col.tienda), empresa: s(r, col.empresa), proveedor: s(r, col.proveedor),
+      fecha: s(r, col.fecha), estatus: s(r, col.estatus),
+      valor_declarado: n(r, col.valor_declarado), peso: n(r, col.peso), seguro: n(r, col.seguro),
+      precio_sin_iva: n(r, col.precio_sin_iva), precio_total: n(r, col.precio_total),
+      total_con_iva: n(r, col.total_con_iva), alcaldia: s(r, col.alcaldia),
+      raw: r,
     });
   }
-  return rows;
+  return { rows, col };
 }
 
 function factParseFacturas(aoa) {
@@ -8541,34 +8543,26 @@ function factParseFacturas(aoa) {
   return rows;
 }
 
-function factParseNC(aoa) {
-  const hi = factFindHeaderRow(aoa, ["guia", "costo", "empresa"]);
-  const H = aoa[hi] || [];
-  const ci = {
-    guia: factColIdx(H, ["guia"]), articulo: factColIdx(H, ["articulo"]),
-    costo: factColIdx(H, ["costo"]), idtienda: factColIdx(H, ["id tienda", "tienda"]),
-    empresa: factColIdx(H, ["empresa"]), proveedor: factColIdx(H, ["proveedor"]),
-    motivo: factColIdx(H, ["motivo"]),
+function factParseNC(json) {
+  const H = Object.keys(json[0] || {});
+  const col = {
+    guia: factFindKey(H, ["guia"]), articulo: factFindKey(H, ["articulo"]),
+    costo: factFindKey(H, ["costo"]), id_tienda: factFindKey(H, ["id", "tienda"]) || factFindKey(H, ["tienda"]),
+    empresa: factFindKey(H, ["empresa"]), proveedor: factFindKey(H, ["proveedor"]),
+    motivo: factFindKey(H, ["motivo"]),
   };
-  const get = (r, idx) => idx >= 0 ? r[idx] : "";
+  const s = (r, k) => k ? String(r[k] ?? "").trim() : "";
   const rows = [];
-  for (let i = hi + 1; i < aoa.length; i++) {
-    const r = aoa[i]; if (!r) continue;
-    const guia = String(get(r, ci.guia) ?? "").trim();
-    const empresa = String(get(r, ci.empresa) ?? "").trim();
+  for (const r of json) {
+    const guia = s(r, col.guia), empresa = s(r, col.empresa);
     if (!guia && !empresa) continue;
     rows.push({
-      guia,
-      articulo: String(get(r, ci.articulo) ?? "").trim(),
-      costo: factNum(get(r, ci.costo)),
-      id_tienda: String(get(r, ci.idtienda) ?? "").trim(),
-      empresa,
-      proveedor: String(get(r, ci.proveedor) ?? "").trim(),
-      motivo: String(get(r, ci.motivo) ?? "").trim(),
-      raw: Object.fromEntries(H.map((h, idx) => [h || `col${idx}`, r[idx]])),
+      guia, articulo: s(r, col.articulo), costo: col.costo ? factNum(r[col.costo]) : 0,
+      id_tienda: s(r, col.id_tienda), empresa, proveedor: s(r, col.proveedor), motivo: s(r, col.motivo),
+      raw: r,
     });
   }
-  return rows;
+  return { rows, col };
 }
 
 const factFmt = (n) => "$" + (Number(n) || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -8652,6 +8646,7 @@ function ModuleFacturacion() {
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState(null); // { ok, text }
   const [tab, setTab] = useState("resumen"); // resumen | envios | nc
+  const [detected, setDetected] = useState({}); // { envios: {campo: header}, nc: {...} }
 
   const handleFile = async (kind, e) => {
     const file = e.target.files?.[0]; if (!file) return;
@@ -8663,9 +8658,23 @@ function ModuleFacturacion() {
       const ws = wb.Sheets[wb.SheetNames[0]];
       const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: "" });
       if (!aoa.length) { setMsg({ ok: false, text: "⚠ El archivo está vacío." }); setBusy(""); return; }
-      if (kind === "envios") { const rows = factParseEnvios(aoa); setEnvios(rows); setMsg({ ok: true, text: `✓ Base de datos: ${rows.length} envíos leídos.` }); }
-      else if (kind === "facturas") { const rows = factParseFacturas(aoa); setFacturas(rows); const fp = rows.filter(r => r.seccion === "FLOTILLA PROPIA").length; setMsg({ ok: true, text: `✓ Facturas: ${rows.length} filas (${fp} Flotilla Propia).` }); }
-      else if (kind === "nc") { const rows = factParseNC(aoa); setNc(rows); setMsg({ ok: true, text: `✓ NC: ${rows.length} filas leídas.` }); }
+      if (kind === "envios") {
+        const hi = factFindHeaderRow(aoa, ["guia", "empresa", "proveedor"]);
+        const json = XLSX.utils.sheet_to_json(ws, { range: hi, defval: "" });
+        const { rows, col } = factParseEnvios(json);
+        setEnvios(rows); setDetected(p => ({ ...p, envios: col }));
+        setMsg({ ok: true, text: `✓ Base de datos: ${rows.length} envíos leídos.` });
+      } else if (kind === "facturas") {
+        const rows = factParseFacturas(aoa); setFacturas(rows);
+        const fp = rows.filter(r => r.seccion === "FLOTILLA PROPIA").length;
+        setMsg({ ok: true, text: `✓ Facturas: ${rows.length} filas (${fp} Flotilla Propia).` });
+      } else if (kind === "nc") {
+        const hi = factFindHeaderRow(aoa, ["guia", "costo", "empresa"]);
+        const json = XLSX.utils.sheet_to_json(ws, { range: hi, defval: "" });
+        const { rows, col } = factParseNC(json);
+        setNc(rows); setDetected(p => ({ ...p, nc: col }));
+        setMsg({ ok: true, text: `✓ NC: ${rows.length} filas leídas.` });
+      }
       setFileNames(p => ({ ...p, [kind]: file.name }));
     } catch (err) {
       setMsg({ ok: false, text: "⚠ Error al leer: " + (err?.message || err) });
@@ -8825,6 +8834,18 @@ function ModuleFacturacion() {
     </label>
   );
 
+  // Muestra a qué encabezado real del Excel se mapeó cada campo (verde = encontrado, rojo = no)
+  const detCols = (kind, labels) => detected[kind] ? (
+    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12, padding: "10px 14px", background: C.panelAlt, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 11 }}>
+      <span style={{ color: C.textMuted, fontWeight: 700 }}>Columnas detectadas:</span>
+      {labels.map(([f, l]) => (
+        <span key={f} style={{ color: C.textMuted }}>
+          {l} → <strong style={{ color: detected[kind][f] ? C.green : C.red }}>{detected[kind][f] || "no encontrada"}</strong>
+        </span>
+      ))}
+    </div>
+  ) : null;
+
   const th = { padding: "9px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.03em", whiteSpace: "nowrap" };
   const thR = { ...th, textAlign: "right" };
   const td = { padding: "9px 12px", fontSize: 13, color: C.text };
@@ -8904,11 +8925,17 @@ function ModuleFacturacion() {
       </div>
 
       {tab === "envios" && (
-        <FactDataTable title="Base de datos — Envíos" sub={`${envios.length.toLocaleString("es-MX")} envíos · COSTO global ${factFmt(calc.costoGlobal)} (sin IVA) aplicado a cada guía`} columns={envCols} rows={enviosView} />
+        <>
+          {detCols("envios", [["precio_total", "PRECIO TOTAL (→ ingreso sin IVA)"], ["total_con_iva", "TOTAL CON IVA"], ["precio_sin_iva", "PRECIO SIN IVA"], ["seguro", "SEGURO"], ["valor_declarado", "VALOR DECL."]])}
+          <FactDataTable title="Base de datos — Envíos" sub={`${envios.length.toLocaleString("es-MX")} envíos · COSTO global ${factFmt(calc.costoGlobal)} (sin IVA) aplicado a cada guía`} columns={envCols} rows={enviosView} />
+        </>
       )}
 
       {tab === "nc" && (
-        <FactDataTable title="Base de datos — Notas de Crédito" sub={`${nc.length.toLocaleString("es-MX")} guías · Suma de Costo ${factFmt(ncTot.costo)}`} columns={ncCols} rows={nc} />
+        <>
+          {detCols("nc", [["guia", "GUIA"], ["costo", "COSTO"], ["empresa", "EMPRESA"], ["motivo", "MOTIVO"]])}
+          <FactDataTable title="Base de datos — Notas de Crédito" sub={`${nc.length.toLocaleString("es-MX")} guías · Suma de Costo ${factFmt(ncTot.costo)}`} columns={ncCols} rows={nc} />
+        </>
       )}
 
       {tab === "resumen" && (!hayDatos ? (
