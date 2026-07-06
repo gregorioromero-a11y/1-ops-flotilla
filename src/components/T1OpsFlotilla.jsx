@@ -499,6 +499,8 @@ function KpiLineChart({ data, series, leftMax, rightMax, leftFmt, rightFmt, left
 }
 
 // --- DASHBOARD ---
+// Caché en memoria de los KPIs de flotilla (persiste entre navegaciones al módulo).
+let _kpiFlotCache = null; // { ts, resumen, dias, flotMissing }
 function ModuleKpis() {
   const [subtab, setSubtab] = useState("flotilla"); // "flotilla" | "mensajeria"
   const [loading, setLoading] = useState(true);
@@ -508,11 +510,12 @@ function ModuleKpis() {
 
   useEffect(() => { loadFlotilla(); }, []);
 
-  const fetchAll = async (table, cols) => {
+  // Pagina una query ya construida (thunk que devuelve un builder nuevo cada vez).
+  const fetchAllQ = async (build) => {
     let all = [], from = 0; const size = 1000;
     while (true) {
-      const { data, error } = await supabase.from(table).select(cols).range(from, from + size - 1);
-      if (error) { console.error(`[Kpis] ${table} error:`, error); break; }
+      const { data, error } = await build().range(from, from + size - 1);
+      if (error) { console.error("[Kpis] fetch error:", error); break; }
       if (!data || data.length === 0) break;
       all = all.concat(data);
       if (data.length < size) break;
@@ -521,14 +524,43 @@ function ModuleKpis() {
     return all;
   };
 
-  const loadFlotilla = async () => {
+  const loadFlotilla = async (force = false) => {
+    // Caché en memoria (TTL 5 min): volver a entrar al módulo no re-descarga.
+    if (!force && _kpiFlotCache && (Date.now() - _kpiFlotCache.ts) < 300000) {
+      setResumen(_kpiFlotCache.resumen); setDias(_kpiFlotCache.dias);
+      setFlotMissing(_kpiFlotCache.flotMissing); setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      // 1) Costo real por día (motor rutas × asistencia × tarifas) con dedup.
+      // 1) Agregación por día en el SERVIDOR (RPC). Devuelve ~40 filas ya sumadas
+      //    (entregas 360 / devoluciones 123 / a-tiempo). Evita bajar las 174k órdenes
+      //    y con los índices no hace timeout.
+      const { data: agg, error: aggErr } = await supabase.rpc("kpi_flotilla_por_dia", { dias_ventana: 40 });
+      if (aggErr) {
+        const em = (aggErr.message || "").toLowerCase();
+        if (em.includes("kpi_flotilla_por_dia") || em.includes("could not find the function") || aggErr.code === "PGRST202" || em.includes("does not exist")) {
+          _kpiFlotCache = { ts: Date.now(), resumen: null, dias: [], flotMissing: "needindex" };
+          setFlotMissing("needindex"); setResumen(null); setDias([]); setLoading(false); return;
+        }
+        console.error("[Kpis] rpc error:", aggErr);
+      }
+      if (!agg || !agg.length) {
+        _kpiFlotCache = { ts: Date.now(), resumen: null, dias: [], flotMissing: "empty" };
+        setFlotMissing("empty"); setResumen(null); setDias([]); setLoading(false); return;
+      }
+      setFlotMissing(null);
+
+      // 2) Costo por día desde `rutas` (motor rutas × asistencia × tarifas), acotado
+      //    al mismo rango que el agregado (ancla = día más reciente del RPC).
+      const cutoff = new Date(String(agg[0].fecha).substring(0, 10) + "T00:00:00"); cutoff.setDate(cutoff.getDate() - 40);
+      const cutoffDate = cutoff.toISOString().substring(0, 10);
       const [rutas, asistencia, carriers] = await Promise.all([
-        fetchAll("rutas", "fecha_registro, fecha_salida, recolecciones, tipo_ruta, operador, carrier, penalizacion, entregados"),
-        fetchAll("asistencia", "*"),
-        fetchAll("carriers", "*"),
+        fetchAllQ(() => supabase.from("rutas")
+          .select("fecha_registro, fecha_salida, recolecciones, tipo_ruta, operador, carrier, penalizacion, entregados")
+          .or(`fecha_registro.gte.${cutoffDate},fecha_salida.gte.${cutoffDate}`)),
+        fetchAllQ(() => supabase.from("asistencia").select("id, fecha, nombre_operador, proveedor, tipo_unidad")),
+        fetchAllQ(() => supabase.from("carriers").select("*")),
       ]);
       const engine = buildCostEngine(asistencia, carriers);
       const nrm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
@@ -545,57 +577,17 @@ function ModuleKpis() {
         if (f) costoPorDia[f] = (costoPorDia[f] || 0) + cc;
       });
 
-      // 2) Órdenes de flotilla (performance + denominador del costo).
-      let ordenes = [], from = 0; const size = 1000; let missing = false;
-      while (true) {
-        const { data, error } = await supabase.from("flotilla_ordenes")
-          .select("estatus, fecha_promesa, fecha_entrega").order("tracking", { ascending: true }).range(from, from + size - 1);
-        if (error) {
-          const em = (error.message || "").toLowerCase();
-          if (em.includes("does not exist") || error.code === "42P01" || em.includes("could not find the table") || em.includes("schema cache")) missing = true;
-          else console.error("[Kpis] flotilla_ordenes error:", error);
-          break;
-        }
-        if (!data || !data.length) break;
-        ordenes = ordenes.concat(data);
-        if (data.length < size) break;
-        from += size;
-      }
-      if (missing) { setFlotMissing("missing"); setResumen(null); setDias([]); setLoading(false); return; }
-      if (!ordenes.length) { setFlotMissing("empty"); setResumen(null); setDias([]); setLoading(false); return; }
-      setFlotMissing(null);
-
-      // Estatus: 360 = entregado al cliente, 123 = devuelto.
-      // TODAS las métricas usan la misma base por día = entregas (360) + devoluciones
-      // (123), agrupadas por el DÍA DEL EVENTO (fecha de entrega), para que cuadren
-      // con el costo del día. Órdenes en tránsito (sin 360/123) no cuentan.
-      const es360 = s => { const x = (s || "").toLowerCase(); return x.startsWith("360") || x.includes("entregad"); };
-      const es123 = s => { const x = (s || "").toLowerCase(); return x.startsWith("123") || x.includes("devuel") || x.includes("devolu"); };
-      const byDay = {};
-      ordenes.forEach(o => {
-        const e = es360(o.estatus), dev = es123(o.estatus);
-        if (!e && !dev) return; // solo entregas/devoluciones
-        // Día del evento: entregados → fecha de entrega; devueltos (sin fecha de
-        // entrega) → fecha promesa como proxy del día resuelto.
-        const fEvent = ((o.fecha_entrega || (dev ? o.fecha_promesa : "")) || "").substring(0, 10);
-        if (!fEvent) return;
-        const d = byDay[fEvent] || (byDay[fEvent] = { fecha: fEvent, e360: 0, d123: 0, onTimeCnt: 0 });
-        if (e) {
-          d.e360++;
-          const fe = (o.fecha_entrega || "").substring(0, 10);
-          const fp = (o.fecha_promesa || "").substring(0, 10);
-          if (fe && fp && fe <= fp) d.onTimeCnt++; // a tiempo = entregado en/antes del día prometido
-        }
-        if (dev) d.d123++;
-      });
-      const fullList = Object.values(byDay).map(d => {
-        const costo = costoPorDia[d.fecha] || 0;
-        const denom = d.e360 + d.d123; // entregas + devoluciones del día
+      // 3) fullList desde el agregado del servidor. Base diaria = entregas + devoluciones.
+      const fullList = agg.map(d => {
+        const fecha = String(d.fecha).substring(0, 10);
+        const e360 = Number(d.e360) || 0, d123 = Number(d.d123) || 0, onTimeCnt = Number(d.ontime) || 0;
+        const costo = costoPorDia[fecha] || 0;
+        const denom = e360 + d123;
         return {
-          fecha: d.fecha, total: denom, e360: d.e360, d123: d.d123, onTimeCnt: d.onTimeCnt, costo,
-          pctEntrega: denom > 0 ? (d.e360 / denom) * 100 : 0,
-          ontime: d.e360 > 0 ? (d.onTimeCnt / d.e360) * 100 : 0,
-          retornos: denom > 0 ? (d.d123 / denom) * 100 : 0,
+          fecha, total: denom, e360, d123, onTimeCnt, costo,
+          pctEntrega: denom > 0 ? (e360 / denom) * 100 : 0,
+          ontime: e360 > 0 ? (onTimeCnt / e360) * 100 : 0,
+          retornos: denom > 0 ? (d123 / denom) * 100 : 0,
           costoPaq: denom > 0 ? costo / denom : 0,
         };
       }).sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -612,14 +604,16 @@ function ModuleKpis() {
         onTime: a.onTime + d.onTimeCnt, costo: a.costo + d.costo,
       }), { total: 0, e360: 0, d123: 0, onTime: 0, costo: 0 });
       const denomTot = tot.e360 + tot.d123;
-      setResumen({
+      const resumenObj = {
         dias: list.length,
         pctEntrega: tot.total > 0 ? (tot.e360 / tot.total) * 100 : 0,
         ontime: tot.e360 > 0 ? (tot.onTime / tot.e360) * 100 : 0,
         retornos: tot.total > 0 ? (tot.d123 / tot.total) * 100 : 0,
         costo: tot.costo,
         costoPaq: denomTot > 0 ? tot.costo / denomTot : 0,
-      });
+      };
+      _kpiFlotCache = { ts: Date.now(), resumen: resumenObj, dias: list, flotMissing: null };
+      setResumen(resumenObj);
       setDias(list);
     } catch (e) {
       console.error("[Kpis] loadFlotilla error:", e);
@@ -645,9 +639,15 @@ function ModuleKpis() {
 
   return (
     <div>
-      <div style={{ marginBottom: 18 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Kpis</h1>
-        <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Indicadores clave de operación · últimos 30 días</p>
+      <div style={{ marginBottom: 18, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Kpis</h1>
+          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Indicadores clave de operación · últimos 30 días</p>
+        </div>
+        <button onClick={() => loadFlotilla(true)} disabled={loading}
+          style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 13, fontWeight: 700, cursor: loading ? "default" : "pointer", opacity: loading ? 0.5 : 1 }}>
+          {loading ? "Actualizando…" : "↻ Actualizar"}
+        </button>
       </div>
       <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
         <TabBtn id="flotilla" label="Flotilla Propia" />
@@ -675,6 +675,12 @@ function ModuleKpis() {
           <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
           <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Aún no hay órdenes de flotilla</div>
           <div style={{ fontSize: 13, color: C.textMuted }}>Sube un archivo en el módulo "Carga Flotilla Propia".</div>
+        </div>
+      ) : flotMissing === "needindex" ? (
+        <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>⚡</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Falta crear los índices/función de KPIs</div>
+          <div style={{ fontSize: 13, color: C.textMuted }}>La tabla creció mucho. Corre <strong>supabase_kpi_indexes.sql</strong> en Supabase (crea índices + la función kpi_flotilla_por_dia) y presiona ↻ Actualizar.</div>
         </div>
       ) : (
         <>
