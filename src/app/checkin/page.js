@@ -219,6 +219,14 @@ export default function CheckinPage() {
     });
 
     if (asistenciaError) {
+      const em = (asistenciaError.message || "").toLowerCase();
+      // Violación del índice único (fecha, nombre_operador) → registro duplicado.
+      if (asistenciaError.code === "23505" || em.includes("duplicate key") || em.includes("asistencia_fecha_operador")) {
+        setYaRegistrado(true);
+        setSubmitStatus("error");
+        setErrorMsg("Ya hay un registro previamente para este operador el día de hoy.");
+        return;
+      }
       setSubmitStatus("error");
       setErrorMsg(asistenciaError.message);
       return;
