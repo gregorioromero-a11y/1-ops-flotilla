@@ -90,6 +90,23 @@ export default function CheckinPage() {
   const [locationLoading, setLocationLoading] = useState(false);
   const [submitStatus, setSubmitStatus] = useState("idle"); // idle | submitting | success | error
   const [errorMsg, setErrorMsg] = useState("");
+  const [yaRegistrado, setYaRegistrado] = useState(false); // ya hay registro hoy para el operador
+  const [checkingDup, setCheckingDup] = useState(false);
+
+  // Fecha LOCAL del operador (no UTC), igual criterio que al guardar.
+  const localToday = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  // ¿El operador ya tiene asistencia registrada hoy?
+  const yaTieneRegistroHoy = async (nombre) => {
+    const { count } = await supabase
+      .from("asistencia")
+      .select("id", { count: "exact", head: true })
+      .eq("fecha", localToday())
+      .eq("nombre_operador", (nombre || "").trim());
+    return (count || 0) > 0;
+  };
 
   useEffect(() => {
     // Paginar: Supabase devuelve máx. 1000 filas por request. Hay 1200+ operadores,
@@ -156,7 +173,9 @@ export default function CheckinPage() {
     form.nombre &&
     form.tipo_unidad &&
     form.tipo_operacion &&
-    isLocationValid;
+    isLocationValid &&
+    !yaRegistrado &&
+    !checkingDup;
 
   const handleSubmit = async () => {
     if (!isFormValid || submitStatus === "submitting") return;
@@ -167,9 +186,19 @@ export default function CheckinPage() {
     // hace que registros tomados después de las 18:00 hora México (UTC-6)
     // se guarden con la fecha del día siguiente — provocando que "no aparezcan"
     // en el filtro del día correcto.
-    const d = new Date();
-    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const today = localToday();
     const now = new Date().toISOString();
+
+    // Revalidar contra doble registro el mismo día (por si otro dispositivo lo
+    // registró entre que eligió el nombre y presionó el botón).
+    let dupExiste = false;
+    try { dupExiste = await yaTieneRegistroHoy(form.nombre); } catch { /* si falla la verificación, dejamos continuar */ }
+    if (dupExiste) {
+      setYaRegistrado(true);
+      setSubmitStatus("error");
+      setErrorMsg("Ya hay un registro previamente para este operador el día de hoy.");
+      return;
+    }
 
     // Find unit cost from carriers
     const carrierRow = carriers.find(
@@ -293,6 +322,7 @@ export default function CheckinPage() {
             setLocation(null);
             setDistance(null);
             setSubmitStatus("idle");
+            setYaRegistrado(false);
           }}
           style={{
             marginTop: 20,
@@ -555,9 +585,10 @@ export default function CheckinPage() {
           <div style={{ position: "relative" }}>
             <select
               value={form.proveedor}
-              onChange={(e) =>
-                setForm({ ...form, proveedor: e.target.value, tipo_unidad: "" })
-              }
+              onChange={(e) => {
+                setForm({ ...form, proveedor: e.target.value, tipo_unidad: "", nombre: "" });
+                setYaRegistrado(false);
+              }}
               style={S.select}
             >
               <option value="">Seleccionar proveedor...</option>
@@ -586,7 +617,16 @@ export default function CheckinPage() {
           <div style={{ position: "relative" }}>
             <select
               value={form.nombre}
-              onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+              onChange={async (e) => {
+                const nombre = e.target.value;
+                setForm({ ...form, nombre });
+                setYaRegistrado(false);
+                if (nombre) {
+                  setCheckingDup(true);
+                  try { setYaRegistrado(await yaTieneRegistroHoy(nombre)); } catch { /* red: se revalida al enviar */ }
+                  setCheckingDup(false);
+                }
+              }}
               disabled={!form.proveedor}
               style={{
                 ...S.select,
@@ -609,6 +649,14 @@ export default function CheckinPage() {
             </select>
             <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#7C8495" }}>▾</span>
           </div>
+          {checkingDup && (
+            <div style={{ fontSize: 12, color: "#7C8495", marginTop: 6 }}>Verificando registro del día…</div>
+          )}
+          {yaRegistrado && (
+            <div style={{ marginTop: 8, padding: "10px 12px", backgroundColor: "#FEF9C3", border: "1.5px solid #D97706", borderRadius: 8, color: "#92400E", fontSize: 13, fontWeight: 600 }}>
+              ⚠ Ya hay un registro previamente para este operador el día de hoy.
+            </div>
+          )}
 
           {/* Tipo de unidad */}
           <label style={S.label}>Tipo de unidad</label>
