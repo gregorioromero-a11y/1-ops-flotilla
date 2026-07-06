@@ -92,10 +92,23 @@ export default function CheckinPage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
+    // Paginar: Supabase devuelve máx. 1000 filas por request. Hay 1200+ operadores,
+    // así que sin paginar se cortaban los que van "de la O en adelante" (orden por nombre).
+    const fetchAll = async (table, build) => {
+      let all = [], from = 0; const size = 1000;
+      while (true) {
+        const { data, error } = await build(supabase.from(table)).range(from, from + size - 1);
+        if (error || !data || data.length === 0) break;
+        all = all.concat(data);
+        if (data.length < size) break;
+        from += size;
+      }
+      return all;
+    };
     Promise.all([
-      supabase.from("carriers").select("*").order("proveedor"),
-      supabase.from("operadores").select("*").eq("activo", true).order("nombre"),
-    ]).then(([{ data: cData }, { data: oData }]) => {
+      fetchAll("carriers", (q) => q.select("*").order("proveedor")),
+      fetchAll("operadores", (q) => q.select("*").eq("activo", true).order("nombre")),
+    ]).then(([cData, oData]) => {
       setCarriers((cData || []).filter((c) => c.tipo_unidad && c.tipo_unidad !== "—"));
       setOperadores(oData || []);
     });
