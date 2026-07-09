@@ -108,9 +108,10 @@ export default function CheckinPage() {
     return (count || 0) > 0;
   };
 
+  // Carga de carriers (paginado por si crece). Los operadores NO se cargan todos:
+  // se consultan por proveedor al elegirlo (evita el tope de 1000 filas de Supabase,
+  // que cortaba los operadores con nombre "de la N/O en adelante" dentro de cada proveedor).
   useEffect(() => {
-    // Paginar: Supabase devuelve máx. 1000 filas por request. Hay 1200+ operadores,
-    // así que sin paginar se cortaban los que van "de la O en adelante" (orden por nombre).
     const fetchAll = async (table, build) => {
       let all = [], from = 0; const size = 1000;
       while (true) {
@@ -122,20 +123,34 @@ export default function CheckinPage() {
       }
       return all;
     };
-    Promise.all([
-      fetchAll("carriers", (q) => q.select("*").order("proveedor")),
-      fetchAll("operadores", (q) => q.select("*").eq("activo", true).order("nombre")),
-    ]).then(([cData, oData]) => {
+    fetchAll("carriers", (q) => q.select("*").order("proveedor")).then((cData) => {
       setCarriers((cData || []).filter((c) => c.tipo_unidad && c.tipo_unidad !== "—"));
-      setOperadores(oData || []);
     });
   }, []);
+
+  // Al elegir proveedor, trae SOLO sus operadores activos (lista completa, sin tope).
+  useEffect(() => {
+    if (!form.proveedor) { setOperadores([]); return; }
+    let cancelled = false;
+    setOperadores([]);
+    (async () => {
+      const { data } = await supabase
+        .from("operadores")
+        .select("id, nombre, proveedor")
+        .eq("activo", true)
+        .eq("proveedor", form.proveedor)
+        .order("nombre");
+      if (!cancelled) setOperadores(data || []);
+    })();
+    return () => { cancelled = true; };
+  }, [form.proveedor]);
 
   const proveedores = [...new Set(carriers.map((c) => c.proveedor))].sort();
   const tiposUnidad = carriers
     .filter((c) => c.proveedor === form.proveedor)
     .map((c) => c.tipo_unidad);
-  const operadoresFiltrados = operadores.filter((o) => o.proveedor === form.proveedor);
+  // `operadores` ya viene filtrado por proveedor desde la consulta.
+  const operadoresFiltrados = operadores;
 
   const requestLocation = () => {
     setLocationLoading(true);
