@@ -92,12 +92,12 @@ const navSections = [
     { id: "kpis", label: "Kpis", icon: IC.BarChart },
   ]},
   { label: "CAPTURA DE DATOS", items: [
-    { id: "envios", label: "Registrar Envíos", icon: IC.Package, badge: "Nuevo" },
+    { id: "envios", label: "Registrar Envíos", icon: IC.Package },
     { id: "unidades", label: "Unidades", icon: IC.Truck },
     { id: "operadores", label: "Operadores", icon: IC.Users },
     { id: "costos", label: "Registro Diario", icon: IC.Clock },
-    { id: "carriers", label: "Carriers / Proveedores", icon: IC.Truck, badge: "Nuevo" },
-    { id: "cargaflotilla", label: "Carga Flotilla Propia", icon: IC.Package, badge: "Nuevo" },
+    { id: "carriers", label: "Carriers / Proveedores", icon: IC.Truck },
+    { id: "cargaflotilla", label: "Carga Flotilla Propia", icon: IC.Package },
   ]},
   { label: "OPERACIONES", items: [
     { id: "t1envios", label: "T1 Envíos", icon: IC.Package },
@@ -106,13 +106,13 @@ const navSections = [
     { id: "sameday", label: "Same Day", icon: IC.Zap },
   ]},
   { label: "HERRAMIENTAS", items: [
-    { id: "ruteo", label: "Ruteo / Clusters", icon: IC.Map, badge: "Nuevo" },
-    { id: "asignaciones", label: "Asignaciones", icon: IC.ClipboardCheck, badge: "Nuevo" },
-    { id: "manifiesto", label: "Manifiesto", icon: IC.ClipboardCheck, badge: "Nuevo" },
-    { id: "consultas", label: "Consultas", icon: IC.BarChart, badge: "Nuevo" },
+    { id: "ruteo", label: "Ruteo / Clusters", icon: IC.Map },
+    { id: "asignaciones", label: "Asignaciones", icon: IC.ClipboardCheck },
+    { id: "manifiesto", label: "Manifiesto", icon: IC.ClipboardCheck },
+    { id: "consultas", label: "Consultas", icon: IC.BarChart },
   ]},
   { label: "FACTURACIÓN", items: [
-    { id: "facturacion", label: "Facturación", icon: IC.Dollar, badge: "Nuevo" },
+    { id: "facturacion", label: "Facturación", icon: IC.Dollar },
   ]},
   { label: "SISTEMA", items: [
     { id: "config", label: "Configuración", icon: IC.Settings },
