@@ -3539,6 +3539,10 @@ function ModuleOperadores() {
   const [bulkMsg, setBulkMsg] = useState("");
   const [importing, setImporting] = useState(false);
   const [filtroProv, setFiltroProv] = useState("Todos");
+  const [selected, setSelected] = useState(() => new Set()); // ids seleccionados (masivo)
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [bulkEditForm, setBulkEditForm] = useState({ proveedor: "", tipo_licencia: "" });
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const LICENCIAS = ["A", "B", "C", "D", "E"];
 
@@ -3598,6 +3602,32 @@ function ModuleOperadores() {
   const toggleActivo = async (id, activo) => {
     await supabase.from("operadores").update({ activo: !activo }).eq("id", id);
     loadData();
+  };
+
+  // ---- Selección múltiple / acciones masivas ----
+  const toggleSelect = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const clearSelection = () => { setSelected(new Set()); setShowBulkEdit(false); };
+  const bulkSetActivo = async (activo) => {
+    if (selected.size === 0) return;
+    setBulkBusy(true);
+    await supabase.from("operadores").update({ activo }).in("id", Array.from(selected));
+    setBulkBusy(false); clearSelection(); loadData();
+  };
+  const bulkDelete = async () => {
+    if (selected.size === 0) return;
+    if (!confirm(`¿Eliminar ${selected.size} operador(es)? Esta acción no se puede deshacer.`)) return;
+    setBulkBusy(true);
+    await supabase.from("operadores").delete().in("id", Array.from(selected));
+    setBulkBusy(false); clearSelection(); loadData();
+  };
+  const bulkUpdate = async () => {
+    const patch = {};
+    if (bulkEditForm.proveedor) patch.proveedor = bulkEditForm.proveedor;
+    if (bulkEditForm.tipo_licencia) patch.tipo_licencia = bulkEditForm.tipo_licencia;
+    if (Object.keys(patch).length === 0 || selected.size === 0) return;
+    setBulkBusy(true);
+    await supabase.from("operadores").update(patch).in("id", Array.from(selected));
+    setBulkBusy(false); setBulkEditForm({ proveedor: "", tipo_licencia: "" }); clearSelection(); loadData();
   };
 
   const parseBulkFile = async (file) => {
@@ -3681,6 +3711,13 @@ function ModuleOperadores() {
   const activos = operadores.filter(o => o.activo).length;
   const proveedoresOps = [...new Set(operadores.map(o => o.proveedor).filter(Boolean))].sort();
   const filteredOps = filtroProv === "Todos" ? operadores : operadores.filter(o => o.proveedor === filtroProv);
+  const allFilteredSelected = filteredOps.length > 0 && filteredOps.every(o => selected.has(o.id));
+  const toggleSelectAll = () => setSelected(prev => {
+    const n = new Set(prev);
+    if (filteredOps.every(o => n.has(o.id))) filteredOps.forEach(o => n.delete(o.id));
+    else filteredOps.forEach(o => n.add(o.id));
+    return n;
+  });
 
   return (
     <div>
@@ -3831,6 +3868,55 @@ function ModuleOperadores() {
         <span style={{ fontSize: 12, color: C.textMuted, marginLeft: "auto" }}>{filteredOps.length} operador{filteredOps.length !== 1 ? "es" : ""}</span>
       </div>
 
+      {/* Barra de acciones masivas */}
+      {selected.size > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "10px 14px", backgroundColor: C.accentLight, border: `1px solid ${C.accent}`, borderRadius: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{selected.size} seleccionado{selected.size !== 1 ? "s" : ""}</span>
+          {[
+            { l: "Activar", c: C.green, on: () => bulkSetActivo(true) },
+            { l: "Inactivar", c: C.yellow, on: () => bulkSetActivo(false) },
+            { l: "Editar", c: C.blue, on: () => setShowBulkEdit(s => !s) },
+            { l: "Eliminar", c: C.red, on: bulkDelete },
+          ].map(b => (
+            <button key={b.l} onClick={b.on} disabled={bulkBusy}
+              style={{ padding: "6px 14px", borderRadius: 6, border: "none", backgroundColor: b.c, color: "#fff", fontSize: 12, fontWeight: 700, cursor: bulkBusy ? "default" : "pointer", opacity: bulkBusy ? 0.6 : 1 }}>
+              {b.l}
+            </button>
+          ))}
+          <button onClick={clearSelection} style={{ marginLeft: "auto", padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.border}`, backgroundColor: C.white, color: C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Deseleccionar</button>
+        </div>
+      )}
+
+      {/* Panel de edición masiva */}
+      {showBulkEdit && selected.size > 0 && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 18, border: "2px solid " + C.blue, marginBottom: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, color: C.blue }}>Editar {selected.size} operador{selected.size !== 1 ? "es" : ""}</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14 }}>Solo se cambian los campos que llenes; los vacíos se dejan igual.</div>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 12, alignItems: "end" }}>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
+              <select value={bulkEditForm.proveedor} onChange={e => setBulkEditForm({ ...bulkEditForm, proveedor: e.target.value })}
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                <option value="">(sin cambio)</option>
+                {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Tipo licencia</label>
+              <select value={bulkEditForm.tipo_licencia} onChange={e => setBulkEditForm({ ...bulkEditForm, tipo_licencia: e.target.value })}
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                <option value="">(sin cambio)</option>
+                {LICENCIAS.map(l => <option key={l} value={l}>Tipo {l}</option>)}
+              </select>
+            </div>
+            <button onClick={bulkUpdate} disabled={bulkBusy || (!bulkEditForm.proveedor && !bulkEditForm.tipo_licencia)}
+              style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: (!bulkEditForm.proveedor && !bulkEditForm.tipo_licencia) || bulkBusy ? C.border : C.blue, color: "#fff", fontSize: 13, fontWeight: 700, cursor: (!bulkEditForm.proveedor && !bulkEditForm.tipo_licencia) || bulkBusy ? "default" : "pointer" }}>
+              {bulkBusy ? "Aplicando…" : "Aplicar"}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
         {loading ? (
           <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>Cargando...</div>
@@ -3838,6 +3924,9 @@ function ModuleOperadores() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
+                <th style={{ padding: "10px 14px", width: 36 }}>
+                  <input type="checkbox" checked={allFilteredSelected} onChange={toggleSelectAll} style={{ width: 16, height: 16, cursor: "pointer" }} title="Seleccionar todos" />
+                </th>
                 {["Nombre", "Proveedor", "Licencia", "Status", ""].map(h => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                 ))}
@@ -3845,15 +3934,18 @@ function ModuleOperadores() {
             </thead>
             <tbody>
               {filteredOps.length === 0 ? (
-                <tr><td colSpan={5} style={{ padding: 48, textAlign: "center", color: C.textMuted }}>
+                <tr><td colSpan={6} style={{ padding: 48, textAlign: "center", color: C.textMuted }}>
                   <div style={{ fontSize: 36, marginBottom: 10 }}>👤</div>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>Sin operadores registrados</div>
                   <div style={{ fontSize: 12, marginTop: 4 }}>Agrega operadores para usarlos en el check-in</div>
                 </td></tr>
               ) : filteredOps.map((o) => (
-                <tr key={o.id} style={{ borderBottom: "1px solid " + C.border }}
-                  onMouseEnter={ev => ev.currentTarget.style.backgroundColor = C.panelAlt}
-                  onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
+                <tr key={o.id} style={{ borderBottom: "1px solid " + C.border, backgroundColor: selected.has(o.id) ? C.accentLight : "transparent" }}
+                  onMouseEnter={ev => { if (!selected.has(o.id)) ev.currentTarget.style.backgroundColor = C.panelAlt; }}
+                  onMouseLeave={ev => { ev.currentTarget.style.backgroundColor = selected.has(o.id) ? C.accentLight : "transparent"; }}>
+                  <td style={{ padding: "12px 14px" }}>
+                    <input type="checkbox" checked={selected.has(o.id)} onChange={() => toggleSelect(o.id)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+                  </td>
                   <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: C.text }}>{o.nombre}</td>
                   <td style={{ padding: "12px 14px", fontSize: 13, color: C.textMuted }}>{o.proveedor}</td>
                   <td style={{ padding: "12px 14px" }}>
