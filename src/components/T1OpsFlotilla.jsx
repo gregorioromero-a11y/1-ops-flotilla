@@ -539,11 +539,14 @@ function ModuleKpis() {
       const { data: agg, error: aggErr } = await supabase.rpc("kpi_flotilla_por_dia", { dias_ventana: 40 });
       if (aggErr) {
         const em = (aggErr.message || "").toLowerCase();
+        console.error("[Kpis] rpc error:", aggErr);
         if (em.includes("kpi_flotilla_por_dia") || em.includes("could not find the function") || aggErr.code === "PGRST202" || em.includes("does not exist")) {
           _kpiFlotCache = { ts: Date.now(), resumen: null, dias: [], flotMissing: "needindex" };
           setFlotMissing("needindex"); setResumen(null); setDias([]); setLoading(false); return;
         }
-        console.error("[Kpis] rpc error:", aggErr);
+        // Timeout u otro error: NO es "vacío". No cachear para que ↻ Actualizar reintente.
+        _kpiFlotCache = null;
+        setFlotMissing("error"); setResumen(null); setDias([]); setLoading(false); return;
       }
       if (!agg || !agg.length) {
         _kpiFlotCache = { ts: Date.now(), resumen: null, dias: [], flotMissing: "empty" };
@@ -681,6 +684,12 @@ function ModuleKpis() {
           <div style={{ fontSize: 40, marginBottom: 12 }}>⚡</div>
           <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Falta crear los índices/función de KPIs</div>
           <div style={{ fontSize: 13, color: C.textMuted }}>La tabla creció mucho. Corre <strong>supabase_kpi_indexes.sql</strong> en Supabase (crea índices + la función kpi_flotilla_por_dia) y presiona ↻ Actualizar.</div>
+        </div>
+      ) : flotMissing === "error" ? (
+        <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 48, textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>⏱️</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>No se pudo calcular el KPI</div>
+          <div style={{ fontSize: 13, color: C.textMuted }}>La consulta agregada falló (posible timeout). Asegúrate de haber corrido la última versión de <strong>supabase_kpi_indexes.sql</strong> y presiona ↻ Actualizar.</div>
         </div>
       ) : (
         <>
