@@ -5486,6 +5486,35 @@ function ModuleRuteo() {
     setLoading(false);
   };
 
+  // Guarda el ruteo ACTUAL (puntos + asignaciones vigentes, incluidas ediciones
+  // manuales de split/merge/reasignar) en la sesión, sin volver a clusterizar.
+  const guardarRuteo = async () => {
+    if (!puntos.length || !asignaciones.length) { setMsg("No hay un ruteo para guardar. Genera rutas primero."); return; }
+    setLoading(true); setMsg("⏳ Guardando ruteo...");
+    try {
+      let sid = sesionId;
+      if (sid) {
+        await supabase.from("ruteo_puntos").delete().eq("sesion", sid);
+      } else {
+        sid = "S" + Date.now();
+        setSesionId(sid);
+      }
+      const nombreTrim = (sesionNombre || "").trim() || null;
+      const probeNombre = await supabase.from("ruteo_puntos").select("nombre").limit(1);
+      const tieneNombre = !probeNombre.error;
+      const dbRows = puntos.map((p, i) => {
+        const cl = asignaciones[i];
+        const row = { sesion: sid, indice: i, latitud: p.lat, longitud: p.lng, cluster: cl, ruta: cl === -1 ? "Excluido" : "Ruta " + (cl + 1), datos_extra: JSON.stringify(Object.fromEntries(Object.entries(p).filter(([k]) => !["lat", "lng", "_i"].includes(k)))) };
+        if (tieneNombre) row.nombre = nombreTrim;
+        return row;
+      });
+      await insertChunkedParallel("ruteo_puntos", dbRows, 500, 5);
+      setMsg(`✓ Ruteo guardado: ${puntos.length.toLocaleString()} puntos${nombreTrim && tieneNombre ? ` · "${nombreTrim}"` : ""}${nombreTrim && !tieneNombre ? " · (corre ALTER TABLE ruteo_puntos ADD COLUMN nombre text para guardar el nombre)" : ""}.`);
+      if (showHistorico) loadHistorico();
+    } catch (err) { setMsg("Error: " + err.message); }
+    setLoading(false);
+  };
+
   const reCluster = async () => {
     if (!puntos.length) return;
     setLoading(true);
@@ -5872,6 +5901,9 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
         </div>
         {puntos.length > 0 && (
           <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={guardarRuteo} disabled={loading} style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, display: "flex", alignItems: "center", gap: 6 }}>
+              <IC.Check /> Guardar ruteo
+            </button>
             <button onClick={exportMapHTML} style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
               <IC.Map /> Descargar Mapa
             </button>
