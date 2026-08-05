@@ -1062,6 +1062,10 @@ function ModuleEnvios() {
   const [editCarrier, setEditCarrier] = useState("");
   const [editTipoUnidad, setEditTipoUnidad] = useState("");
   const [editCosto, setEditCosto] = useState("");
+  // Conteos de paquetes editables desde la modal (el total y el % se recalculan)
+  const [editEntregados, setEditEntregados] = useState("");
+  const [editIntentados, setEditIntentados] = useState("");
+  const [editNoVisitados, setEditNoVisitados] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [prefactOpen, setPrefactOpen] = useState(false);
   const [prefactProveedor, setPrefactProveedor] = useState("");
@@ -3029,6 +3033,9 @@ function ModuleEnvios() {
                         const infoCur = getCostoInfo(r);
                         setEditTipoUnidad(r.tipoUnidadOverride || infoCur.tipo_unidad || "");
                         setEditCosto(r.costoUnidadOverride != null ? String(r.costoUnidadOverride) : (infoCur.baseCost ? String(infoCur.baseCost) : ""));
+                        setEditEntregados(String(r.entregados || 0));
+                        setEditIntentados(String(r.intentados || 0));
+                        setEditNoVisitados(String(r.noVisitados || 0));
                       }} style={{
                         width: "100%", padding: "10px 16px", border: "none", backgroundColor: "transparent", cursor: "pointer",
                         fontSize: 12, fontWeight: 600, color: C.text, textAlign: "left", display: "flex", alignItems: "center", gap: 8,
@@ -3355,7 +3362,16 @@ function ModuleEnvios() {
         const tuChanged = (editTipoUnidad || "") !== (editRuta.tipoUnidadOverride || "");
         const costoOriginalStr = editRuta.costoUnidadOverride != null ? String(editRuta.costoUnidadOverride) : "";
         const costoChanged = (editCosto || "") !== costoOriginalStr;
-        const sinCambio = !carrierChanged && !tuChanged && !costoChanged;
+        // Conteos de paquetes: el total y el % de entrega se derivan de los tres campos
+        const nEnt = Math.max(0, parseInt(editEntregados) || 0);
+        const nInt = Math.max(0, parseInt(editIntentados) || 0);
+        const nNoVis = Math.max(0, parseInt(editNoVisitados) || 0);
+        const nTotal = nEnt + nInt + nNoVis;
+        const nPct = nTotal > 0 ? Math.round((nEnt / nTotal) * 1000) / 10 : 0;
+        const paquetesChanged = nEnt !== (editRuta.entregados || 0)
+          || nInt !== (editRuta.intentados || 0)
+          || nNoVis !== (editRuta.noVisitados || 0);
+        const sinCambio = !carrierChanged && !tuChanged && !costoChanged && !paquetesChanged;
         // Auto-sugerir costo cuando cambia el tipo de unidad
         const sugerirCosto = () => {
           const car = carriers.find(c => norm(c.proveedor) === norm(editCarrier) && c.tipo_unidad === editTipoUnidad);
@@ -3395,6 +3411,38 @@ function ModuleEnvios() {
                   <b style={{ color:C.text }}>Cómo funciona:</b> deja "Tipo de unidad" en "Inferir del catálogo" y "Costo / unidad" vacío para usar el costo automático del proveedor.
                   Si pones valores, esa ruta usará esos overrides en lugar del catálogo.
                 </div>
+
+                {/* Conteo de paquetes — corrige el reloj de la ruta */}
+                <div style={{ gridColumn:"1 / -1", borderTop:"1px solid "+C.border, paddingTop:14 }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:8 }}>Paquetes de la ruta</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+                    <div>
+                      <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.green, marginBottom:5 }}>Entregados</label>
+                      <input type="number" min="0" step="1" value={editEntregados}
+                        onChange={e => setEditEntregados(e.target.value)}
+                        onFocus={e => e.target.select()}
+                        style={{ width:"100%", padding:"9px 10px", borderRadius:8, border:"1px solid "+(nEnt !== (editRuta.entregados||0) ? C.accent : C.border), fontSize:15, fontWeight:800, color:C.green, textAlign:"center", backgroundColor:nEnt !== (editRuta.entregados||0) ? C.accentLight : C.white, boxSizing:"border-box" }} />
+                    </div>
+                    <div>
+                      <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.yellow, marginBottom:5 }}>Intentados</label>
+                      <input type="number" min="0" step="1" value={editIntentados}
+                        onChange={e => setEditIntentados(e.target.value)}
+                        onFocus={e => e.target.select()}
+                        style={{ width:"100%", padding:"9px 10px", borderRadius:8, border:"1px solid "+(nInt !== (editRuta.intentados||0) ? C.accent : C.border), fontSize:15, fontWeight:800, color:C.text, textAlign:"center", backgroundColor:nInt !== (editRuta.intentados||0) ? C.accentLight : C.white, boxSizing:"border-box" }} />
+                    </div>
+                    <div>
+                      <label style={{ display:"block", fontSize:11, fontWeight:700, color:C.red, marginBottom:5 }}>No visitados</label>
+                      <input type="number" min="0" step="1" value={editNoVisitados}
+                        onChange={e => setEditNoVisitados(e.target.value)}
+                        onFocus={e => e.target.select()}
+                        style={{ width:"100%", padding:"9px 10px", borderRadius:8, border:"1px solid "+(nNoVis !== (editRuta.noVisitados||0) ? C.accent : C.border), fontSize:15, fontWeight:800, color:C.red, textAlign:"center", backgroundColor:nNoVis !== (editRuta.noVisitados||0) ? C.accentLight : C.white, boxSizing:"border-box" }} />
+                    </div>
+                  </div>
+                  <div style={{ marginTop:10, padding:"9px 12px", backgroundColor:C.bg, borderRadius:6, fontSize:12, color:C.textMuted, display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                    <span>Total recalculado: <b style={{ color:C.text }}>{nTotal}</b> paquetes {editRuta.total !== nTotal && <span style={{ color:C.textMuted }}>(antes {editRuta.total || 0})</span>}</span>
+                    <span>% Entrega: <b style={{ color: nPct >= 95 ? C.green : nPct >= 80 ? C.yellow : C.red }}>{nPct}%</b></span>
+                  </div>
+                </div>
               </div>
               <div style={{ padding:"14px 22px", borderTop:"1px solid "+C.border, display:"flex", justifyContent:"flex-end", gap:10 }}>
                 <button onClick={() => !editSaving && setEditRuta(null)} disabled={editSaving}
@@ -3409,6 +3457,13 @@ function ModuleEnvios() {
                     if (carrierChanged) update.carrier = editCarrier;
                     if (tuChanged) update.tipo_unidad = editTipoUnidad || null;
                     if (costoChanged) update.costo_unidad = editCosto === "" ? null : parseFloat(editCosto);
+                    if (paquetesChanged) {
+                      update.entregados = nEnt;
+                      update.intentados = nInt;
+                      update.no_visitados = nNoVis;
+                      update.total = nTotal;
+                      update.pct_entrega = nPct;
+                    }
                     const { error } = await supabase.from("rutas").update(update).eq("id", editRuta.id);
                     if (error) {
                       if (/column .* does not exist|schema cache/i.test(error.message)) {
@@ -3423,6 +3478,7 @@ function ModuleEnvios() {
                       ...(carrierChanged && { carrier: editCarrier }),
                       ...(tuChanged && { tipoUnidadOverride: editTipoUnidad || null }),
                       ...(costoChanged && { costoUnidadOverride: editCosto === "" ? null : parseFloat(editCosto) }),
+                      ...(paquetesChanged && { entregados: nEnt, intentados: nInt, noVisitados: nNoVis, total: nTotal, pctEntrega: nPct }),
                     } : x));
                     setEditRuta(null);
                   } catch (err) {
