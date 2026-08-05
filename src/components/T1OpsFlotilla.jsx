@@ -6442,6 +6442,9 @@ function ModuleAsignaciones() {
   // `sesion` (filtrar por sesión hace timeout), pero cada sesión es un bloque
   // contiguo de id, así que cargamos por rango de id (índice PK, rápido).
   const rangesRef = useRef({});
+  // Espejo de `carriers` en un ref: loadSesion se dispara desde callbacks que
+  // capturaron un closure viejo, donde el state todavía está vacío.
+  const carriersRef = useRef([]);
   const MAX_SESIONES_RESUMEN = 30;
   const [capacidad, setCapacidad] = useState(() => {
     try { return JSON.parse(localStorage.getItem("t1_capacidad_v1") || "{}"); } catch { return {}; }
@@ -6572,8 +6575,15 @@ function ModuleAsignaciones() {
   const loadData = async () => {
     setLoading(true);
     // Carriers en paralelo (rápido), sin bloquear el resumen de sesiones.
-    supabase.from("carriers").select("*").order("proveedor").then(({ data: cData }) => {
-      setCarriers((cData || []).filter(c => c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—" && (c.operacion || "").toLowerCase().includes("ltima")));
+    // OJO: loadSesion NECESITA los carriers para poder auto-asignar. Antes esto
+    // era fire-and-forget y la auto-carga de la primera sesión ganaba la carrera,
+    // dejando `asignacion` vacío (se veía como "0 / N rutas asignadas" y luego
+    // "Guardar" no persistía nada). Guardamos la promesa para esperarla abajo.
+    const carriersPromise = supabase.from("carriers").select("*").order("proveedor").then(({ data: cData }) => {
+      const list = (cData || []).filter(c => c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—" && (c.operacion || "").toLowerCase().includes("ltima"));
+      carriersRef.current = list;
+      setCarriers(list);
+      return list;
     });
     try {
       let primera = true;
@@ -6586,7 +6596,9 @@ function ModuleAsignaciones() {
         if (primera) {
           primera = false;
           setLoading(false);
-          if (!sesionId) loadSesion(s.sesion);
+          // Esperar los carriers antes de auto-cargar: sin ellos no hay
+          // recomendación posible y la sesión abriría sin asignaciones.
+          if (!sesionId) carriersPromise.then(list => loadSesion(s.sesion, list));
         }
       });
     } catch (e) {
@@ -6599,9 +6611,12 @@ function ModuleAsignaciones() {
   const [saveMsg, setSaveMsg] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const loadSesion = async (sid) => {
+  const loadSesion = async (sid, carriersOverride) => {
     setLoadingSession(true);
     setSesionId(sid);
+    // Lista efectiva de carriers: la que nos pasen, el ref (siempre al día) o el state.
+    const cList = (carriersOverride && carriersOverride.length ? carriersOverride
+      : (carriersRef.current.length ? carriersRef.current : carriers)) || [];
     // Cargar por RANGO de id (índice PK, rápido). Filtrar por sesión hace timeout
     // porque no hay índice en `sesion`. Si por algún motivo no tenemos el rango,
     // caemos al filtro por sesión (lento) como último recurso.
@@ -6644,7 +6659,7 @@ function ModuleAsignaciones() {
           finalAsign[ruta.nombre] = savedMap[ruta.nombre];
         } else {
           // Auto-assign best recommendation if no saved value
-          const opciones = carriers.map(c => {
+          const opciones = cList.map(c => {
             const costo = parseFloat(c.costo_unidad) || 0;
             const minP = Math.ceil(costo / COSTO_MAX);
             const viable = ruta.paquetes >= minP;
@@ -6670,25 +6685,57 @@ function ModuleAsignaciones() {
     setLoadingSession(false);
   };
 
+  // Red de seguridad: si los carriers llegan DESPUÉS de que la sesión ya se
+  // cargó, rellena las rutas que quedaron sin asignación con la recomendación
+  // más barata viable. Sin esto la vista se queda en "0 / N asignadas".
+  useEffect(() => {
+    if (!carriers.length || !rutas.length) return;
+    const faltantes = rutas.filter(r => !asignacion[r.nombre]);
+    if (faltantes.length === 0) return;
+    const next = { ...asignacion };
+    faltantes.forEach(ruta => {
+      const opciones = carriers.map(c => {
+        const costo = parseFloat(c.costo_unidad) || 0;
+        return {
+          proveedor: c.proveedor, tipo_unidad: c.tipo_unidad,
+          viable: ruta.paquetes >= Math.ceil(costo / COSTO_MAX),
+          costoPorPaq: ruta.paquetes > 0 ? costo / ruta.paquetes : Infinity,
+        };
+      }).filter(o => o.viable).sort((a, b) => a.costoPorPaq - b.costoPorPaq);
+      if (opciones[0]) next[ruta.nombre] = { proveedor: opciones[0].proveedor, tipo_unidad: opciones[0].tipo_unidad, unidades: 1 };
+    });
+    setAsignacion(next);
+  }, [carriers, rutas]);
+
   const guardarAsignacion = async () => {
-    if (!sesionId || rutas.length === 0) return;
+    if (!sesionId || rutas.length === 0) {
+      setSaveMsg("⚠ No hay una sesión con rutas cargada.");
+      setTimeout(() => setSaveMsg(""), 4000);
+      return;
+    }
     setSaving(true);
     setSaveMsg("");
     try {
-      // Wipe previous saved assignments for this session
-      await supabase.from("asignaciones_sesion").delete().eq("sesion", sesionId);
-      // Build rows
+      // Build rows PRIMERO. Antes se borraba la asignación previa antes de saber
+      // si había algo con qué reemplazarla: si `asignacion` venía vacío se
+      // perdía lo guardado y encima se mostraba un "✓ (0 rutas)" engañoso.
       const rows = rutas.map(ruta => {
         const a = asignacion[ruta.nombre];
         if (!a) return null;
         if (a.noAsignar) return { sesion: sesionId, ruta_nombre: ruta.nombre, proveedor: null, tipo_unidad: null, unidades: null, no_asignar: true };
         return { sesion: sesionId, ruta_nombre: ruta.nombre, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, unidades: a.unidades || 1, no_asignar: false };
       }).filter(Boolean);
-      if (rows.length > 0) {
-        const { error } = await supabase.from("asignaciones_sesion").insert(rows);
-        if (error) throw error;
+      if (rows.length === 0) {
+        setSaveMsg("⚠ No hay ninguna ruta asignada — no se guardó nada. Asigna proveedor o usa 'Sugerir'.");
+        setSaving(false);
+        setTimeout(() => setSaveMsg(""), 6000);
+        return;
       }
-      setSaveMsg(`✓ Asignación guardada (${rows.length} rutas)`);
+      // Wipe previous saved assignments for this session
+      await supabase.from("asignaciones_sesion").delete().eq("sesion", sesionId);
+      const { error } = await supabase.from("asignaciones_sesion").insert(rows);
+      if (error) throw error;
+      setSaveMsg(`✓ Asignación guardada (${rows.length} de ${rutas.length} rutas)`);
       setTimeout(() => setSaveMsg(""), 4000);
     } catch (err) {
       const msg = err?.message || String(err);
