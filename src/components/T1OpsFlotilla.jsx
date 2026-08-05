@@ -5849,7 +5849,7 @@ function ModuleRuteo() {
 
   const loadSesion = async (sid) => {
     setLoading(true); setMsg("");
-    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice"));
+    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("id"));
     if (data && data.length > 0) {
       // Dedupe por `indice` — una sesión guardada varias veces con el DELETE
       // fallando (falta índice en ruteo_puntos.sesion) queda con copias de cada
@@ -5889,7 +5889,7 @@ function ModuleRuteo() {
   };
 
   const exportHistMapHTML = async (sid) => {
-    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice"));
+    const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("id"));
     if (!data || data.length === 0) return;
     const pts = data.map(r => {
       const extra = r.datos_extra ? (typeof r.datos_extra === "string" ? JSON.parse(r.datos_extra) : r.datos_extra) : {};
@@ -6661,9 +6661,12 @@ function ModuleAsignaciones() {
     // porque no hay índice en `sesion`. Si por algún motivo no tenemos el rango,
     // caemos al filtro por sesión (lento) como último recurso.
     const range = rangesRef.current[sid];
+    // Ordenar por `id` (único), NO por `indice`: cuando una sesión tiene puntos
+    // duplicados el `indice` se repite, y paginar con OFFSET sobre una columna
+    // no única hace que Postgres repita filas en una página y se salte otras.
     const puntosQuery = range && range.idMin != null
-      ? () => supabase.from("ruteo_puntos").select("*").gte("id", range.idMin).lte("id", range.idMax).order("indice")
-      : () => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice");
+      ? () => supabase.from("ruteo_puntos").select("*").gte("id", range.idMin).lte("id", range.idMax).order("id")
+      : () => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("id");
     const [data, savedRows] = await Promise.all([
       fetchAllPaginated(puntosQuery),
       supabase.from("asignaciones_sesion").select("*").eq("sesion", sid).then(r => r.data || []).catch(() => []),
