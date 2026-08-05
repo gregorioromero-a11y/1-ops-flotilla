@@ -5518,7 +5518,7 @@ function ModuleRuteo() {
       let sid;
       if (reuse) {
         sid = sesionId;
-        await supabase.from("ruteo_puntos").delete().eq("sesion", sid);
+        await borrarPuntosSesion(sid);
       } else {
         sid = "S" + Date.now();
         setSesionId(sid);
@@ -5550,7 +5550,7 @@ function ModuleRuteo() {
     try {
       let sid = sesionId;
       if (sid) {
-        await supabase.from("ruteo_puntos").delete().eq("sesion", sid);
+        await borrarPuntosSesion(sid);
       } else {
         sid = "S" + Date.now();
         setSesionId(sid);
@@ -5583,7 +5583,7 @@ function ModuleRuteo() {
     setAsignaciones(assigns);
     // Persist to DB: delete old rows and re-insert with new clusters
     if (sesionId) {
-      await supabase.from("ruteo_puntos").delete().eq("sesion", sesionId);
+      await borrarPuntosSesion(sesionId);
       const nombreTrim = (sesionNombre || "").trim() || null;
       const probeNombre = await supabase.from("ruteo_puntos").select("nombre").limit(1);
       const tieneNombre = !probeNombre.error;
@@ -5752,6 +5752,26 @@ function ModuleRuteo() {
   // Inserción paralela con chunks. Insertar 15K filas en serie tomaba ~30s
   // por el round-trip de red. En paralelo con 5 chunks concurrentes baja a ~6s.
   // El chunkSize de 500 mantiene el payload bajo el límite de Supabase.
+  // Borra los puntos de una sesión VERIFICANDO el resultado. Antes esto era un
+  // `await supabase...delete().eq("sesion", sid)` a secas: como `sesion` no
+  // tiene índice, el DELETE truena por statement timeout (código 57014) y el
+  // error se ignoraba — acto seguido se insertaba otra copia completa de la
+  // sesión. Guardar 3 veces dejaba cada punto triplicado y los paquetes por
+  // ruta inflados x3. Ahora, si el borrado falla, abortamos en vez de duplicar.
+  const borrarPuntosSesion = async (sid) => {
+    const { error } = await supabase.from("ruteo_puntos").delete().eq("sesion", sid);
+    if (error) {
+      const esTimeout = error.code === "57014" || /timeout/i.test(error.message || "");
+      throw new Error(
+        (esTimeout
+          ? "No se pudo limpiar la sesión anterior: la consulta excedió el tiempo límite porque falta un índice en Supabase. "
+          : "No se pudo limpiar la sesión anterior: " + (error.message || error) + ". ")
+        + "Corre en el SQL editor:  CREATE INDEX IF NOT EXISTS idx_ruteo_puntos_sesion ON ruteo_puntos(sesion);  "
+        + "No se guardó nada para no duplicar los puntos."
+      );
+    }
+  };
+
   const insertChunkedParallel = async (table, rows, chunkSize = 500, concurrency = 5) => {
     const chunks = [];
     for (let i = 0; i < rows.length; i += chunkSize) chunks.push(rows.slice(i, i + chunkSize));
@@ -5791,7 +5811,7 @@ function ModuleRuteo() {
     // Probe nombre + paginación por keyset sobre id (los puntos de una misma
     // sesión comparten created_at; offset+ORDER BY created_at se salta filas).
     const probe = await supabase.from("ruteo_puntos").select("sesion, created_at, cluster, nombre").limit(1);
-    const cols = probe.error ? "id, sesion, created_at, cluster" : "id, sesion, created_at, cluster, nombre";
+    const cols = probe.error ? "id, sesion, created_at, cluster, indice" : "id, sesion, created_at, cluster, indice, nombre";
     const byId = new Map();
     const pageSize = 1000;
     let cursor = null;
@@ -5808,7 +5828,15 @@ function ModuleRuteo() {
     const data = Array.from(byId.values());
     if (data && data.length > 0) {
       const grouped = {};
+      // `vistos` dedupe por (sesion, indice): una sesión re-guardada con el
+      // DELETE fallando tiene copias de cada punto y el conteo saldría inflado.
+      // Las filas llegan por id DESC, así que la primera que vemos es la más
+      // reciente — es la que manda para el cluster.
+      const vistos = new Set();
       data.forEach(r => {
+        const k = r.sesion + "|" + r.indice;
+        if (vistos.has(k)) return;
+        vistos.add(k);
         if (!grouped[r.sesion]) grouped[r.sesion] = { sesion: r.sesion, fecha: r.created_at, nombre: r.nombre || null, puntos: 0, rutas: new Set() };
         grouped[r.sesion].puntos += 1;
         grouped[r.sesion].rutas.add(r.cluster);
@@ -5823,11 +5851,23 @@ function ModuleRuteo() {
     setLoading(true); setMsg("");
     const data = await fetchAllRuteoPuntos(() => supabase.from("ruteo_puntos").select("*").eq("sesion", sid).order("indice"));
     if (data && data.length > 0) {
-      const pts = data.map(r => {
+      // Dedupe por `indice` — una sesión guardada varias veces con el DELETE
+      // fallando (falta índice en ruteo_puntos.sesion) queda con copias de cada
+      // punto. Nos quedamos con la más reciente (id mayor).
+      const porIndice = new Map();
+      data.forEach(r => {
+        const prev = porIndice.get(r.indice);
+        if (!prev || (r.id ?? 0) > (prev.id ?? 0)) porIndice.set(r.indice, r);
+      });
+      const filas = Array.from(porIndice.values()).sort((a, b) => a.indice - b.indice);
+      if (filas.length !== data.length) {
+        console.warn(`[Ruteo] Sesión ${sid}: ${data.length} filas → ${filas.length} puntos únicos (${data.length - filas.length} duplicados ignorados).`);
+      }
+      const pts = filas.map(r => {
         const extra = r.datos_extra ? (typeof r.datos_extra === "string" ? JSON.parse(r.datos_extra) : r.datos_extra) : {};
         return { ...extra, lat: r.latitud, lng: r.longitud, _i: r.indice };
       });
-      const assigns = data.map(r => r.cluster);
+      const assigns = filas.map(r => r.cluster);
       const maxCluster = Math.max(...assigns) + 1;
       // Detect guia key from extra data
       const sample = pts[0] || {};
@@ -6630,20 +6670,34 @@ function ModuleAsignaciones() {
     ]);
     console.log(`[Asignaciones] Sesión ${sid}: ${data.length} puntos cargados de Supabase`);
     if (data && data.length > 0) {
+      // DEDUPE por `indice`: si un guardado previo falló al borrar (el delete por
+      // `sesion` truena por timeout cuando falta el índice en esa columna), la
+      // sesión queda con 2 o 3 copias de CADA punto y los paquetes por ruta se
+      // multiplican. Nos quedamos con la copia más reciente (id mayor) de cada
+      // índice, que es la que refleja el último cluster asignado.
+      const porIndice = new Map();
+      data.forEach(r => {
+        const prev = porIndice.get(r.indice);
+        if (!prev || (r.id ?? 0) > (prev.id ?? 0)) porIndice.set(r.indice, r);
+      });
+      const unicos = Array.from(porIndice.values());
+      if (unicos.length !== data.length) {
+        console.warn(`[Asignaciones] Sesión ${sid}: ${data.length} filas → ${unicos.length} puntos únicos (${data.length - unicos.length} duplicados ignorados). Falta el índice en ruteo_puntos.sesion.`);
+      }
       const rutaMap = {};
       let excluidos = 0;
-      data.forEach(r => {
+      unicos.forEach(r => {
         if (r.cluster === -1) { excluidos++; return; } // skip excluded points
         const rn = r.ruta || "Ruta " + (r.cluster + 1);
         if (!rutaMap[rn]) rutaMap[rn] = { nombre: rn, cluster: r.cluster, paquetes: 0 };
         rutaMap[rn].paquetes += 1;
       });
-      console.log(`[Asignaciones] Excluidos: ${excluidos} · En rutas: ${data.length - excluidos}`);
+      console.log(`[Asignaciones] Excluidos: ${excluidos} · En rutas: ${unicos.length - excluidos}`);
       const rutaList = Object.values(rutaMap).sort((a, b) => a.cluster - b.cluster);
       setRutas(rutaList);
       // Rellena puntos/rutas exactos de esta sesión en el dropdown (el resumen
       // por saltos sólo trae puntos aproximados y rutas null).
-      setHistorico(prev => prev.map(h => h.sesion === sid ? { ...h, puntos: data.length, rutas: rutaList.length } : h));
+      setHistorico(prev => prev.map(h => h.sesion === sid ? { ...h, puntos: unicos.length, rutas: rutaList.length } : h));
 
       // Build saved-assignment map keyed by ruta_nombre
       const savedMap = {};
