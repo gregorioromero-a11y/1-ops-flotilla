@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
 import { buildCostEngine, DEDUP_TIPOS } from "../lib/costEngine";
@@ -734,260 +734,714 @@ function ModuleKpis() {
   );
 }
 
+// --- DASHBOARD OPS ---
+// Todo lo que se muestra sale de datos reales filtrados por el periodo elegido:
+//   · `rutas`            -> costos y performance por proveedor, y detalle por operador.
+//                           Usa el MISMO motor que Registrar Envíos (crearMotorCostos +
+//                           calcularCostos), así que las cifras reconcilian con ese módulo.
+//   · `flotilla_ordenes` -> entregas georreferenciadas por municipio (INEGI) y SLA.
+//                           OJO: esta tabla cubre sólo una parte de la operación, por eso
+//                           el bloque de zona muestra su cobertura real y no se mezcla con
+//                           los totales de arriba.
 function ModuleDashboard() {
-  const [periodo, setPeriodo] = useState("Febrero 2026");
-  const [carrierData, setCarrierData] = useState([]);
+  const hoyISO = () => new Date().toISOString().substring(0, 10);
+  const primerDiaMes = () => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().substring(0, 10); };
 
-  useEffect(() => {
-    const loadCarrierData = async () => {
-      const { data } = await supabase.from("rutas").select("carrier, total, entregados, intentados, no_visitados, pct_entrega");
-      if (data && data.length > 0) {
-        const grouped = {};
-        data.forEach(r => {
-          const c = r.carrier || "Sin carrier";
-          if (!grouped[c]) grouped[c] = { carrier: c, envios: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, rutas: 0 };
-          grouped[c].rutas += 1;
-          grouped[c].total += (r.total || 0);
-          grouped[c].entregados += (r.entregados || 0);
-          grouped[c].intentados += (r.intentados || 0);
-          grouped[c].noVisitados += (r.no_visitados || 0);
-        });
-        const arr = Object.values(grouped).map(g => ({
-          ...g,
-          pctEntrega: g.total > 0 ? ((g.entregados / g.total) * 100).toFixed(1) : 0,
-          devoluciones: g.intentados,
-          noEntregados: g.total - g.entregados,
-        })).sort((a, b) => b.total - a.total);
-        setCarrierData(arr);
+  const [desde, setDesde] = useState(primerDiaMes());
+  const [hasta, setHasta] = useState(hoyISO());
+  const [preset, setPreset] = useState("mes");
+
+  const [rutas, setRutas] = useState([]);
+  const [carriers, setCarriers] = useState([]);
+  const [asistencia, setAsistencia] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const [provSel, setProvSel] = useState(null);          // proveedor con drill-down abierto
+  const [orden, setOrden] = useState({ campo: "costo", dir: "desc" });
+
+  // --- Zona (mapa INEGI) ---
+  const [zonaRows, setZonaRows] = useState(null);        // agregado por municipio
+  const [zonaTotal, setZonaTotal] = useState(0);
+  const [geo, setGeo] = useState(null);                  // GeoJSON municipal de INEGI
+  const [zonaMetric, setZonaMetric] = useState("entregas");
+  const [zonaLoading, setZonaLoading] = useState(false);
+  const [zonaMsg, setZonaMsg] = useState("");
+  const [leafletOk, setLeafletOk] = useState(false);
+  const mapDivRef = useRef(null);
+  const mapRef = useRef(null);
+  const capaRef = useRef(null);
+
+  const aplicarPreset = (p) => {
+    setPreset(p);
+    const d = new Date();
+    if (p === "hoy") { setDesde(hoyISO()); setHasta(hoyISO()); }
+    else if (p === "7d") {
+      const a = new Date(d); a.setDate(a.getDate() - 6);
+      setDesde(a.toISOString().substring(0, 10)); setHasta(hoyISO());
+    } else if (p === "mes") { setDesde(primerDiaMes()); setHasta(hoyISO()); }
+    else if (p === "mesAnt") {
+      const ini = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+      const fin = new Date(d.getFullYear(), d.getMonth(), 0);
+      setDesde(ini.toISOString().substring(0, 10)); setHasta(fin.toISOString().substring(0, 10));
+    }
+  };
+
+  // ---------- Carga de rutas + catálogos ----------
+  useEffect(() => { cargar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [desde, hasta]);
+
+  const paginarPorId = async (tabla, select = "*") => {
+    const byId = new Map();
+    let cursor = null;
+    while (true) {
+      let q = supabase.from(tabla).select(select).order("id", { ascending: false }).limit(1000);
+      if (cursor !== null) q = q.lt("id", cursor);
+      const { data: chunk, error: e } = await q;
+      if (e) throw e;
+      if (!chunk || chunk.length === 0) break;
+      for (const row of chunk) byId.set(row.id, row);
+      if (chunk.length < 1000) break;
+      cursor = chunk[chunk.length - 1].id;
+    }
+    return Array.from(byId.values());
+  };
+
+  const cargar = async () => {
+    setLoading(true); setError("");
+    try {
+      // Las rutas se filtran EN EL SERVIDOR por fecha_salida para no traer las
+      // 7k filas completas en cada cambio de periodo.
+      const byId = new Map();
+      let cursor = null;
+      while (true) {
+        let q = supabase.from("rutas").select("*")
+          .gte("fecha_salida", desde)
+          .lte("fecha_salida", hasta + "T23:59:59")
+          .order("id", { ascending: false }).limit(1000);
+        if (cursor !== null) q = q.lt("id", cursor);
+        const { data: chunk, error: e } = await q;
+        if (e) throw e;
+        if (!chunk || chunk.length === 0) break;
+        for (const row of chunk) byId.set(row.id, row);
+        if (chunk.length < 1000) break;
+        cursor = chunk[chunk.length - 1].id;
       }
+      const rows = Array.from(byId.values());
+      // Forma que espera el motor de costos (camelCase, igual que ModuleEnvios)
+      setRutas(rows.map(r => ({
+        id: r.id, carrier: r.carrier || "—", operador: r.operador || "Sin nombre",
+        total: r.total || 0, entregados: r.entregados || 0, recolecciones: r.recolecciones || 0,
+        intentados: r.intentados || 0, noVisitados: r.no_visitados || 0,
+        pctEntrega: parseFloat(r.pct_entrega) || 0,
+        salida: r.fecha_salida || r.fecha_registro || "",
+        tipoRuta: r.tipo_ruta || "Última milla", penalizacion: r.penalizacion || "",
+        tipoUnidadOverride: r.tipo_unidad || null,
+        costoUnidadOverride: r.costo_unidad != null ? parseFloat(r.costo_unidad) : null,
+      })));
+      const [asis, cars] = await Promise.all([
+        paginarPorId("asistencia"),
+        supabase.from("carriers").select("*").then(r => r.data || []),
+      ]);
+      setAsistencia(asis.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || b.id - a.id));
+      setCarriers(cars);
+    } catch (e) {
+      setError(e.message || String(e));
+    }
+    setLoading(false);
+    setProvSel(null);
+    setZonaRows(null);           // el periodo cambió: la zona se recarga bajo demanda
+  };
+
+  // ---------- Motor de costos compartido ----------
+  const motor = useMemo(() => crearMotorCostos(carriers, asistencia), [carriers, asistencia]);
+  const agg = useMemo(() => calcularCostos(rutas, motor), [rutas, motor]);
+
+  // Performance por proveedor (paquetes/entregas) — se calcula aparte del costo
+  // porque el costo respeta reglas de dedup y half-mile que NO aplican al
+  // conteo de paquetes. Se agrupa por nombre normalizado igual que el costo.
+  const perfPorProveedor = useMemo(() => {
+    const m = {};
+    rutas.forEach(r => {
+      const orig = (r.carrier || "Sin carrier").trim() || "Sin carrier";
+      const k = norm(orig) || "sin carrier";
+      if (!m[k]) m[k] = { key: k, carrier: orig, rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, operadores: new Set() };
+      const x = m[k];
+      x.rutas += 1;
+      x.total += (r.total || 0);
+      x.entregados += (r.entregados || 0);
+      x.intentados += (r.intentados || 0);
+      x.noVisitados += (r.noVisitados || 0);
+      if (r.operador) x.operadores.add(norm(r.operador));
+    });
+    return m;
+  }, [rutas]);
+
+  // Une costo + performance en una sola fila por proveedor
+  const filasProveedor = useMemo(() => {
+    const filas = agg.carrierCostList.map(c => {
+      const k = norm(c.carrier) || "sin carrier";
+      const p = perfPorProveedor[k] || { rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, operadores: new Set() };
+      const pctEntrega = p.total > 0 ? (p.entregados / p.total) * 100 : 0;
+      // Denominador de costo/paquete = entregas al cliente final (excluye half mile)
+      const costoPaq = c.entregadosUM > 0 ? c.costo / c.entregadosUM : null;
+      return {
+        key: k, carrier: c.carrier, costo: c.costo, costoUM: c.costoUM, costoHM: c.costoHM,
+        rutas: p.rutas, unidades: p.operadores.size,
+        total: p.total, entregados: p.entregados, intentados: p.intentados, noVisitados: p.noVisitados,
+        entregadosUM: c.entregadosUM, entregadosHM: c.entregadosHM,
+        pctEntrega, costoPaq,
+      };
+    });
+    const dir = orden.dir === "asc" ? 1 : -1;
+    return filas.sort((a, b) => {
+      const va = a[orden.campo], vb = b[orden.campo];
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return typeof va === "string" ? va.localeCompare(vb) * dir : (va - vb) * dir;
+    });
+  }, [agg.carrierCostList, perfPorProveedor, orden]);
+
+  // ---------- Detalle por operador del proveedor seleccionado ----------
+  const filasOperador = useMemo(() => {
+    if (!provSel) return [];
+    const m = {};
+    agg.rutaCosto.forEach(x => {
+      const k = norm(x.r.carrier || "Sin carrier") || "sin carrier";
+      if (k !== provSel) return;
+      const op = x.r.operador || "Sin nombre";
+      const ok = norm(op);
+      if (!m[ok]) m[ok] = { operador: op, rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, costo: 0, dias: new Set(), tipos: new Set() };
+      const o = m[ok];
+      o.rutas += 1;
+      o.total += (x.r.total || 0);
+      o.entregados += (x.r.entregados || 0);
+      o.intentados += (x.r.intentados || 0);
+      o.noVisitados += (x.r.noVisitados || 0);
+      o.costo += x.costoContado;                       // respeta dedup
+      const f = (x.r.salida || "").substring(0, 10);
+      if (f) o.dias.add(f);
+      if (x.r.tipoRuta) o.tipos.add(normalizeOperacion(x.r.tipoRuta));
+    });
+    return Object.values(m).map(o => ({
+      ...o,
+      dias: o.dias.size,
+      tipos: Array.from(o.tipos),
+      pctEntrega: o.total > 0 ? (o.entregados / o.total) * 100 : 0,
+      costoPaq: o.entregados > 0 ? o.costo / o.entregados : null,
+      paqPorDia: o.dias.size > 0 ? o.entregados / o.dias.size : 0,
+    })).sort((a, b) => b.entregados - a.entregados);
+  }, [provSel, agg.rutaCosto]);
+
+  // ---------- KPIs del periodo ----------
+  const kpis = useMemo(() => {
+    const totalPaq = rutas.reduce((s, r) => s + (r.total || 0), 0);
+    // OJO — dos conteos DISTINTOS, no intercambiables:
+    //  · entregados: todas las rutas. Es el numerador correcto para el % de
+    //    entrega, porque el denominador (`total`) también incluye half mile.
+    //    Mezclarlos daba 46% en vez del 90% real.
+    //  · entregadosFinales: excluye half mile (son recolecciones intermedias,
+    //    no entregas al cliente). Sólo se usa para el costo por paquete.
+    const entregados = rutas.reduce((s, r) => s + (r.entregados || 0), 0);
+    const entregadosFinales = agg.entregadosTotal;
+    const pct = totalPaq > 0 ? (entregados / totalPaq) * 100 : 0;
+    const dias = new Set(rutas.map(r => (r.salida || "").substring(0, 10)).filter(Boolean)).size;
+    return {
+      totalPaq, entregados, entregadosFinales, pct,
+      costo: agg.costoTotalDiaNuevo,
+      costoPaq: agg.costoPorPaqGlobal,
+      rutas: rutas.length, dias,
+      proveedores: filasProveedor.length,
     };
-    loadCarrierData();
+  }, [rutas, agg, filasProveedor.length]);
+
+  // ================= ZONA / MAPA INEGI =================
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.L) { setLeafletOk(true); return; }
+    if (!document.querySelector('link[href*="leaflet@1.9.4"]')) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet"; link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+      document.head.appendChild(link);
+    }
+    const s = document.createElement("script");
+    s.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    s.onload = () => setLeafletOk(true);
+    document.body.appendChild(s);
   }, []);
-  
+
+  useEffect(() => () => { if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } }, []);
+
+  // Normaliza nombres de municipio: quita acentos, puntos y artículos para
+  // empatar "GUSTAVO A MADERO" con "Gustavo A. Madero".
+  const normMuni = (s) => norm(String(s || "").replace(/\./g, " "));
+
+  const cargarZona = async () => {
+    setZonaLoading(true); setZonaMsg("");
+    try {
+      // 1) GeoJSON de INEGI (se pide una sola vez y queda en memoria)
+      let g = geo;
+      if (!g) {
+        const res = await fetch("/geo/municipios-inegi.json");
+        if (!res.ok) throw new Error("No se pudo cargar el GeoJSON de INEGI (" + res.status + ")");
+        g = await res.json();
+        setGeo(g);
+      }
+      // 2) Entregas del periodo — keyset por `tracking` (único). Ordenar por
+      // fecha con OFFSET sería inestable porque la fecha se repite muchísimo.
+      const acc = [];
+      let cur = null;
+      while (true) {
+        let q = supabase.from("flotilla_ordenes")
+          .select("tracking,municipio,estado,estatus,fecha_entrega,fecha_promesa")
+          .gte("fecha_entrega", desde)
+          .lte("fecha_entrega", hasta + "T23:59:59")
+          .order("tracking").limit(1000);
+        if (cur) q = q.gt("tracking", cur);
+        const { data: chunk, error: e } = await q;
+        if (e) throw e;
+        if (!chunk || chunk.length === 0) break;
+        acc.push(...chunk);
+        if (chunk.length < 1000) break;
+        cur = chunk[chunk.length - 1].tracking;
+        if (acc.length > 200000) break;               // tope de seguridad
+      }
+      // 3) Agregado por municipio + SLA (entregado <= fecha promesa)
+      const m = {};
+      acc.forEach(r => {
+        const k = normMuni(r.municipio);
+        if (!k) return;
+        if (!m[k]) m[k] = { municipio: r.municipio, estado: r.estado, entregas: 0, aTiempo: 0, tarde: 0 };
+        const x = m[k];
+        x.entregas += 1;
+        if (r.fecha_entrega && r.fecha_promesa) {
+          if (r.fecha_entrega.substring(0, 10) <= r.fecha_promesa.substring(0, 10)) x.aTiempo += 1;
+          else x.tarde += 1;
+        }
+      });
+      const filas = Object.entries(m).map(([k, v]) => ({
+        ...v, key: k,
+        sla: (v.aTiempo + v.tarde) > 0 ? (v.aTiempo / (v.aTiempo + v.tarde)) * 100 : null,
+      })).sort((a, b) => b.entregas - a.entregas);
+      setZonaRows(filas);
+      setZonaTotal(acc.length);
+      if (acc.length === 0) setZonaMsg("No hay entregas georreferenciadas en este periodo.");
+    } catch (e) {
+      setZonaMsg("Error: " + (e.message || e));
+      setZonaRows([]);
+    }
+    setZonaLoading(false);
+  };
+
+  // Índice municipio -> métrica, con fallback por prefijo para abreviaturas
+  const zonaIndex = useMemo(() => {
+    if (!zonaRows) return null;
+    const exact = new Map();
+    zonaRows.forEach(z => exact.set(z.key, z));
+    return exact;
+  }, [zonaRows]);
+
+  const valorDeFeature = (props) => {
+    if (!zonaIndex) return null;
+    const nk = normMuni(props.nombre);
+    let z = zonaIndex.get(nk);
+    if (!z) {
+      // "NAUCALPAN" (datos) vs "Naucalpan de Juárez" (INEGI)
+      for (const [k, v] of zonaIndex) {
+        if (nk.startsWith(k + " ") || k.startsWith(nk + " ")) { z = v; break; }
+      }
+    }
+    return z || null;
+  };
+
+  const maxZona = useMemo(() => {
+    if (!zonaRows || !zonaRows.length) return 1;
+    return Math.max(...zonaRows.map(z => zonaMetric === "entregas" ? z.entregas : (z.sla ?? 0)), 1);
+  }, [zonaRows, zonaMetric]);
+
+  const colorZona = (z) => {
+    if (!z) return "transparent";
+    if (zonaMetric === "sla") {
+      if (z.sla == null) return "transparent";
+      return z.sla >= 90 ? "#16A34A" : z.sla >= 70 ? "#84CC16" : z.sla >= 50 ? "#F6A623" : "#F0556D";
+    }
+    const t = Math.min(1, z.entregas / maxZona);
+    // rampa secuencial azul (percibida uniforme, funciona en claro y oscuro)
+    const paleta = ["#DBEAFE", "#93C5FD", "#4C8DFF", "#2563EB", "#1E3A8A"];
+    return paleta[Math.min(paleta.length - 1, Math.floor(t * paleta.length))];
+  };
+
+  // Dibuja / redibuja el choropleth
+  useEffect(() => {
+    if (!leafletOk || !geo || !zonaRows || !mapDivRef.current) return;
+    const L = window.L;
+    if (!mapRef.current) {
+      mapRef.current = L.map(mapDivRef.current, { scrollWheelZoom: false }).setView([19.42, -99.14], 9);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap · Geometría: INEGI" }).addTo(mapRef.current);
+    }
+    if (capaRef.current) { mapRef.current.removeLayer(capaRef.current); capaRef.current = null; }
+    const capa = L.geoJSON(geo, {
+      style: (f) => {
+        const z = valorDeFeature(f.properties);
+        return {
+          fillColor: colorZona(z), fillOpacity: z ? 0.72 : 0.06,
+          color: "#ffffff", weight: z ? 1 : 0.4, opacity: z ? 0.85 : 0.25,
+        };
+      },
+      onEachFeature: (f, layer) => {
+        const z = valorDeFeature(f.properties);
+        const nombre = f.properties.nombre;
+        const html = z
+          ? `<b>${nombre}</b><br/>${f.properties.estado}<br/><b>${z.entregas.toLocaleString()}</b> entregas`
+            + (z.sla != null ? `<br/>SLA a tiempo: <b>${z.sla.toFixed(1)}%</b>` : "")
+          : `<b>${nombre}</b><br/>${f.properties.estado}<br/><span style="opacity:.7">Sin entregas en el periodo</span>`;
+        layer.bindTooltip(html, { sticky: true });
+        layer.on("mouseover", () => layer.setStyle({ weight: 2.5, color: "#F6A623" }));
+        layer.on("mouseout", () => capa.resetStyle(layer));
+      },
+    }).addTo(mapRef.current);
+    capaRef.current = capa;
+    // Encuadra sólo los municipios CON datos
+    const conDatos = geo.features.filter(f => valorDeFeature(f.properties));
+    if (conDatos.length) {
+      try { mapRef.current.fitBounds(L.geoJSON({ type: "FeatureCollection", features: conDatos }).getBounds(), { padding: [24, 24] }); } catch { /* geometría vacía */ }
+    }
+    setTimeout(() => mapRef.current && mapRef.current.invalidateSize(), 60);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [leafletOk, geo, zonaRows, zonaMetric]);
+
+  // ---------- helpers de render ----------
+  const money = (n) => "$" + Math.round(n || 0).toLocaleString("es-MX");
+  const colorPct = (v) => v >= 95 ? C.green : v >= 85 ? C.yellow : C.red;
+  const th = (label, campo, align = "right") => (
+    <th onClick={campo ? () => setOrden(o => ({ campo, dir: o.campo === campo && o.dir === "desc" ? "asc" : "desc" })) : undefined}
+      style={{ padding: "9px 12px", textAlign: align, fontSize: 10, fontWeight: 700, color: orden.campo === campo ? C.accent : C.textMuted,
+        textTransform: "uppercase", letterSpacing: "0.06em", cursor: campo ? "pointer" : "default", whiteSpace: "nowrap", userSelect: "none" }}>
+      {label}{orden.campo === campo ? (orden.dir === "desc" ? " ▾" : " ▴") : ""}
+    </th>
+  );
+
+  const btnPreset = (id, label) => (
+    <button onClick={() => aplicarPreset(id)} style={{
+      padding: "7px 14px", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer",
+      border: "1px solid " + (preset === id ? C.accent : C.border),
+      backgroundColor: preset === id ? C.accentLight : "transparent",
+      color: preset === id ? C.accent : C.textMuted,
+    }}>{label}</button>
+  );
+
+  const maxCosto = Math.max(...filasProveedor.map(f => f.costo), 1);
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+      {/* ---------- Encabezado + periodo ---------- */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Dashboard OPS</h1>
-          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Métricas de flotilla propia · Datos en tiempo real</p>
+          <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>
+            Costos y desempeño por proveedor · detalle por operador · entregas por zona · <b style={{ color: C.textMuted }}>datos reales del periodo</b>
+          </p>
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <select value={periodo} onChange={e => setPeriodo(e.target.value)} style={{
-            padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, backgroundColor: C.white, cursor: "pointer", color: C.text,
-          }}>
-            <option>Febrero 2026</option><option>Enero 2026</option><option>Diciembre 2025</option>
-            <option>Noviembre 2025</option><option>Octubre 2025</option>
-          </select>
-          <button style={{ padding: "8px 16px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-            <IC.Download /> Exportar
-          </button>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          {btnPreset("hoy", "Hoy")}
+          {btnPreset("7d", "7 días")}
+          {btnPreset("mes", "Mes actual")}
+          {btnPreset("mesAnt", "Mes anterior")}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
+            <input type="date" value={desde} max={hasta} onChange={e => { setDesde(e.target.value); setPreset("custom"); }}
+              style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid " + (preset === "custom" ? C.accent : C.border), backgroundColor: C.white, color: C.text, fontSize: 12 }} />
+            <span style={{ color: C.textMuted, fontSize: 12 }}>→</span>
+            <input type="date" value={hasta} min={desde} max={hoyISO()} onChange={e => { setHasta(e.target.value); setPreset("custom"); }}
+              style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid " + (preset === "custom" ? C.accent : C.border), backgroundColor: C.white, color: C.text, fontSize: 12 }} />
+          </div>
         </div>
       </div>
 
-      {/* Stat cards */}
-      <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
-        <StatCard label="Envíos totales" value="30,788" trend="+8.2%" trendUp subvalue="vs mes anterior" icon={<IC.Package />} color={C.blue} />
-        <StatCard label="Entregas" value="29,549" trend="+5.1%" trendUp subvalue="vs mes anterior" icon={<IC.Check />} color={C.green} />
-        <StatCard label="% Entrega" value="96.0%" trend="+1.0%" trendUp subvalue="Target: 96%" icon={<IC.BarChart />} color={C.accent} />
-        <StatCard label="Costo General" value="$1.34M" trend="-3.2%" trendUp subvalue="vs mes anterior" icon={<IC.Dollar />} color={C.purple} />
-      </div>
-
-      {/* Charts row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 20 }}>
-        {/* Gauge */}
-        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 22, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6 }}>% Entrega General</div>
-          <GaugeChart value={96.0} label="Febrero 2026" size={180} />
-        </div>
-        {/* Envios bar */}
-        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 22, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 14 }}>Envíos por mes</div>
-          <MiniBarChart data={monthlyData} dataKey="envios" color={C.accent} />
-        </div>
-        {/* Costo bar */}
-        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 22, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 14 }}>Costo por mes</div>
-          <MiniBarChart data={monthlyData} dataKey="costo" color={C.purple} />
-        </div>
-      </div>
-
-      {/* OPS Breakdown */}
-      <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 22, border: `1px solid ${C.border}`, marginBottom: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 16 }}>OPS — Distribución por tipo de operación</div>
-        <OpsBar data={opsBreakdown} />
-        <div style={{ marginTop: 16 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: `2px solid ${C.border}` }}>
-                {["Tipo", "Envíos", "Entregas", "% Entrega", "Costo", "Costo/Envío"].map(h => (
-                  <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {opsBreakdown.map((row, i) => (
-                <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                  <td style={{ padding: "10px 12px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: row.color }} />
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>{row.tipo}</span>
-                    </div>
-                  </td>
-                  <td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 600 }}>{row.envios.toLocaleString()}</td>
-                  <td style={{ padding: "10px 12px", fontSize: 13 }}>{row.entregas.toLocaleString()}</td>
-                  <td style={{ padding: "10px 12px" }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: row.pct >= 96 ? C.green : row.pct >= 93 ? C.yellow : C.red }}>{row.pct}%</span>
-                  </td>
-                  <td style={{ padding: "10px 12px", fontSize: 13 }}>${(row.costo/1000).toFixed(0)}K</td>
-                  <td style={{ padding: "10px 12px", fontSize: 13, color: C.textMuted }}>${(row.costo/row.envios).toFixed(1)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Desempeño por Proveedor */}
-      {carrierData.length > 0 && (
-        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 22, border: "1px solid " + C.border, marginBottom: 20 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Desempeño por Proveedor (Carrier)</div>
-              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Comparativa de métricas operativas por transportista</div>
-            </div>
-          </div>
-
-          {/* Bar chart - % Entrega */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>% Entrega promedio</div>
-            {carrierData.map((c, i) => {
-              const pct = parseFloat(c.pctEntrega);
-              const color = pct >= 90 ? C.green : pct >= 75 ? C.yellow : C.red;
-              const badge = pct >= 90 ? "Excelente" : pct >= 75 ? "Bueno" : "En riesgo";
-              const badgeBg = pct >= 90 ? C.greenBg : pct >= 75 ? C.yellowBg : C.redBg;
-              return (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                  <div style={{ width: 130, fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.carrier}</div>
-                  <div style={{ flex: 1, height: 22, backgroundColor: C.panelAlt, borderRadius: 6, overflow: "hidden", position: "relative" }}>
-                    <div style={{ width: pct + "%", height: "100%", backgroundColor: color, borderRadius: 6, transition: "width 0.5s", display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8 }}>
-                      {pct > 20 && <span style={{ fontSize: 10, fontWeight: 700, color: "white" }}>{c.pctEntrega}%</span>}
-                    </div>
-                  </div>
-                  {pct <= 20 && <span style={{ fontSize: 10, fontWeight: 700, color }}>{c.pctEntrega}%</span>}
-                  <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: badgeBg, color, minWidth: 60, textAlign: "center" }}>{badge}</span>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Bar chart - Total envíos */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>Total de paquetes</div>
-            {(() => {
-              const maxTotal = Math.max(...carrierData.map(c => c.total));
-              return carrierData.map((c, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                  <div style={{ width: 130, fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.carrier}</div>
-                  <div style={{ flex: 1, height: 22, backgroundColor: C.panelAlt, borderRadius: 6, overflow: "hidden" }}>
-                    <div style={{ display: "flex", height: "100%", borderRadius: 6 }}>
-                      <div style={{ width: (c.entregados / maxTotal * 100) + "%", backgroundColor: C.green, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        {c.entregados > maxTotal * 0.15 && <span style={{ fontSize: 9, fontWeight: 700, color: "white" }}>{c.entregados}</span>}
-                      </div>
-                      <div style={{ width: (c.noEntregados / maxTotal * 100) + "%", backgroundColor: C.red, opacity: 0.7, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        {c.noEntregados > maxTotal * 0.1 && <span style={{ fontSize: 9, fontWeight: 700, color: "white" }}>{c.noEntregados}</span>}
-                      </div>
-                    </div>
-                  </div>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: C.text, minWidth: 40, textAlign: "right" }}>{c.total}</span>
-                </div>
-              ));
-            })()}
-            <div style={{ display: "flex", gap: 16, marginTop: 6 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}><div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: C.green }} /><span style={{ fontSize: 10, color: C.textMuted }}>Entregados</span></div>
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}><div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: C.red, opacity: 0.7 }} /><span style={{ fontSize: 10, color: C.textMuted }}>No entregados</span></div>
-            </div>
-          </div>
-
-          {/* Bar chart - Devoluciones / Intentados */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>Devoluciones (intentos fallidos)</div>
-            {(() => {
-              const maxDev = Math.max(...carrierData.map(c => c.devoluciones), 1);
-              return carrierData.map((c, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                  <div style={{ width: 130, fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.carrier}</div>
-                  <div style={{ flex: 1, height: 22, backgroundColor: C.panelAlt, borderRadius: 6, overflow: "hidden" }}>
-                    <div style={{ width: (c.devoluciones / maxDev * 100) + "%", height: "100%", backgroundColor: C.yellow, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8 }}>
-                      {c.devoluciones > maxDev * 0.15 && <span style={{ fontSize: 10, fontWeight: 700, color: "white" }}>{c.devoluciones}</span>}
-                    </div>
-                  </div>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: C.yellow, minWidth: 30, textAlign: "right" }}>{c.devoluciones}</span>
-                </div>
-              ));
-            })()}
-          </div>
-
-          {/* Summary table */}
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: "2px solid " + C.border }}>
-                {["Carrier", "Rutas", "Paquetes", "Entregados", "No entregados", "Devoluciones", "% Entrega", "Desempeño"].map(h => (
-                  <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {carrierData.map((c, i) => {
-                const pct = parseFloat(c.pctEntrega);
-                const color = pct >= 90 ? C.green : pct >= 75 ? C.yellow : C.red;
-                const badge = pct >= 90 ? "Excelente" : pct >= 75 ? "Bueno" : "En riesgo";
-                const badgeBg = pct >= 90 ? C.greenBg : pct >= 75 ? C.yellowBg : C.redBg;
-                return (
-                  <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
-                    <td style={{ padding: "10px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
-                    <td style={{ padding: "10px", fontSize: 13 }}>{c.rutas}</td>
-                    <td style={{ padding: "10px", fontSize: 13, fontWeight: 600 }}>{c.total.toLocaleString()}</td>
-                    <td style={{ padding: "10px", fontSize: 13, color: C.green, fontWeight: 600 }}>{c.entregados.toLocaleString()}</td>
-                    <td style={{ padding: "10px", fontSize: 13, color: C.red }}>{c.noEntregados.toLocaleString()}</td>
-                    <td style={{ padding: "10px", fontSize: 13, color: C.yellow, fontWeight: 600 }}>{c.devoluciones}</td>
-                    <td style={{ padding: "10px", fontSize: 13, fontWeight: 700, color }}>{c.pctEntrega}%</td>
-                    <td style={{ padding: "10px" }}><span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: badgeBg, color }}>{badge}</span></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {error && (
+        <div style={{ padding: "12px 16px", borderRadius: 8, backgroundColor: C.redBg, color: C.red, fontSize: 13, fontWeight: 600, marginBottom: 14 }}>
+          Error al cargar: {error}
         </div>
       )}
 
-      {/* Recent activity */}
-      <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 22, border: `1px solid ${C.border}` }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Últimos envíos registrados</div>
+      {loading ? (
+        <div style={{ padding: 60, textAlign: "center", color: C.textMuted, fontSize: 14 }}>Cargando datos del periodo...</div>
+      ) : rutas.length === 0 ? (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 48, border: "1px solid " + C.border, textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Sin rutas en este periodo</div>
+          <div style={{ fontSize: 13, color: C.textMuted }}>Del {desde} al {hasta} no hay rutas registradas. Prueba otro rango.</div>
         </div>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ borderBottom: `2px solid ${C.border}` }}>
-              {["ID", "Fecha", "Unidad", "Operador", "Destino", "Paquetes", "Status"].map(h => (
-                <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+      ) : (
+        <>
+          {/* ---------- KPIs ---------- */}
+          <div style={{ display: "flex", gap: 14, marginBottom: 18, flexWrap: "wrap" }}>
+            <StatCard label="Paquetes entregados" value={kpis.entregados.toLocaleString("es-MX")}
+              subvalue={`de ${kpis.totalPaq.toLocaleString("es-MX")} asignados`} icon={<IC.Package />} color={C.blue} />
+            <StatCard label="% Entrega" value={kpis.pct.toFixed(1) + "%"}
+              subvalue={`${kpis.rutas.toLocaleString("es-MX")} rutas · ${kpis.dias} días`} icon={<IC.BarChart />} color={colorPct(kpis.pct)} />
+            <StatCard label="Costo operativo" value={money(kpis.costo)}
+              subvalue={`${kpis.proveedores} proveedores`} icon={<IC.Dollar />} color={C.purple} />
+            <StatCard label="Costo por paquete" value={"$" + (kpis.costoPaq || 0).toFixed(2)}
+              subvalue={`÷ ${kpis.entregadosFinales.toLocaleString("es-MX")} entregas finales`} icon={<IC.Truck />} color={C.accent} />
+          </div>
+
+          {/* Avisos de calidad de dato: si faltan registros, el costo va subestimado */}
+          {(agg.sinAsistencia > 0 || agg.crossSinRecol > 0) && (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+              {agg.sinAsistencia > 0 && (
+                <div style={{ flex: "1 1 320px", padding: "10px 14px", borderRadius: 8, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 12, fontWeight: 600 }}>
+                  ⚠ {agg.sinAsistencia} ruta(s) sin asistencia registrada — su costo cuenta como $0, así que el costo total está subestimado.
+                </div>
+              )}
+              {agg.crossSinRecol > 0 && (
+                <div style={{ flex: "1 1 320px", padding: "10px 14px", borderRadius: 8, backgroundColor: C.blueBg, color: C.blue, fontSize: 12, fontWeight: 600 }}>
+                  ℹ {agg.crossSinRecol} ruta(s) de half mile sin recolecciones capturadas. En half mile el paquete se cuenta
+                  en <b>recolecciones</b>, no en entregados, así que aparecen con 0 paquetes en el desglose y su costo
+                  ({money(agg.desgloseList.find(d => d.tipo === "Half mile")?.costo || 0)}) no tiene divisor.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ---------- Desglose por tipo de operación ---------- */}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>Costo por tipo de operación</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14 }}>
+              Half mile son recolecciones intermedias: suman costo pero no cuentan como entrega final.
+            </div>
+            <div style={{ display: "flex", height: 26, borderRadius: 6, overflow: "hidden", marginBottom: 10 }}>
+              {agg.desgloseList.map(d => {
+                const w = kpis.costo > 0 ? (d.costo / kpis.costo) * 100 : 0;
+                if (w <= 0) return null;
+                return (
+                  <div key={d.tipo} title={`${d.tipo}: ${money(d.costo)}`}
+                    style={{ width: w + "%", backgroundColor: agg.DESGLOSE_COLOR[d.tipo] || C.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {w > 8 && <span style={{ fontSize: 10, fontWeight: 800, color: "white" }}>{w.toFixed(0)}%</span>}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              {agg.desgloseList.map(d => (
+                <div key={d.tipo} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: agg.DESGLOSE_COLOR[d.tipo] || C.textMuted }} />
+                  <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{d.tipo}</span>
+                  <span style={{ fontSize: 11, color: C.textMuted }}>{money(d.costo)} · {d.paquetes.toLocaleString("es-MX")} paq</span>
+                </div>
               ))}
-            </tr>
-          </thead>
-          <tbody>
-            {mockEnvios.slice(0, 5).map((e, i) => (
-              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                <td style={{ padding: "10px", fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{e.id}</td>
-                <td style={{ padding: "10px", fontSize: 12, color: C.textMuted }}>{e.fecha}</td>
-                <td style={{ padding: "10px", fontSize: 12, fontWeight: 600 }}>{e.unidad}</td>
-                <td style={{ padding: "10px", fontSize: 12 }}>{e.operador}</td>
-                <td style={{ padding: "10px", fontSize: 12 }}>{e.destino}</td>
-                <td style={{ padding: "10px", fontSize: 12, fontWeight: 600 }}>{e.paquetes}</td>
-                <td style={{ padding: "10px" }}><StatusBadge status={e.status} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </div>
+          </div>
+
+          {/* ---------- Proveedores ---------- */}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, marginBottom: 16, overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Costos y desempeño por proveedor</div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Clic en una fila para ver el detalle por operador · clic en encabezado para ordenar</div>
+              </div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>{filasProveedor.length} proveedores · {desde} → {hasta}</div>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead style={{ backgroundColor: C.bg }}>
+                  <tr>
+                    {th("Proveedor", "carrier", "left")}
+                    {th("Rutas", "rutas")}
+                    {th("Unidades", "unidades")}
+                    {th("Paquetes", "total")}
+                    {th("Entregados", "entregados")}
+                    {th("% Entrega", "pctEntrega")}
+                    {th("Costo total", "costo")}
+                    {th("Costo/paq", "costoPaq")}
+                    <th style={{ padding: "9px 12px", width: 100 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filasProveedor.map(f => {
+                    const abierto = provSel === f.key;
+                    return (
+                      <Fragment key={f.key}>
+                        <tr onClick={() => setProvSel(abierto ? null : f.key)}
+                          style={{ borderTop: "1px solid " + C.border, cursor: "pointer", backgroundColor: abierto ? C.selBg : "transparent" }}
+                          onMouseEnter={e => { if (!abierto) e.currentTarget.style.backgroundColor = C.panelAlt; }}
+                          onMouseLeave={e => { e.currentTarget.style.backgroundColor = abierto ? C.selBg : "transparent"; }}>
+                          <td style={{ padding: "11px 12px", fontSize: 13, fontWeight: 700, color: C.text, whiteSpace: "nowrap" }}>
+                            <span style={{ color: C.textMuted, marginRight: 6, fontSize: 11 }}>{abierto ? "▾" : "▸"}</span>{f.carrier}
+                          </td>
+                          <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: C.textMuted }}>{f.rutas.toLocaleString("es-MX")}</td>
+                          <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: C.textMuted }}>{f.unidades}</td>
+                          <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right" }}>{f.total.toLocaleString("es-MX")}</td>
+                          <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: C.green, fontWeight: 600 }}>{f.entregados.toLocaleString("es-MX")}</td>
+                          <td style={{ padding: "11px 12px", textAlign: "right" }}>
+                            <span style={{ fontSize: 12, fontWeight: 800, color: colorPct(f.pctEntrega) }}>{f.pctEntrega.toFixed(1)}%</span>
+                          </td>
+                          <td style={{ padding: "11px 12px", textAlign: "right" }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{money(f.costo)}</div>
+                            <div style={{ height: 3, borderRadius: 2, backgroundColor: C.purple, opacity: 0.75, width: Math.max(4, (f.costo / maxCosto) * 100) + "%", marginLeft: "auto", marginTop: 3 }} />
+                          </td>
+                          <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", fontWeight: 700, color: f.costoPaq == null ? C.textMuted : f.costoPaq <= 40 ? C.green : f.costoPaq <= 45 ? C.yellow : C.red }}>
+                            {f.costoPaq == null ? "—" : "$" + f.costoPaq.toFixed(2)}
+                          </td>
+                          <td style={{ padding: "11px 12px", textAlign: "right", fontSize: 11, color: C.accent, fontWeight: 700, whiteSpace: "nowrap" }}>
+                            {abierto ? "Ocultar" : "Ver operadores"}
+                          </td>
+                        </tr>
+                        {abierto && (
+                          <tr>
+                            <td colSpan={9} style={{ padding: 0, backgroundColor: C.panelAlt }}>
+                              <div style={{ padding: "14px 18px" }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 2 }}>
+                                  Eficiencia por operador — {f.carrier}
+                                </div>
+                                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
+                                  {filasOperador.length} operadores · el costo respeta el dedup (un operador repetido el mismo día en PETCO/Foráneo cobra una vez)
+                                </div>
+                                <div style={{ overflowX: "auto", maxHeight: 340 }}>
+                                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                                    <thead style={{ position: "sticky", top: 0, backgroundColor: C.panelAlt }}>
+                                      <tr>
+                                        {["Operador", "Días", "Rutas", "Paquetes", "Entregados", "% Entrega", "Paq/día", "Costo", "Costo/paq", "Operación"].map((h, i) => (
+                                          <th key={h} style={{ padding: "7px 10px", textAlign: i === 0 || i === 9 ? "left" : "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>{h}</th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {filasOperador.map(o => (
+                                        <tr key={o.operador} style={{ borderBottom: "1px solid " + C.border }}>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap" }}>{o.operador}</td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: C.textMuted }}>{o.dias}</td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: C.textMuted }}>{o.rutas}</td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right" }}>{o.total.toLocaleString("es-MX")}</td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: C.green, fontWeight: 600 }}>{o.entregados.toLocaleString("es-MX")}</td>
+                                          <td style={{ padding: "7px 10px", textAlign: "right" }}>
+                                            <span style={{ fontSize: 11, fontWeight: 800, color: colorPct(o.pctEntrega) }}>{o.pctEntrega.toFixed(1)}%</span>
+                                          </td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", fontWeight: 700, color: C.blue }}>{o.paqPorDia.toFixed(0)}</td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right" }}>{money(o.costo)}</td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", fontWeight: 700, color: o.costoPaq == null ? C.textMuted : o.costoPaq <= 40 ? C.green : o.costoPaq <= 45 ? C.yellow : C.red }}>
+                                            {o.costoPaq == null ? "—" : "$" + o.costoPaq.toFixed(2)}
+                                          </td>
+                                          <td style={{ padding: "7px 10px", fontSize: 10, color: C.textMuted, whiteSpace: "nowrap" }}>{o.tipos.join(", ")}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr style={{ borderTop: "2px solid " + C.border, backgroundColor: C.bg }}>
+                    <td style={{ padding: "11px 12px", fontSize: 12, fontWeight: 800, color: C.text }}>TOTAL</td>
+                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700 }}>{kpis.rutas.toLocaleString("es-MX")}</td>
+                    <td />
+                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700 }}>{kpis.totalPaq.toLocaleString("es-MX")}</td>
+                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700, color: C.green }}>{kpis.entregados.toLocaleString("es-MX")}</td>
+                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800, color: colorPct(kpis.pct) }}>{kpis.pct.toFixed(1)}%</td>
+                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800 }}>{money(kpis.costo)}</td>
+                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800 }}>${(kpis.costoPaq || 0).toFixed(2)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+
+          {/* ---------- Mapa por zona (INEGI) ---------- */}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Entregas por zona</div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                  Municipios del Marco Geoestadístico de <b>INEGI</b> · CDMX, Edomex, Nuevo León, Jalisco y Puebla
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {zonaRows && (
+                  <>
+                    <button onClick={() => setZonaMetric("entregas")} style={{ padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "1px solid " + (zonaMetric === "entregas" ? C.blue : C.border), backgroundColor: zonaMetric === "entregas" ? C.blueBg : "transparent", color: zonaMetric === "entregas" ? C.blue : C.textMuted }}>Volumen</button>
+                    <button onClick={() => setZonaMetric("sla")} style={{ padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "1px solid " + (zonaMetric === "sla" ? C.green : C.border), backgroundColor: zonaMetric === "sla" ? C.greenBg : "transparent", color: zonaMetric === "sla" ? C.green : C.textMuted }}>SLA a tiempo</button>
+                  </>
+                )}
+                <button onClick={cargarZona} disabled={zonaLoading}
+                  style={{ padding: "7px 16px", borderRadius: 7, border: "none", backgroundColor: zonaLoading ? C.textMuted : C.accent, color: "white", fontSize: 12, fontWeight: 700, cursor: zonaLoading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                  <IC.Map /> {zonaLoading ? "Cargando..." : zonaRows ? "Recargar" : "Cargar mapa"}
+                </button>
+              </div>
+            </div>
+
+            {zonaMsg && (
+              <div style={{ padding: "10px 18px", fontSize: 12, fontWeight: 600, color: zonaMsg.startsWith("Error") ? C.red : C.textMuted, backgroundColor: zonaMsg.startsWith("Error") ? C.redBg : "transparent" }}>{zonaMsg}</div>
+            )}
+
+            {!zonaRows && !zonaLoading && (
+              <div style={{ padding: 40, textAlign: "center" }}>
+                <div style={{ fontSize: 34, marginBottom: 10 }}>🗺️</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>Mapa de entregas por municipio</div>
+                <div style={{ fontSize: 12, color: C.textMuted, maxWidth: 520, margin: "0 auto", lineHeight: 1.6 }}>
+                  Se carga aparte porque cruza las órdenes georreferenciadas del periodo con los polígonos de INEGI.
+                  Dale a <b>Cargar mapa</b>.
+                </div>
+              </div>
+            )}
+
+            {zonaRows && zonaRows.length > 0 && (
+              <>
+                {/* Cobertura: honestidad sobre de dónde salen estos números */}
+                <div style={{ padding: "10px 18px", backgroundColor: C.blueBg, color: C.blue, fontSize: 11.5, fontWeight: 600, borderBottom: "1px solid " + C.border }}>
+                  ℹ Este mapa usa las <b>{zonaTotal.toLocaleString("es-MX")}</b> órdenes con dirección georreferenciada del periodo
+                  ({kpis.entregados > 0 ? ((zonaTotal / kpis.entregados) * 100).toFixed(1) : "0"}% de los {kpis.entregados.toLocaleString("es-MX")} paquetes entregados que reportan las rutas).
+                  No es el total de la operación — sirve para ver <b>distribución geográfica</b>, no volumen absoluto.
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0,2fr) minmax(260px,1fr)", gap: 0 }}>
+                  <div ref={mapDivRef} style={{ height: 460, width: "100%", backgroundColor: C.panelAlt }} />
+                  <div style={{ borderLeft: "1px solid " + C.border, maxHeight: 460, overflowY: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead style={{ position: "sticky", top: 0, backgroundColor: C.bg, zIndex: 1 }}>
+                        <tr>
+                          {["Municipio", "Entregas", "SLA"].map((h, i) => (
+                            <th key={h} style={{ padding: "8px 12px", textAlign: i === 0 ? "left" : "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {zonaRows.map(z => (
+                          <tr key={z.key} style={{ borderBottom: "1px solid " + C.border }}>
+                            <td style={{ padding: "7px 12px", fontSize: 12 }}>
+                              <div style={{ fontWeight: 600, color: C.text }}>{z.municipio}</div>
+                              <div style={{ fontSize: 10, color: C.textFaint }}>{z.estado}</div>
+                            </td>
+                            <td style={{ padding: "7px 12px", fontSize: 12, textAlign: "right", fontWeight: 700, color: C.text }}>{z.entregas.toLocaleString("es-MX")}</td>
+                            <td style={{ padding: "7px 12px", fontSize: 12, textAlign: "right", fontWeight: 700, color: z.sla == null ? C.textMuted : colorPct(z.sla) }}>
+                              {z.sla == null ? "—" : z.sla.toFixed(0) + "%"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div style={{ padding: "10px 18px", borderTop: "1px solid " + C.border, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", fontSize: 11, color: C.textMuted }}>
+                  <span style={{ fontWeight: 700 }}>{zonaMetric === "sla" ? "SLA a tiempo:" : "Volumen de entregas:"}</span>
+                  {(zonaMetric === "sla"
+                    ? [["#F0556D", "<50%"], ["#F6A623", "50-70%"], ["#84CC16", "70-90%"], ["#16A34A", "≥90%"]]
+                    : [["#DBEAFE", "bajo"], ["#93C5FD", ""], ["#4C8DFF", ""], ["#2563EB", ""], ["#1E3A8A", "alto"]]
+                  ).map(([col, lbl], i) => (
+                    <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <span style={{ width: 16, height: 10, borderRadius: 2, backgroundColor: col, display: "inline-block" }} />{lbl}
+                    </span>
+                  ))}
+                  <span style={{ marginLeft: "auto" }}>Geometría: INEGI · Marco Geoestadístico (capa municipal)</span>
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1018,6 +1472,299 @@ function RiskIcon({ level }) {
 }
 
 // --- REGISTRAR ENVÍOS (Data Capture Module) ---
+// ============================================================
+// MOTOR DE COSTOS — compartido por Envíos y Dashboard OPS.
+// Vivía dentro de ModuleEnvios; se extrajo para que el Dashboard calcule los
+// costos con EXACTAMENTE las mismas reglas (asistencia -> catálogo de
+// carriers, overrides por ruta, tarifas fijas por paquete y penalizaciones)
+// en lugar de reimplementarlas y que se desincronicen.
+// ============================================================
+// Formula evaluator: supports +, -, *, /, parens, decimals, and `costo` variable
+const evalFormula = (expr, costo) => {
+  if (!expr || !String(expr).trim()) return 0;
+  let s = String(expr).replace(/costo/gi, "(" + (parseFloat(costo) || 0) + ")");
+  if (!/^[\d+\-*/().\s]*$/.test(s)) return NaN;
+  try {
+    // eslint-disable-next-line no-new-func
+    const result = Function('"use strict"; return (' + s + ')')();
+    return (typeof result === "number" && isFinite(result)) ? result : NaN;
+  } catch { return NaN; }
+};
+
+// Normalize strings for operator name matching (case/accents/spaces insensitive)
+const norm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+
+// Lookup unit + provider + base cost for a ruta based on matching automatic asistencia
+// record (same day + same operator name) joined with carriers catalog.
+// Special cases:
+//   - "PETCO Monterrey": flat $50 per package operated, bypasses asistencia.
+//   - Other permissible labels (PETCO, Foráneo, HalfMile): if no same-day
+//     asistencia, fallback to the operator's most-recent asistencia to
+//     resolve the unit, then pull cost from carriers catalog.
+const isCrossdock = r => {
+  const t = (r.tipoRuta || "").toLowerCase();
+  return t.includes("half") || t.includes("cross");
+};
+
+// Final cost after penalty.
+// The formula evaluates DIRECTLY to the new cost (costo real final).
+// The discount is derived: descuento = costo_base - costo_nuevo.
+// If the formula is empty/invalid, no penalty applies (costo_nuevo = costo_base).
+// Canoniza el tipo de operación escrito a mano en la BD.
+const normalizeOperacion = (raw) => {
+  if (!raw) return "Sin especificar";
+  const n = norm(raw);
+  if (n.includes("ultima milla") || n === "lm" || n === "um") return "Última milla";
+  if (n.includes("crossdock") || n.includes("cross dock") || n.includes("logistica inversa") || n.includes("halfmile") || n.includes("half mile") || n.includes("logistica") || n.includes("inversa")) return "Crossdock";
+  if (n.includes("petco") && n.includes("monterrey")) return "PETCO Monterrey";
+  if (n.includes("petco")) return "PETCO";
+  if (n.includes("foraneo")) {
+    if (n.includes("monterrey") || n.includes("mty")) return "Foráneo Monterrey";
+    if (n.includes("gdl") || n.includes("guadalajara")) return "Foráneo GDL";
+    if (n.includes("puebla")) return "Foráneo Puebla";
+    return "Foráneo Puebla"; // default si sólo dice "Foráneo"
+  }
+  return raw; // mantener cualquier otro tal cual
+};
+
+// Fábrica: cierra sobre los catálogos (carriers) y la asistencia del periodo.
+function crearMotorCostos(carriers, asistencia) {
+  const getCostoInfo = r => {
+    // Filas sintéticas (sólo asistencia, sin ruta): el costo y el tipo_unidad
+    // se inyectan en el constructor de rutasCombinadas.
+    if (r && r._esAsistencia) {
+      return { baseCost: r._baseCostSintetico || 0, proveedor: r.carrier, tipo_unidad: r._tipoUnidadSintetico || "Sedan", missing: false, tipo_operacion: r.tipoRuta, fromAsistencia: true };
+    }
+    // OVERRIDE manual desde la modal Editar: si la ruta tiene tipo_unidad y/o
+    // costo_unidad explícitos, esos mandan sobre asistencia/catálogo.
+    if (r && (r.tipoUnidadOverride || r.costoUnidadOverride != null)) {
+      const tu = r.tipoUnidadOverride || null;
+      const cu = r.costoUnidadOverride != null ? r.costoUnidadOverride : null;
+      // Si falta uno, intentar completar con asistencia/catálogo
+      let baseCost = cu;
+      let tipo_unidad = tu;
+      if (tipo_unidad && baseCost == null) {
+        const car = carriers.find(c => norm(c.proveedor) === norm(r.carrier) && c.tipo_unidad === tipo_unidad);
+        baseCost = parseFloat(car?.costo_unidad) || 0;
+      }
+      if (!tipo_unidad && baseCost != null) {
+        tipo_unidad = "Override";
+      }
+      return { baseCost: baseCost || 0, proveedor: r.carrier, tipo_unidad: tipo_unidad || "Override", missing: false, tipo_operacion: r.tipoRuta, override: true };
+    }
+    // Flat-rate tipos (per-package): bypass asistencia lookup entirely
+    const rateFija = TARIFAS_FIJAS[r.tipoRuta];
+    if (rateFija != null) {
+      const paqOperados = (parseInt(r.entregados) || 0) + (isCrossdock(r) ? (parseInt(r.recolecciones) || 0) : 0);
+      const baseCost = rateFija * paqOperados;
+      return { baseCost, proveedor: r.tipoRuta, tipo_unidad: "Tarifa fija", missing: false, flatRate: true, flatRateValue: rateFija, paqOperados };
+    }
+    const fecha = (r.salida || "").substring(0, 10);
+    if (!fecha || !r.operador) return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
+    const opNorm = norm(r.operador);
+    // 1) Same-day match (preferred). Excluye filas "Registro manual" porque
+    // representan asistencia agregada sin operador específico.
+    const sameDay = asistencia.filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual" && (a.fecha || "").substring(0, 10) === fecha && norm(a.nombre_operador) === opNorm);
+    if (sameDay.length) {
+      const a = sameDay[0];
+      const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+      const baseCost = parseFloat(car?.costo_unidad) || 0;
+      return { baseCost, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, missing: false, tipo_operacion: a.tipo_operacion };
+    }
+    // 2) Fallback for permissible labels: most-recent asistencia for this operator
+    if (esPermisible(r)) {
+      const fallback = asistencia.filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual" && norm(a.nombre_operador) === opNorm);
+      if (fallback.length) {
+        // asistencia is already sorted desc by fecha in loadAsistenciaCarriers
+        const a = fallback[0];
+        const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
+        const baseCost = parseFloat(car?.costo_unidad) || 0;
+        return { baseCost, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, missing: false, tipo_operacion: a.tipo_operacion, fallback: "operador" };
+      }
+      // 3) Last-resort fallback: operator has no asistencia ever. Use the
+      //    carrier from the uploaded route row to pick a default unit
+      //    (prefer Sedan, else the cheapest última-milla option).
+      if (r.carrier && r.carrier !== "—") {
+        const carrierName = norm(r.carrier);
+        const candidates = carriers.filter(c =>
+          norm(c.proveedor) === carrierName
+          && c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—"
+          && (c.operacion || "").toLowerCase().includes("ltima")
+        );
+        if (candidates.length) {
+          const sedan = candidates.find(c => c.tipo_unidad === "Sedan");
+          const chosen = sedan || candidates.slice().sort((a, b) =>
+            (parseFloat(a.costo_unidad) || 0) - (parseFloat(b.costo_unidad) || 0)
+          )[0];
+          const baseCost = parseFloat(chosen.costo_unidad) || 0;
+          return { baseCost, proveedor: chosen.proveedor, tipo_unidad: chosen.tipo_unidad, missing: false, tipo_operacion: chosen.operacion, fallback: "carrier" };
+        }
+      }
+    }
+    return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
+  };
+
+  const getCostoReal = r => {
+    const { baseCost } = getCostoInfo(r);
+    const hasFormula = (r.penalizacion || "").trim().length > 0;
+    const evaluated = evalFormula(r.penalizacion, baseCost);
+    const costoNuevo = hasFormula && !isNaN(evaluated) ? evaluated : baseCost;
+    const descuento = baseCost - costoNuevo;
+    return { baseCost, descuento, costoNuevo };
+  };
+
+  // Cost per package (last mile uses delivered, crossdock uses collected)
+  const getCostoPorPaquete = r => {
+    const { costoNuevo } = getCostoReal(r);
+    const divisor = isCrossdock(r) ? r.recolecciones : r.entregados;
+    if (!divisor || divisor <= 0) return { value: null, divisor: 0 };
+    return { value: costoNuevo / divisor, divisor };
+  };
+
+  // Tipos de ruta donde es permisible no tener registro automático de operador
+  const TIPOS_PERMISIBLES = new Set(["Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "PETCO", "PETCO Monterrey", "HalfMile"]);
+  const esPermisible = r => TIPOS_PERMISIBLES.has(r.tipoRuta);
+  // Tipos de tarifa fija: { tipo: $ por paquete operado }
+  const TARIFAS_FIJAS = {
+    "PETCO Monterrey": 50,
+    "Foráneo Monterrey": 55,
+    "Foráneo GDL": 55,
+  };
+
+  return { evalFormula, norm, getCostoInfo, isCrossdock, getCostoReal, getCostoPorPaquete, esPermisible, TIPOS_PERMISIBLES, TARIFAS_FIJAS };
+}
+
+// ============================================================
+// AGREGACIÓN DE COSTOS POR RUTA/PROVEEDOR — compartida por Envíos y Dashboard.
+// Encapsula las reglas de negocio no obvias:
+//   · dedup: mismo operador+fecha en PETCO/Foráneo Puebla cobra UNA vez y los
+//     paquetes del grupo se suman para el costo/paquete;
+//   · Half mile: sus "entregados" son recolecciones intermedias, así que NO
+//     cuentan como paquete final y se excluyen del denominador de costo/paquete;
+//   · agrupa proveedores por nombre normalizado y muestra la grafía más común.
+// Se extrajo para que el Dashboard OPS no reimplemente estas reglas.
+// ============================================================
+function calcularCostos(rutas, motor) {
+  const { getCostoInfo, esPermisible } = motor;
+  const DEDUP_TIPOS = new Set(["PETCO", "Foráneo Puebla"]);
+  const esDedup = r => DEDUP_TIPOS.has(r.tipoRuta);
+
+  // Agrupar rutas dedup por (fecha, operador, tipoRuta) para compartir costo
+  const dedupGroups = {};
+  rutas.forEach((r, i) => {
+    if (!esDedup(r)) return;
+    const fecha = (r.salida || "").substring(0, 10);
+    if (!fecha || !r.operador) return;
+    const key = fecha + "|" + norm(r.operador) + "|" + r.tipoRuta;
+    if (!dedupGroups[key]) dedupGroups[key] = [];
+    dedupGroups[key].push(i);
+  });
+  const getDedupInfo = (r, ridx) => {
+    if (!esDedup(r)) return null;
+    const fecha = (r.salida || "").substring(0, 10);
+    const key = fecha + "|" + norm(r.operador) + "|" + r.tipoRuta;
+    const group = dedupGroups[key] || [];
+    if (group.length <= 1) return null;
+    const isPrimary = group[0] === ridx;
+    const sumPaq = group.reduce((s, i) => {
+      const ri = rutas[i];
+      return s + (parseInt(ri.entregados) || 0) + (isCrossdock(ri) ? (parseInt(ri.recolecciones) || 0) : 0);
+    }, 0);
+    return { isPrimary, sumPaq, groupSize: group.length };
+  };
+
+  // NEW: Real cost calculations from rutas × asistencia × carriers
+  const rutaCosto = rutas.map((r, idx) => {
+    const info = getCostoInfo(r);
+    const hasFormula = (r.penalizacion || "").trim().length > 0;
+    const evaluated = evalFormula(r.penalizacion, info.baseCost);
+    const costoNuevo = hasFormula && !isNaN(evaluated) ? evaluated : info.baseCost;
+    const descuento = info.baseCost - costoNuevo;
+    const dedup = getDedupInfo(r, idx);
+    // For dedup groups: packages divisor = group sum; cost only counted on primary row
+    const divisor = dedup ? dedup.sumPaq : (isCrossdock(r) ? r.recolecciones : r.entregados);
+    const costoContado = dedup ? (dedup.isPrimary ? costoNuevo : 0) : costoNuevo;
+    const costoPorPaq = dedup
+      ? (dedup.sumPaq > 0 ? costoNuevo / dedup.sumPaq : null)
+      : (divisor > 0 ? costoNuevo / divisor : null);
+    return { r, info, baseCost: info.baseCost, descuento, costoNuevo, divisor, costoPorPaq, dedup, costoContado };
+  });
+  const costoTotalDiaNuevo = rutaCosto.reduce((s, x) => s + x.costoContado, 0);
+  // Paquetes entregados para el costo/paquete: TODAS las operaciones EXCEPTO
+  // los entregados de Crossdock/HalfMile (esos son media milla y no suman al
+  // KPI de paquetes entregados al cliente final).
+  const entregadosTotal = rutas.reduce((s, r) => s + (isCrossdock(r) ? 0 : (r.entregados || 0)), 0);
+  const costoPorPaqGlobal = entregadosTotal > 0 ? (costoTotalDiaNuevo / entregadosTotal) : 0;
+  const sinAsistencia = rutaCosto.filter(x => x.info.missing && !esPermisible(x.r)).length;
+  const sinAsistenciaPermisible = rutaCosto.filter(x => x.info.missing && esPermisible(x.r)).length;
+  const crossSinRecol = rutaCosto.filter(x => isCrossdock(x.r) && (!x.r.recolecciones || x.r.recolecciones === 0)).length;
+
+  // Desglose de costo REAL por tipo de operación (4 cubetas).
+  // Se calcula desde rutaCosto (motor real) y no desde costosData, porque la
+  // clasificación por tipo vive en rutaCosto.r.tipoRuta. Suma costoContado para
+  // que el total reconcilie con costoTotalDiaNuevo (respeta dedup).
+  const bucketDeOperacion = (r) => {
+    const op = normalizeOperacion(r.tipoRuta);
+    if (op === "Última milla") return "Última milla";
+    if (op === "Crossdock") return "Half mile";
+    if (op === "PETCO" || op === "PETCO Monterrey") return "PETCO";
+    if (op.startsWith("Foráneo")) return "Foráneo";
+    return "Otros";
+  };
+  const DESGLOSE_ORDEN = ["Última milla", "Half mile", "Foráneo", "PETCO", "Otros"];
+  const DESGLOSE_COLOR = { "Última milla": C.green, "Half mile": C.blue, "Foráneo": C.purple, "PETCO": C.accent, "Otros": C.textMuted };
+  const desgloseOp = {};
+  rutaCosto.forEach(x => {
+    const b = bucketDeOperacion(x.r);
+    if (!desgloseOp[b]) desgloseOp[b] = { tipo: b, costo: 0, paquetes: 0, rutas: 0 };
+    desgloseOp[b].costo += x.costoContado;
+    desgloseOp[b].paquetes += isCrossdock(x.r) ? (parseInt(x.r.recolecciones) || 0) : (parseInt(x.r.entregados) || 0);
+    desgloseOp[b].rutas += 1;
+  });
+  const desgloseList = DESGLOSE_ORDEN.filter(t => desgloseOp[t]).map(t => desgloseOp[t]);
+  // Denominador para el costo/paquete real: EXCLUYE Half mile, porque esos
+  // paquetes son recolecciones intermedias que se entregan al cliente final en
+  // última milla. Regla: (costo total) / (entregados ÚM + foráneo + PETCO).
+  const desgloseTotalPaqFinal = desgloseList.filter(d => d.tipo !== "Half mile").reduce((s, d) => s + d.paquetes, 0);
+
+  // Costo por carrier — re-cableado al motor real (rutaCosto), no a costosData.
+  // Divide costo y entregados por tipo. Costo ÚM = última milla; Costo HM = half
+  // mile. Foráneo/PETCO suman al total y sus entregas cuentan como finales.
+  // entregadosUM = entregas al cliente final (todo EXCEPTO HM); entregadosHM =
+  // recolecciones intermedias. Costo/paquete = costo total / entregadosUM.
+  // Se agrupa por nombre NORMALIZADO (norm: minúsculas, sin acentos, sin dobles
+  // espacios) para que variantes de capitalización del mismo carrier (p.ej.
+  // "Verde Diseño Logistic" y "VERDE DISEÑO LOGISTIC") cuenten como uno solo.
+  const costosPorCarrier = {};
+  rutaCosto.forEach(x => {
+    const orig = (x.r.carrier || "Sin carrier").trim() || "Sin carrier";
+    const key = norm(orig) || "sin carrier";
+    if (!costosPorCarrier[key]) costosPorCarrier[key] = { carrier: orig, _nameCounts: {}, rutas: 0, rutasUM: 0, rutasHM: 0, costo: 0, costoUM: 0, costoHM: 0, entregadosUM: 0, entregadosHM: 0 };
+    const cc = costosPorCarrier[key];
+    cc._nameCounts[orig] = (cc._nameCounts[orig] || 0) + 1;
+    const bucket = bucketDeOperacion(x.r);
+    cc.rutas += 1;
+    cc.costo += x.costoContado;
+    if (bucket === "Half mile") {
+      cc.rutasHM += 1;
+      cc.costoHM += x.costoContado;
+      cc.entregadosHM += (parseInt(x.r.recolecciones) || 0);
+    } else {
+      cc.entregadosUM += (parseInt(x.r.entregados) || 0);
+      if (bucket === "Última milla") { cc.rutasUM += 1; cc.costoUM += x.costoContado; }
+    }
+  });
+  // Nombre a mostrar = la grafía más frecuente entre las variantes agrupadas.
+  Object.values(costosPorCarrier).forEach(cc => {
+    cc.carrier = Object.entries(cc._nameCounts).sort((a, b) => b[1] - a[1])[0][0];
+  });
+  const carrierCostList = Object.values(costosPorCarrier).sort((a, b) => b.costo - a.costo);
+  const carrierTotCostoUM = carrierCostList.reduce((s, c) => s + c.costoUM, 0);
+  const carrierTotCostoHM = carrierCostList.reduce((s, c) => s + c.costoHM, 0);
+  const carrierTotEntHM = carrierCostList.reduce((s, c) => s + c.entregadosHM, 0);
+  return { esDedup, getDedupInfo, rutaCosto, costoTotalDiaNuevo, entregadosTotal, costoPorPaqGlobal, sinAsistencia, sinAsistenciaPermisible, crossSinRecol, bucketDeOperacion, DESGLOSE_ORDEN, DESGLOSE_COLOR, desgloseList, desgloseTotalPaqFinal, carrierCostList, carrierTotCostoUM, carrierTotCostoHM, carrierTotEntHM };
+}
+
 function ModuleEnvios() {
   const [rutas, setRutas] = useState([]);
   const [filter, setFilter] = useState("Todas");
@@ -1158,138 +1905,10 @@ function ModuleEnvios() {
     setOperadoresCatalogo((opsData || []).filter(o => o.activo !== false));
   };
 
-  // Formula evaluator: supports +, -, *, /, parens, decimals, and `costo` variable
-  const evalFormula = (expr, costo) => {
-    if (!expr || !String(expr).trim()) return 0;
-    let s = String(expr).replace(/costo/gi, "(" + (parseFloat(costo) || 0) + ")");
-    if (!/^[\d+\-*/().\s]*$/.test(s)) return NaN;
-    try {
-      // eslint-disable-next-line no-new-func
-      const result = Function('"use strict"; return (' + s + ')')();
-      return (typeof result === "number" && isFinite(result)) ? result : NaN;
-    } catch { return NaN; }
-  };
-
-  // Normalize strings for operator name matching (case/accents/spaces insensitive)
-  const norm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
-
-  // Lookup unit + provider + base cost for a ruta based on matching automatic asistencia
-  // record (same day + same operator name) joined with carriers catalog.
-  // Special cases:
-  //   - "PETCO Monterrey": flat $50 per package operated, bypasses asistencia.
-  //   - Other permissible labels (PETCO, Foráneo, HalfMile): if no same-day
-  //     asistencia, fallback to the operator's most-recent asistencia to
-  //     resolve the unit, then pull cost from carriers catalog.
-  const getCostoInfo = r => {
-    // Filas sintéticas (sólo asistencia, sin ruta): el costo y el tipo_unidad
-    // se inyectan en el constructor de rutasCombinadas.
-    if (r && r._esAsistencia) {
-      return { baseCost: r._baseCostSintetico || 0, proveedor: r.carrier, tipo_unidad: r._tipoUnidadSintetico || "Sedan", missing: false, tipo_operacion: r.tipoRuta, fromAsistencia: true };
-    }
-    // OVERRIDE manual desde la modal Editar: si la ruta tiene tipo_unidad y/o
-    // costo_unidad explícitos, esos mandan sobre asistencia/catálogo.
-    if (r && (r.tipoUnidadOverride || r.costoUnidadOverride != null)) {
-      const tu = r.tipoUnidadOverride || null;
-      const cu = r.costoUnidadOverride != null ? r.costoUnidadOverride : null;
-      // Si falta uno, intentar completar con asistencia/catálogo
-      let baseCost = cu;
-      let tipo_unidad = tu;
-      if (tipo_unidad && baseCost == null) {
-        const car = carriers.find(c => norm(c.proveedor) === norm(r.carrier) && c.tipo_unidad === tipo_unidad);
-        baseCost = parseFloat(car?.costo_unidad) || 0;
-      }
-      if (!tipo_unidad && baseCost != null) {
-        tipo_unidad = "Override";
-      }
-      return { baseCost: baseCost || 0, proveedor: r.carrier, tipo_unidad: tipo_unidad || "Override", missing: false, tipo_operacion: r.tipoRuta, override: true };
-    }
-    // Flat-rate tipos (per-package): bypass asistencia lookup entirely
-    const rateFija = TARIFAS_FIJAS[r.tipoRuta];
-    if (rateFija != null) {
-      const paqOperados = (parseInt(r.entregados) || 0) + (isCrossdock(r) ? (parseInt(r.recolecciones) || 0) : 0);
-      const baseCost = rateFija * paqOperados;
-      return { baseCost, proveedor: r.tipoRuta, tipo_unidad: "Tarifa fija", missing: false, flatRate: true, flatRateValue: rateFija, paqOperados };
-    }
-    const fecha = (r.salida || "").substring(0, 10);
-    if (!fecha || !r.operador) return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
-    const opNorm = norm(r.operador);
-    // 1) Same-day match (preferred). Excluye filas "Registro manual" porque
-    // representan asistencia agregada sin operador específico.
-    const sameDay = asistencia.filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual" && (a.fecha || "").substring(0, 10) === fecha && norm(a.nombre_operador) === opNorm);
-    if (sameDay.length) {
-      const a = sameDay[0];
-      const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
-      const baseCost = parseFloat(car?.costo_unidad) || 0;
-      return { baseCost, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, missing: false, tipo_operacion: a.tipo_operacion };
-    }
-    // 2) Fallback for permissible labels: most-recent asistencia for this operator
-    if (esPermisible(r)) {
-      const fallback = asistencia.filter(a => a.nombre_operador && a.nombre_operador !== "Registro manual" && norm(a.nombre_operador) === opNorm);
-      if (fallback.length) {
-        // asistencia is already sorted desc by fecha in loadAsistenciaCarriers
-        const a = fallback[0];
-        const car = carriers.find(c => c.proveedor === a.proveedor && c.tipo_unidad === a.tipo_unidad);
-        const baseCost = parseFloat(car?.costo_unidad) || 0;
-        return { baseCost, proveedor: a.proveedor, tipo_unidad: a.tipo_unidad, missing: false, tipo_operacion: a.tipo_operacion, fallback: "operador" };
-      }
-      // 3) Last-resort fallback: operator has no asistencia ever. Use the
-      //    carrier from the uploaded route row to pick a default unit
-      //    (prefer Sedan, else the cheapest última-milla option).
-      if (r.carrier && r.carrier !== "—") {
-        const carrierName = norm(r.carrier);
-        const candidates = carriers.filter(c =>
-          norm(c.proveedor) === carrierName
-          && c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—"
-          && (c.operacion || "").toLowerCase().includes("ltima")
-        );
-        if (candidates.length) {
-          const sedan = candidates.find(c => c.tipo_unidad === "Sedan");
-          const chosen = sedan || candidates.slice().sort((a, b) =>
-            (parseFloat(a.costo_unidad) || 0) - (parseFloat(b.costo_unidad) || 0)
-          )[0];
-          const baseCost = parseFloat(chosen.costo_unidad) || 0;
-          return { baseCost, proveedor: chosen.proveedor, tipo_unidad: chosen.tipo_unidad, missing: false, tipo_operacion: chosen.operacion, fallback: "carrier" };
-        }
-      }
-    }
-    return { baseCost: 0, proveedor: null, tipo_unidad: null, missing: true };
-  };
-
-  const isCrossdock = r => {
-    const t = (r.tipoRuta || "").toLowerCase();
-    return t.includes("half") || t.includes("cross");
-  };
-
-  // Final cost after penalty.
-  // The formula evaluates DIRECTLY to the new cost (costo real final).
-  // The discount is derived: descuento = costo_base - costo_nuevo.
-  // If the formula is empty/invalid, no penalty applies (costo_nuevo = costo_base).
-  const getCostoReal = r => {
-    const { baseCost } = getCostoInfo(r);
-    const hasFormula = (r.penalizacion || "").trim().length > 0;
-    const evaluated = evalFormula(r.penalizacion, baseCost);
-    const costoNuevo = hasFormula && !isNaN(evaluated) ? evaluated : baseCost;
-    const descuento = baseCost - costoNuevo;
-    return { baseCost, descuento, costoNuevo };
-  };
-
-  // Cost per package (last mile uses delivered, crossdock uses collected)
-  const getCostoPorPaquete = r => {
-    const { costoNuevo } = getCostoReal(r);
-    const divisor = isCrossdock(r) ? r.recolecciones : r.entregados;
-    if (!divisor || divisor <= 0) return { value: null, divisor: 0 };
-    return { value: costoNuevo / divisor, divisor };
-  };
-
-  // Tipos de ruta donde es permisible no tener registro automático de operador
-  const TIPOS_PERMISIBLES = new Set(["Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "PETCO", "PETCO Monterrey", "HalfMile"]);
-  const esPermisible = r => TIPOS_PERMISIBLES.has(r.tipoRuta);
-  // Tipos de tarifa fija: { tipo: $ por paquete operado }
-  const TARIFAS_FIJAS = {
-    "PETCO Monterrey": 50,
-    "Foráneo Monterrey": 55,
-    "Foráneo GDL": 55,
-  };
+  // Motor de costos compartido (definido a nivel de módulo, más abajo lo usa
+  // también el Dashboard OPS para que ambos calculen EXACTAMENTE igual).
+  const { getCostoInfo, getCostoReal, getCostoPorPaquete, esPermisible, TIPOS_PERMISIBLES, TARIFAS_FIJAS } =
+    useMemo(() => crearMotorCostos(carriers, asistencia), [carriers, asistencia]);
 
   // IMPORTANTE: todas las funciones de guardado trabajan por `id` de la ruta
   // (no por índice), para evitar cualquier race con cambios de filtro/orden.
@@ -1626,21 +2245,6 @@ function ModuleEnvios() {
   // CrossDock + Logística Inversa cuentan como Crossdock.
   // Reusa `norm` (definida arriba) que usa el rango Unicode correcto
   // ̀-ͯ para quitar acentos de forma confiable.
-  const normalizeOperacion = (raw) => {
-    if (!raw) return "Sin especificar";
-    const n = norm(raw);
-    if (n.includes("ultima milla") || n === "lm" || n === "um") return "Última milla";
-    if (n.includes("crossdock") || n.includes("cross dock") || n.includes("logistica inversa") || n.includes("halfmile") || n.includes("half mile") || n.includes("logistica") || n.includes("inversa")) return "Crossdock";
-    if (n.includes("petco") && n.includes("monterrey")) return "PETCO Monterrey";
-    if (n.includes("petco")) return "PETCO";
-    if (n.includes("foraneo")) {
-      if (n.includes("monterrey") || n.includes("mty")) return "Foráneo Monterrey";
-      if (n.includes("gdl") || n.includes("guadalajara")) return "Foráneo GDL";
-      if (n.includes("puebla")) return "Foráneo Puebla";
-      return "Foráneo Puebla"; // default si sólo dice "Foráneo"
-    }
-    return raw; // mantener cualquier otro tal cual
-  };
 
   // Tipos de operación disponibles para un proveedor en el periodo:
   // siempre devuelve las 7 canónicas en orden fijo (incluso con cuenta 0)
@@ -2146,122 +2750,11 @@ function ModuleEnvios() {
   // Tipos de ruta donde un operador repetido en el mismo día cobra solo una vez
   // (el costo unitario se comparte y los paquetes se suman). No aplica a tipos
   // de tarifa fija porque ya cobran por paquete (dedup es equivalente).
-  const DEDUP_TIPOS = new Set(["PETCO", "Foráneo Puebla"]);
-  const esDedup = r => DEDUP_TIPOS.has(r.tipoRuta);
-
-  // Agrupar rutas dedup por (fecha, operador, tipoRuta) para compartir costo
-  const dedupGroups = {};
-  rutas.forEach((r, i) => {
-    if (!esDedup(r)) return;
-    const fecha = (r.salida || "").substring(0, 10);
-    if (!fecha || !r.operador) return;
-    const key = fecha + "|" + norm(r.operador) + "|" + r.tipoRuta;
-    if (!dedupGroups[key]) dedupGroups[key] = [];
-    dedupGroups[key].push(i);
-  });
-  const getDedupInfo = (r, ridx) => {
-    if (!esDedup(r)) return null;
-    const fecha = (r.salida || "").substring(0, 10);
-    const key = fecha + "|" + norm(r.operador) + "|" + r.tipoRuta;
-    const group = dedupGroups[key] || [];
-    if (group.length <= 1) return null;
-    const isPrimary = group[0] === ridx;
-    const sumPaq = group.reduce((s, i) => {
-      const ri = rutas[i];
-      return s + (parseInt(ri.entregados) || 0) + (isCrossdock(ri) ? (parseInt(ri.recolecciones) || 0) : 0);
-    }, 0);
-    return { isPrimary, sumPaq, groupSize: group.length };
-  };
-
-  // NEW: Real cost calculations from rutas × asistencia × carriers
-  const rutaCosto = rutas.map((r, idx) => {
-    const info = getCostoInfo(r);
-    const hasFormula = (r.penalizacion || "").trim().length > 0;
-    const evaluated = evalFormula(r.penalizacion, info.baseCost);
-    const costoNuevo = hasFormula && !isNaN(evaluated) ? evaluated : info.baseCost;
-    const descuento = info.baseCost - costoNuevo;
-    const dedup = getDedupInfo(r, idx);
-    // For dedup groups: packages divisor = group sum; cost only counted on primary row
-    const divisor = dedup ? dedup.sumPaq : (isCrossdock(r) ? r.recolecciones : r.entregados);
-    const costoContado = dedup ? (dedup.isPrimary ? costoNuevo : 0) : costoNuevo;
-    const costoPorPaq = dedup
-      ? (dedup.sumPaq > 0 ? costoNuevo / dedup.sumPaq : null)
-      : (divisor > 0 ? costoNuevo / divisor : null);
-    return { r, info, baseCost: info.baseCost, descuento, costoNuevo, divisor, costoPorPaq, dedup, costoContado };
-  });
-  const costoTotalDiaNuevo = rutaCosto.reduce((s, x) => s + x.costoContado, 0);
-  // Paquetes entregados para el costo/paquete: TODAS las operaciones EXCEPTO
-  // los entregados de Crossdock/HalfMile (esos son media milla y no suman al
-  // KPI de paquetes entregados al cliente final).
-  const entregadosTotal = rutas.reduce((s, r) => s + (isCrossdock(r) ? 0 : (r.entregados || 0)), 0);
-  const costoPorPaqGlobal = entregadosTotal > 0 ? (costoTotalDiaNuevo / entregadosTotal) : 0;
-  const sinAsistencia = rutaCosto.filter(x => x.info.missing && !esPermisible(x.r)).length;
-  const sinAsistenciaPermisible = rutaCosto.filter(x => x.info.missing && esPermisible(x.r)).length;
-  const crossSinRecol = rutaCosto.filter(x => isCrossdock(x.r) && (!x.r.recolecciones || x.r.recolecciones === 0)).length;
-
-  // Desglose de costo REAL por tipo de operación (4 cubetas).
-  // Se calcula desde rutaCosto (motor real) y no desde costosData, porque la
-  // clasificación por tipo vive en rutaCosto.r.tipoRuta. Suma costoContado para
-  // que el total reconcilie con costoTotalDiaNuevo (respeta dedup).
-  const bucketDeOperacion = (r) => {
-    const op = normalizeOperacion(r.tipoRuta);
-    if (op === "Última milla") return "Última milla";
-    if (op === "Crossdock") return "Half mile";
-    if (op === "PETCO" || op === "PETCO Monterrey") return "PETCO";
-    if (op.startsWith("Foráneo")) return "Foráneo";
-    return "Otros";
-  };
-  const DESGLOSE_ORDEN = ["Última milla", "Half mile", "Foráneo", "PETCO", "Otros"];
-  const DESGLOSE_COLOR = { "Última milla": C.green, "Half mile": C.blue, "Foráneo": C.purple, "PETCO": C.accent, "Otros": C.textMuted };
-  const desgloseOp = {};
-  rutaCosto.forEach(x => {
-    const b = bucketDeOperacion(x.r);
-    if (!desgloseOp[b]) desgloseOp[b] = { tipo: b, costo: 0, paquetes: 0, rutas: 0 };
-    desgloseOp[b].costo += x.costoContado;
-    desgloseOp[b].paquetes += isCrossdock(x.r) ? (parseInt(x.r.recolecciones) || 0) : (parseInt(x.r.entregados) || 0);
-    desgloseOp[b].rutas += 1;
-  });
-  const desgloseList = DESGLOSE_ORDEN.filter(t => desgloseOp[t]).map(t => desgloseOp[t]);
-  // Denominador para el costo/paquete real: EXCLUYE Half mile, porque esos
-  // paquetes son recolecciones intermedias que se entregan al cliente final en
-  // última milla. Regla: (costo total) / (entregados ÚM + foráneo + PETCO).
-  const desgloseTotalPaqFinal = desgloseList.filter(d => d.tipo !== "Half mile").reduce((s, d) => s + d.paquetes, 0);
-
-  // Costo por carrier — re-cableado al motor real (rutaCosto), no a costosData.
-  // Divide costo y entregados por tipo. Costo ÚM = última milla; Costo HM = half
-  // mile. Foráneo/PETCO suman al total y sus entregas cuentan como finales.
-  // entregadosUM = entregas al cliente final (todo EXCEPTO HM); entregadosHM =
-  // recolecciones intermedias. Costo/paquete = costo total / entregadosUM.
-  // Se agrupa por nombre NORMALIZADO (norm: minúsculas, sin acentos, sin dobles
-  // espacios) para que variantes de capitalización del mismo carrier (p.ej.
-  // "Verde Diseño Logistic" y "VERDE DISEÑO LOGISTIC") cuenten como uno solo.
-  const costosPorCarrier = {};
-  rutaCosto.forEach(x => {
-    const orig = (x.r.carrier || "Sin carrier").trim() || "Sin carrier";
-    const key = norm(orig) || "sin carrier";
-    if (!costosPorCarrier[key]) costosPorCarrier[key] = { carrier: orig, _nameCounts: {}, rutas: 0, rutasUM: 0, rutasHM: 0, costo: 0, costoUM: 0, costoHM: 0, entregadosUM: 0, entregadosHM: 0 };
-    const cc = costosPorCarrier[key];
-    cc._nameCounts[orig] = (cc._nameCounts[orig] || 0) + 1;
-    const bucket = bucketDeOperacion(x.r);
-    cc.rutas += 1;
-    cc.costo += x.costoContado;
-    if (bucket === "Half mile") {
-      cc.rutasHM += 1;
-      cc.costoHM += x.costoContado;
-      cc.entregadosHM += (parseInt(x.r.recolecciones) || 0);
-    } else {
-      cc.entregadosUM += (parseInt(x.r.entregados) || 0);
-      if (bucket === "Última milla") { cc.rutasUM += 1; cc.costoUM += x.costoContado; }
-    }
-  });
-  // Nombre a mostrar = la grafía más frecuente entre las variantes agrupadas.
-  Object.values(costosPorCarrier).forEach(cc => {
-    cc.carrier = Object.entries(cc._nameCounts).sort((a, b) => b[1] - a[1])[0][0];
-  });
-  const carrierCostList = Object.values(costosPorCarrier).sort((a, b) => b.costo - a.costo);
-  const carrierTotCostoUM = carrierCostList.reduce((s, c) => s + c.costoUM, 0);
-  const carrierTotCostoHM = carrierCostList.reduce((s, c) => s + c.costoHM, 0);
-  const carrierTotEntHM = carrierCostList.reduce((s, c) => s + c.entregadosHM, 0);
+  // Agregación compartida (ver calcularCostos, a nivel de módulo).
+  const { esDedup, getDedupInfo, rutaCosto, costoTotalDiaNuevo, entregadosTotal, costoPorPaqGlobal, sinAsistencia, sinAsistenciaPermisible, crossSinRecol, bucketDeOperacion, DESGLOSE_ORDEN, DESGLOSE_COLOR, desgloseList, desgloseTotalPaqFinal, carrierCostList, carrierTotCostoUM, carrierTotCostoHM, carrierTotEntHM } = useMemo(
+    () => calcularCostos(rutas, { getCostoInfo, esPermisible }),
+    [rutas, getCostoInfo, esPermisible]
+  );
 
   // Costo Última Milla + Media Milla por proveedor (Total = ÚM + MM, sin foráneo/PETCO)
   const umMmPorProveedor = carrierCostList
