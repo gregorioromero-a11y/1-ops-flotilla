@@ -757,6 +757,10 @@ function ModuleDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Cubeta de operación activa. "todas" muestra el consolidado; el resto acota
+  // TODO el dashboard a un solo tipo. La corrección de la mezcla NO depende de
+  // este filtro (los ratios ya se calculan por conjunto), es sólo para enfocar.
+  const [opSel, setOpSel] = useState("todas");
   const [provSel, setProvSel] = useState(null);          // proveedor con drill-down abierto
   const [orden, setOrden] = useState({ campo: "costo", dir: "desc" });
 
@@ -854,44 +858,67 @@ function ModuleDashboard() {
 
   // ---------- Motor de costos compartido ----------
   const motor = useMemo(() => crearMotorCostos(carriers, asistencia), [carriers, asistencia]);
-  const agg = useMemo(() => calcularCostos(rutas, motor), [rutas, motor]);
 
-  // Performance por proveedor (paquetes/entregas) — se calcula aparte del costo
-  // porque el costo respeta reglas de dedup y half-mile que NO aplican al
-  // conteo de paquetes. Se agrupa por nombre normalizado igual que el costo.
-  const perfPorProveedor = useMemo(() => {
+  // Acotar el periodo a UNA cubeta de operación. El filtro se aplica ANTES de
+  // calcularCostos, no después: así hay un solo punto de corte y ninguna
+  // métrica de abajo puede mezclar tipos por construcción.
+  //
+  // Es seguro filtrar por cubeta porque bucketDeOperacion() es función pura de
+  // `tipo_ruta` y las claves de dedup (fecha|operador|tipoRuta, sólo para PETCO
+  // y Foráneo Puebla) caen enteras dentro de una misma cubeta — ningún grupo de
+  // dedup se parte, así que `costoContado` sigue siendo correcto en cada vista.
+  // OJO: filtrar por proveedor o por unidad SÍ rompería el dedup.
+  const rutasScope = useMemo(
+    () => (opSel === "todas" ? rutas : rutas.filter(r => bucketDeOperacion(r) === opSel)),
+    [rutas, opSel]
+  );
+  const agg = useMemo(() => calcularCostos(rutasScope, motor), [rutasScope, motor]);
+  // Agregación SIN filtrar: alimenta el panel de composición, que debe seguir
+  // mostrando todas las cubetas aunque estés viendo sólo una.
+  const aggTodas = useMemo(() => calcularCostos(rutas, motor), [rutas, motor]);
+
+  const soloHM = opSel === "Half mile";
+
+  // Composición del periodo por tipo de operación. Se calcula aquí y no se toma
+  // de aggTodas.desgloseList porque ese campo `paquetes` es legacy (lo consume
+  // ModuleEnvios y para half mile lee `recolecciones`, que suele venir vacío).
+  // Aquí usamos paqMovidos() para que el volumen de half mile sea visible.
+  const composicion = useMemo(() => {
     const m = {};
-    rutas.forEach(r => {
-      const orig = (r.carrier || "Sin carrier").trim() || "Sin carrier";
-      const k = norm(orig) || "sin carrier";
-      if (!m[k]) m[k] = { key: k, carrier: orig, rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, operadores: new Set() };
-      const x = m[k];
-      x.rutas += 1;
-      x.total += (r.total || 0);
-      x.entregados += (r.entregados || 0);
-      x.intentados += (r.intentados || 0);
-      x.noVisitados += (r.noVisitados || 0);
-      if (r.operador) x.operadores.add(norm(r.operador));
+    aggTodas.rutaCosto.forEach(x => {
+      const b = bucketDeOperacion(x.r);
+      if (!m[b]) m[b] = { tipo: b, costo: 0, volumen: 0, asignados: 0, rutas: 0, esHM: b === "Half mile" };
+      m[b].costo += x.costoContado;
+      m[b].rutas += 1;
+      m[b].asignados += (parseInt(x.r.total) || 0);
+      m[b].volumen += b === "Half mile" ? paqMovidos(x.r) : (parseInt(x.r.entregados) || 0);
     });
-    return m;
-  }, [rutas]);
+    return aggTodas.DESGLOSE_ORDEN.filter(t => m[t]).map(t => m[t]);
+  }, [aggTodas]);
 
-  // Une costo + performance en una sola fila por proveedor
+  // ---------- Filas por proveedor ----------
+  // Se derivan ÚNICAMENTE de agg.carrierCostList. Antes existía un segundo
+  // acumulador (`perfPorProveedor`) que recorría las rutas sin mirar la cubeta,
+  // y la tabla mezclaba el costo de uno con los paquetes del otro: de ahí salían
+  // el $1,151/paq de PAQUETE LIT y el 96% de entrega de Verde Diseño. Un solo
+  // camino de agregación es lo que impide que esa clase de bug vuelva.
   const filasProveedor = useMemo(() => {
-    const filas = agg.carrierCostList.map(c => {
-      const k = norm(c.carrier) || "sin carrier";
-      const p = perfPorProveedor[k] || { rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, operadores: new Set() };
-      const pctEntrega = p.total > 0 ? (p.entregados / p.total) * 100 : 0;
-      // Denominador de costo/paquete = entregas al cliente final (excluye half mile)
-      const costoPaq = c.entregadosUM > 0 ? c.costo / c.entregadosUM : null;
-      return {
-        key: k, carrier: c.carrier, costo: c.costo, costoUM: c.costoUM, costoHM: c.costoHM,
-        rutas: p.rutas, unidades: p.operadores.size,
-        total: p.total, entregados: p.entregados, intentados: p.intentados, noVisitados: p.noVisitados,
-        entregadosUM: c.entregadosUM, entregadosHM: c.entregadosHM,
-        pctEntrega, costoPaq,
-      };
-    });
+    const filas = agg.carrierCostList.map(c => ({
+      key: norm(c.carrier) || "sin carrier",
+      carrier: c.carrier,
+      rutas: c.rutas, rutasFinal: c.rutasFinal, rutasHM: c.rutasHM,
+      unidades: c.unidades,
+      // Entrega final (última milla + foráneo + PETCO)
+      asignados: c.asignadosFinal,
+      entregados: c.entregadosFinal,
+      pctEntrega: c.asignadosFinal > 0 ? (c.entregadosFinal / c.asignadosFinal) * 100 : null,
+      costo: c.costoFinal,
+      costoPaq: c.entregadosFinal > 0 ? c.costoFinal / c.entregadosFinal : null,
+      // Half mile (movimiento intermedio) — nunca se suma a lo anterior
+      movidosHM: c.movidosHM, costoHM: c.costoHM,
+      costoPaqHM: c.movidosHM > 0 ? c.costoHM / c.movidosHM : null,
+      costoTotal: c.costo,
+    }));
     const dir = orden.dir === "asc" ? 1 : -1;
     return filas.sort((a, b) => {
       const va = a[orden.campo], vb = b[orden.campo];
@@ -899,60 +926,89 @@ function ModuleDashboard() {
       if (vb == null) return -1;
       return typeof va === "string" ? va.localeCompare(vb) * dir : (va - vb) * dir;
     });
-  }, [agg.carrierCostList, perfPorProveedor, orden]);
+  }, [agg.carrierCostList, orden]);
 
-  // ---------- Detalle por operador del proveedor seleccionado ----------
+  // ---------- Detalle por operador ----------
+  // Mismas definiciones que la fila padre, acumuladas por cubeta. Antes esto
+  // dividía el costo de TODAS las operaciones entre los entregados incluyendo
+  // half mile: un operador con 1 ruta de última milla y 17 de crossdock salía a
+  // $12.58/paq cuando su última milla real costaba $119.05.
   const filasOperador = useMemo(() => {
     if (!provSel) return [];
     const m = {};
     agg.rutaCosto.forEach(x => {
-      const k = norm(x.r.carrier || "Sin carrier") || "sin carrier";
-      if (k !== provSel) return;
+      if ((norm(x.r.carrier || "Sin carrier") || "sin carrier") !== provSel) return;
       const op = x.r.operador || "Sin nombre";
       const ok = norm(op);
-      if (!m[ok]) m[ok] = { operador: op, rutas: 0, total: 0, entregados: 0, intentados: 0, noVisitados: 0, costo: 0, dias: new Set(), tipos: new Set() };
+      if (!m[ok]) m[ok] = {
+        operador: op, rutas: 0, tipos: new Set(),
+        asignados: 0, entregados: 0, costo: 0, diasFinal: new Set(),
+        rutasHM: 0, movidosHM: 0, costoHM: 0, diasHM: new Set(),
+      };
       const o = m[ok];
       o.rutas += 1;
-      o.total += (x.r.total || 0);
-      o.entregados += (x.r.entregados || 0);
-      o.intentados += (x.r.intentados || 0);
-      o.noVisitados += (x.r.noVisitados || 0);
-      o.costo += x.costoContado;                       // respeta dedup
-      const f = (x.r.salida || "").substring(0, 10);
-      if (f) o.dias.add(f);
       if (x.r.tipoRuta) o.tipos.add(normalizeOperacion(x.r.tipoRuta));
+      const f = (x.r.salida || "").substring(0, 10);
+      if (isCrossdock(x.r)) {
+        o.rutasHM += 1;
+        o.movidosHM += paqMovidos(x.r);
+        o.costoHM += x.costoContado;
+        if (f) o.diasHM.add(f);
+      } else {
+        o.asignados += (parseInt(x.r.total) || 0);
+        o.entregados += (parseInt(x.r.entregados) || 0);
+        o.costo += x.costoContado;
+        if (f) o.diasFinal.add(f);
+      }
     });
     return Object.values(m).map(o => ({
       ...o,
-      dias: o.dias.size,
       tipos: Array.from(o.tipos),
-      pctEntrega: o.total > 0 ? (o.entregados / o.total) * 100 : 0,
+      dias: o.diasFinal.size + o.diasHM.size,
+      diasFinal: o.diasFinal.size,
+      pctEntrega: o.asignados > 0 ? (o.entregados / o.asignados) * 100 : null,
       costoPaq: o.entregados > 0 ? o.costo / o.entregados : null,
-      paqPorDia: o.dias.size > 0 ? o.entregados / o.dias.size : 0,
-    })).sort((a, b) => b.entregados - a.entregados);
+      costoPaqHM: o.movidosHM > 0 ? o.costoHM / o.movidosHM : null,
+      // Productividad sobre los días que SÍ hizo entrega final; si sólo hizo
+      // half mile se reporta su productividad de movimiento aparte.
+      paqPorDia: o.diasFinal.size > 0 ? o.entregados / o.diasFinal.size : null,
+      movPorDia: o.diasHM.size > 0 ? o.movidosHM / o.diasHM.size : null,
+    })).sort((a, b) => (b.entregados - a.entregados) || (b.movidosHM - a.movidosHM));
   }, [provSel, agg.rutaCosto]);
 
-  // ---------- KPIs del periodo ----------
+  // ---------- KPIs ----------
+  // Regla que rige todo este bloque: un RATIO sólo puede calcularse dentro de un
+  // mismo conjunto de tipos de operación. Sumar COSTOS entre cubetas sí es
+  // legítimo (es dinero que se paga); promediar tasas de entrega o costos por
+  // paquete entre cubetas no lo es. Los totales se derivan de filasProveedor
+  // para que la fila TOTAL de la tabla cuadre con sus filas por construcción.
   const kpis = useMemo(() => {
-    const totalPaq = rutas.reduce((s, r) => s + (r.total || 0), 0);
-    // OJO — dos conteos DISTINTOS, no intercambiables:
-    //  · entregados: todas las rutas. Es el numerador correcto para el % de
-    //    entrega, porque el denominador (`total`) también incluye half mile.
-    //    Mezclarlos daba 46% en vez del 90% real.
-    //  · entregadosFinales: excluye half mile (son recolecciones intermedias,
-    //    no entregas al cliente). Sólo se usa para el costo por paquete.
-    const entregados = rutas.reduce((s, r) => s + (r.entregados || 0), 0);
-    const entregadosFinales = agg.entregadosTotal;
-    const pct = totalPaq > 0 ? (entregados / totalPaq) * 100 : 0;
-    const dias = new Set(rutas.map(r => (r.salida || "").substring(0, 10)).filter(Boolean)).size;
+    const t = filasProveedor.reduce((a, f) => ({
+      asignados: a.asignados + f.asignados,
+      entregados: a.entregados + f.entregados,
+      costo: a.costo + f.costo,
+      costoHM: a.costoHM + f.costoHM,
+      movidosHM: a.movidosHM + f.movidosHM,
+      rutasFinal: a.rutasFinal + f.rutasFinal,
+      rutasHM: a.rutasHM + f.rutasHM,
+      costoTotal: a.costoTotal + f.costoTotal,
+    }), { asignados: 0, entregados: 0, costo: 0, costoHM: 0, movidosHM: 0, rutasFinal: 0, rutasHM: 0, costoTotal: 0 });
+    const dias = new Set(rutasScope.map(r => (r.salida || "").substring(0, 10)).filter(Boolean)).size;
     return {
-      totalPaq, entregados, entregadosFinales, pct,
-      costo: agg.costoTotalDiaNuevo,
-      costoPaq: agg.costoPorPaqGlobal,
-      rutas: rutas.length, dias,
+      ...t,
+      // % de entrega al cliente final: mismo conjunto arriba y abajo.
+      pct: t.asignados > 0 ? (t.entregados / t.asignados) * 100 : null,
+      // Costo por paquete DIRECTO: excluye el costo de half mile del numerador.
+      costoPaq: t.entregados > 0 ? t.costo / t.entregados : null,
+      // Costo por paquete ALL-IN: amortiza half mile sobre las entregas finales.
+      // Es métrica de RED — el half mile de un proveedor mueve paquetes que
+      // entrega otro, por eso no existe a nivel de proveedor.
+      costoPaqAllIn: t.entregados > 0 ? t.costoTotal / t.entregados : null,
+      costoPaqHM: t.movidosHM > 0 ? t.costoHM / t.movidosHM : null,
+      rutas: rutasScope.length, dias,
       proveedores: filasProveedor.length,
     };
-  }, [rutas, agg, filasProveedor.length]);
+  }, [filasProveedor, rutasScope]);
 
   // ================= ZONA / MAPA INEGI =================
   useEffect(() => {
@@ -1130,6 +1186,12 @@ function ModuleDashboard() {
   );
 
   const maxCosto = Math.max(...filasProveedor.map(f => f.costo), 1);
+  // El grupo de columnas de half mile sólo se muestra cuando hay half mile en el
+  // scope: en la vista "Última milla" cargar la tabla con columnas vacías sería
+  // ruido, y en la vista "Half mile" el grupo de entrega final está vacío.
+  const colsFinal = !soloHM;                                    // columnas de entrega final
+  const colsHM = soloHM || filasProveedor.some(f => f.rutasHM > 0); // columnas de half mile
+  const nCols = 3 + (colsFinal ? 5 : 0) + (colsHM ? 3 : 0) + 1;
 
   return (
     <div>
@@ -1138,7 +1200,8 @@ function ModuleDashboard() {
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Dashboard OPS</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>
-            Costos y desempeño por proveedor · detalle por operador · entregas por zona · <b style={{ color: C.textMuted }}>datos reales del periodo</b>
+            Costos y desempeño por proveedor · detalle por operador · entregas por zona
+            {opSel !== "todas" && <> · <b style={{ color: C.accent }}>viendo sólo {opSel}</b></>}
           </p>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -1164,78 +1227,147 @@ function ModuleDashboard() {
 
       {loading ? (
         <div style={{ padding: 60, textAlign: "center", color: C.textMuted, fontSize: 14 }}>Cargando datos del periodo...</div>
-      ) : rutas.length === 0 ? (
+      ) : rutasScope.length === 0 ? (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 48, border: "1px solid " + C.border, textAlign: "center" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Sin rutas en este periodo</div>
-          <div style={{ fontSize: 13, color: C.textMuted }}>Del {desde} al {hasta} no hay rutas registradas. Prueba otro rango.</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>
+            {opSel === "todas" ? "Sin rutas en este periodo" : `Sin rutas de ${opSel} en este periodo`}
+          </div>
+          <div style={{ fontSize: 13, color: C.textMuted }}>
+            {opSel === "todas"
+              ? `Del ${desde} al ${hasta} no hay rutas registradas. Prueba otro rango.`
+              : `Del ${desde} al ${hasta} hay ${rutas.length.toLocaleString("es-MX")} rutas, pero ninguna de tipo ${opSel}.`}
+          </div>
+          {opSel !== "todas" && (
+            <button onClick={() => { setOpSel("todas"); setProvSel(null); }}
+              style={{ marginTop: 14, padding: "8px 18px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              ← Ver todos los tipos de operación
+            </button>
+          )}
         </div>
       ) : (
         <>
-          {/* ---------- KPIs ---------- */}
+          {/* ---------- KPIs ----------
+              Todas las tarjetas se refieren al scope activo (opSel). Las que son
+              RATIOS usan numerador y denominador del MISMO conjunto de tipos de
+              operación; las que son sumas de dinero sí consolidan cubetas. */}
           <div style={{ display: "flex", gap: 14, marginBottom: 18, flexWrap: "wrap" }}>
-            <StatCard label="Paquetes entregados" value={kpis.entregados.toLocaleString("es-MX")}
-              subvalue={`de ${kpis.totalPaq.toLocaleString("es-MX")} asignados`} icon={<IC.Package />} color={C.blue} />
-            <StatCard label="% Entrega" value={kpis.pct.toFixed(1) + "%"}
-              subvalue={`${kpis.rutas.toLocaleString("es-MX")} rutas · ${kpis.dias} días`} icon={<IC.BarChart />} color={colorPct(kpis.pct)} />
-            <StatCard label="Costo operativo" value={money(kpis.costo)}
-              subvalue={`${kpis.proveedores} proveedores`} icon={<IC.Dollar />} color={C.purple} />
-            <StatCard label="Costo por paquete" value={"$" + (kpis.costoPaq || 0).toFixed(2)}
-              subvalue={`÷ ${kpis.entregadosFinales.toLocaleString("es-MX")} entregas finales`} icon={<IC.Truck />} color={C.accent} />
+            {soloHM ? (
+              <StatCard label="Paquetes movidos" value={kpis.movidosHM.toLocaleString("es-MX")}
+                subvalue={`${kpis.rutasHM.toLocaleString("es-MX")} rutas de half mile`} icon={<IC.Package />} color={C.blue} />
+            ) : (
+              <StatCard label="Paquetes entregados" value={kpis.entregados.toLocaleString("es-MX")}
+                subvalue={`de ${kpis.asignados.toLocaleString("es-MX")} asignados${opSel === "todas" && kpis.movidosHM > 0 ? ` · + ${kpis.movidosHM.toLocaleString("es-MX")} movidos en half mile` : ""}`}
+                icon={<IC.Package />} color={C.blue} />
+            )}
+
+            {soloHM ? (
+              <StatCard label="Costo por paquete movido" value={kpis.costoPaqHM == null ? "—" : "$" + kpis.costoPaqHM.toFixed(2)}
+                subvalue="media milla · no comparable con entrega final" icon={<IC.BarChart />} color={C.blue} />
+            ) : (
+              <StatCard label="% Entrega" value={kpis.pct == null ? "—" : kpis.pct.toFixed(1) + "%"}
+                subvalue={`${kpis.rutasFinal.toLocaleString("es-MX")} rutas de entrega final · ${kpis.dias} días`}
+                icon={<IC.BarChart />} color={kpis.pct == null ? C.textMuted : colorPct(kpis.pct)} />
+            )}
+
+            <StatCard label="Costo operativo" value={money(kpis.costoTotal)}
+              subvalue={opSel === "todas" && kpis.costoHM > 0
+                ? `entrega final ${money(kpis.costo)} · half mile ${money(kpis.costoHM)}`
+                : `${kpis.proveedores} proveedores · ${kpis.rutas.toLocaleString("es-MX")} rutas`}
+              icon={<IC.Dollar />} color={C.purple} />
+
+            {soloHM ? (
+              <StatCard label="Rutas de half mile" value={kpis.rutasHM.toLocaleString("es-MX")}
+                subvalue={`${kpis.proveedores} proveedores · ${kpis.dias} días`} icon={<IC.Truck />} color={C.accent} />
+            ) : (
+              <StatCard label="Costo por paquete" value={kpis.costoPaq == null ? "—" : "$" + kpis.costoPaq.toFixed(2)}
+                subvalue={opSel === "todas" && kpis.costoHM > 0
+                  ? `directo · $${(kpis.costoPaqAllIn || 0).toFixed(2)} all-in con half mile`
+                  : `÷ ${kpis.entregados.toLocaleString("es-MX")} entregas`}
+                icon={<IC.Truck />} color={C.accent} />
+            )}
           </div>
 
-          {/* Avisos de calidad de dato: si faltan registros, el costo va subestimado */}
-          {(agg.sinAsistencia > 0 || agg.crossSinRecol > 0) && (
+          {/* Avisos de calidad de dato */}
+          {(agg.sinAsistencia > 0 || agg.hmVolumenMalCapturado > 0) && (
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
               {agg.sinAsistencia > 0 && (
                 <div style={{ flex: "1 1 320px", padding: "10px 14px", borderRadius: 8, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 12, fontWeight: 600 }}>
-                  ⚠ {agg.sinAsistencia} ruta(s) sin asistencia registrada — su costo cuenta como $0, así que el costo total está subestimado.
+                  ⚠ {agg.sinAsistencia} ruta(s) sin asistencia registrada — su costo cuenta como $0, así que el costo operativo está subestimado.
                 </div>
               )}
-              {agg.crossSinRecol > 0 && (
-                <div style={{ flex: "1 1 320px", padding: "10px 14px", borderRadius: 8, backgroundColor: C.blueBg, color: C.blue, fontSize: 12, fontWeight: 600 }}>
-                  ℹ {agg.crossSinRecol} ruta(s) de half mile sin recolecciones capturadas. En half mile el paquete se cuenta
-                  en <b>recolecciones</b>, no en entregados, así que aparecen con 0 paquetes en el desglose y su costo
-                  ({money(agg.desgloseList.find(d => d.tipo === "Half mile")?.costo || 0)}) no tiene divisor.
+              {agg.hmVolumenMalCapturado > 0 && (
+                <div style={{ flex: "1 1 340px", padding: "10px 14px", borderRadius: 8, backgroundColor: C.blueBg, color: C.blue, fontSize: 12, fontWeight: 600 }}>
+                  ℹ {agg.hmVolumenMalCapturado} ruta(s) de half mile capturaron su volumen en <b>entregados</b> en vez de en <b>recolecciones</b>.
+                  Se están contando como <b>{agg.movidosHMTotal.toLocaleString("es-MX")} paquetes movidos</b> — corrige la captura para que el dato sea confiable.
                 </div>
               )}
             </div>
           )}
 
-          {/* ---------- Desglose por tipo de operación ---------- */}
+          {/* ---------- Composición del periodo (y control del filtro) ---------- */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>Costo por tipo de operación</div>
-            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14 }}>
-              Half mile son recolecciones intermedias: suman costo pero no cuentan como entrega final.
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>Composición del periodo por tipo de operación</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>Clic en un tipo para ver sólo ese · {money(aggTodas.costoTotalDiaNuevo)} en total</div>
             </div>
-            <div style={{ display: "flex", height: 26, borderRadius: 6, overflow: "hidden", marginBottom: 10 }}>
-              {agg.desgloseList.map(d => {
-                const w = kpis.costo > 0 ? (d.costo / kpis.costo) * 100 : 0;
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14 }}>
+              Half mile es movimiento intermedio, no entrega al cliente: su volumen y su costo por paquete
+              <b> no son comparables</b> con los de última milla, por eso nunca se promedian juntos.
+            </div>
+            <div style={{ display: "flex", height: 26, borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
+              {composicion.map(d => {
+                const w = aggTodas.costoTotalDiaNuevo > 0 ? (d.costo / aggTodas.costoTotalDiaNuevo) * 100 : 0;
                 if (w <= 0) return null;
+                const activo = opSel === "todas" || opSel === d.tipo;
                 return (
-                  <div key={d.tipo} title={`${d.tipo}: ${money(d.costo)}`}
-                    style={{ width: w + "%", backgroundColor: agg.DESGLOSE_COLOR[d.tipo] || C.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <div key={d.tipo} title={`${d.tipo}: ${money(d.costo)} · clic para filtrar`}
+                    onClick={() => { setOpSel(opSel === d.tipo ? "todas" : d.tipo); setProvSel(null); }}
+                    style={{ width: w + "%", backgroundColor: aggTodas.DESGLOSE_COLOR[d.tipo] || C.textMuted, cursor: "pointer",
+                      opacity: activo ? 1 : 0.3, transition: "opacity .15s", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {w > 8 && <span style={{ fontSize: 10, fontWeight: 800, color: "white" }}>{w.toFixed(0)}%</span>}
                   </div>
                 );
               })}
             </div>
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              {agg.desgloseList.map(d => (
-                <div key={d.tipo} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: agg.DESGLOSE_COLOR[d.tipo] || C.textMuted }} />
-                  <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{d.tipo}</span>
-                  <span style={{ fontSize: 11, color: C.textMuted }}>{money(d.costo)} · {d.paquetes.toLocaleString("es-MX")} paq</span>
-                </div>
-              ))}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {composicion.map(d => {
+                const activo = opSel === d.tipo;
+                return (
+                  <button key={d.tipo} onClick={() => { setOpSel(activo ? "todas" : d.tipo); setProvSel(null); }}
+                    style={{ display: "flex", alignItems: "center", gap: 7, padding: "6px 12px", borderRadius: 8, cursor: "pointer",
+                      border: "1px solid " + (activo ? (aggTodas.DESGLOSE_COLOR[d.tipo] || C.border) : C.border),
+                      backgroundColor: activo ? (aggTodas.DESGLOSE_COLOR[d.tipo] || C.textMuted) + "22" : "transparent" }}>
+                    <div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: aggTodas.DESGLOSE_COLOR[d.tipo] || C.textMuted }} />
+                    <span style={{ fontSize: 12, color: C.text, fontWeight: 700 }}>{d.tipo}</span>
+                    <span style={{ fontSize: 11, color: C.textMuted }}>
+                      {money(d.costo)} · {d.volumen.toLocaleString("es-MX")} {d.esHM ? "movidos" : "entregados"}
+                      {d.volumen > 0 ? ` · $${(d.costo / d.volumen).toFixed(2)}/paq` : ""}
+                    </span>
+                  </button>
+                );
+              })}
+              {opSel !== "todas" && (
+                <button onClick={() => { setOpSel("todas"); setProvSel(null); }}
+                  style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  ✕ Ver todas
+                </button>
+              )}
             </div>
           </div>
 
-          {/* ---------- Proveedores ---------- */}
+          {/* ---------- Proveedores ----------
+              Dos GRUPOS de columnas que jamás se suman entre sí: "Entrega final"
+              (última milla + foráneo + PETCO) y "Half mile" (movimiento
+              intermedio). El grupo de half mile sólo aparece si hay half mile en
+              el scope, para no cargar la tabla cuando no aporta. */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, marginBottom: 16, overflow: "hidden" }}>
             <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Costos y desempeño por proveedor</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+                  Costos y desempeño por proveedor
+                  {opSel !== "todas" && <span style={{ fontSize: 12, fontWeight: 600, color: C.accent, marginLeft: 8 }}>· sólo {opSel}</span>}
+                </div>
                 <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Clic en una fila para ver el detalle por operador · clic en encabezado para ordenar</div>
               </div>
               <div style={{ fontSize: 11, color: C.textMuted }}>{filasProveedor.length} proveedores · {desde} → {hasta}</div>
@@ -1243,15 +1375,26 @@ function ModuleDashboard() {
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead style={{ backgroundColor: C.bg }}>
+                  {colsFinal && colsHM && (
+                    <tr>
+                      <th colSpan={3} />
+                      <th colSpan={5} style={{ padding: "6px 12px", textAlign: "center", fontSize: 10, fontWeight: 800, color: C.green, textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "2px solid " + C.green + "55" }}>Entrega final</th>
+                      <th colSpan={3} style={{ padding: "6px 12px", textAlign: "center", fontSize: 10, fontWeight: 800, color: C.blue, textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "2px solid " + C.blue + "55" }}>Half mile (movimiento)</th>
+                      <th />
+                    </tr>
+                  )}
                   <tr>
                     {th("Proveedor", "carrier", "left")}
                     {th("Rutas", "rutas")}
                     {th("Unidades", "unidades")}
-                    {th("Paquetes", "total")}
-                    {th("Entregados", "entregados")}
-                    {th("% Entrega", "pctEntrega")}
-                    {th("Costo total", "costo")}
-                    {th("Costo/paq", "costoPaq")}
+                    {colsFinal && th("Asignados", "asignados")}
+                    {colsFinal && th("Entregados", "entregados")}
+                    {colsFinal && th("% Entrega", "pctEntrega")}
+                    {colsFinal && th("$ / paq", "costoPaq")}
+                    {colsFinal && th("Costo", "costo")}
+                    {colsHM && th("Movidos", "movidosHM")}
+                    {colsHM && th("$ / movido", "costoPaqHM")}
+                    {colsHM && th("Costo HM", "costoHM")}
                     <th style={{ padding: "9px 12px", width: 100 }}></th>
                   </tr>
                 </thead>
@@ -1267,40 +1410,58 @@ function ModuleDashboard() {
                           <td style={{ padding: "11px 12px", fontSize: 13, fontWeight: 700, color: C.text, whiteSpace: "nowrap" }}>
                             <span style={{ color: C.textMuted, marginRight: 6, fontSize: 11 }}>{abierto ? "▾" : "▸"}</span>{f.carrier}
                           </td>
-                          <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: C.textMuted }}>{f.rutas.toLocaleString("es-MX")}</td>
+                          <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: C.textMuted }}>
+                            {f.rutas.toLocaleString("es-MX")}
+                            {colsFinal && colsHM && f.rutasHM > 0 && (
+                              <div style={{ fontSize: 9.5, color: C.textFaint }}>{f.rutasFinal} final · {f.rutasHM} HM</div>
+                            )}
+                          </td>
                           <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: C.textMuted }}>{f.unidades}</td>
-                          <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right" }}>{f.total.toLocaleString("es-MX")}</td>
-                          <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: C.green, fontWeight: 600 }}>{f.entregados.toLocaleString("es-MX")}</td>
-                          <td style={{ padding: "11px 12px", textAlign: "right" }}>
-                            <span style={{ fontSize: 12, fontWeight: 800, color: colorPct(f.pctEntrega) }}>{f.pctEntrega.toFixed(1)}%</span>
-                          </td>
-                          <td style={{ padding: "11px 12px", textAlign: "right" }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{money(f.costo)}</div>
-                            <div style={{ height: 3, borderRadius: 2, backgroundColor: C.purple, opacity: 0.75, width: Math.max(4, (f.costo / maxCosto) * 100) + "%", marginLeft: "auto", marginTop: 3 }} />
-                          </td>
-                          <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", fontWeight: 700, color: f.costoPaq == null ? C.textMuted : f.costoPaq <= 40 ? C.green : f.costoPaq <= 45 ? C.yellow : C.red }}>
-                            {f.costoPaq == null ? "—" : "$" + f.costoPaq.toFixed(2)}
-                          </td>
+                          {colsFinal && <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right" }}>{f.asignados.toLocaleString("es-MX")}</td>}
+                          {colsFinal && <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: C.green, fontWeight: 600 }}>{f.entregados.toLocaleString("es-MX")}</td>}
+                          {colsFinal && (
+                            <td style={{ padding: "11px 12px", textAlign: "right" }}>
+                              <span style={{ fontSize: 12, fontWeight: 800, color: f.pctEntrega == null ? C.textMuted : colorPct(f.pctEntrega) }}>
+                                {f.pctEntrega == null ? "—" : f.pctEntrega.toFixed(1) + "%"}
+                              </span>
+                            </td>
+                          )}
+                          {colsFinal && (
+                            <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", fontWeight: 700, color: f.costoPaq == null ? C.textMuted : f.costoPaq <= 40 ? C.green : f.costoPaq <= 45 ? C.yellow : C.red }}>
+                              {f.costoPaq == null ? "—" : "$" + f.costoPaq.toFixed(2)}
+                            </td>
+                          )}
+                          {colsFinal && (
+                            <td style={{ padding: "11px 12px", textAlign: "right" }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{money(f.costo)}</div>
+                              <div style={{ height: 3, borderRadius: 2, backgroundColor: C.purple, opacity: 0.75, width: Math.max(4, (f.costo / maxCosto) * 100) + "%", marginLeft: "auto", marginTop: 3 }} />
+                            </td>
+                          )}
+                          {colsHM && <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: f.movidosHM ? C.blue : C.textFaint }}>{f.movidosHM ? f.movidosHM.toLocaleString("es-MX") : "—"}</td>}
+                          {colsHM && <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: f.costoPaqHM == null ? C.textFaint : C.blue, fontWeight: 600 }}>{f.costoPaqHM == null ? "—" : "$" + f.costoPaqHM.toFixed(2)}</td>}
+                          {colsHM && <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: f.costoHM ? C.text : C.textFaint }}>{f.costoHM ? money(f.costoHM) : "—"}</td>}
                           <td style={{ padding: "11px 12px", textAlign: "right", fontSize: 11, color: C.accent, fontWeight: 700, whiteSpace: "nowrap" }}>
                             {abierto ? "Ocultar" : "Ver operadores"}
                           </td>
                         </tr>
                         {abierto && (
                           <tr>
-                            <td colSpan={9} style={{ padding: 0, backgroundColor: C.panelAlt }}>
+                            <td colSpan={nCols} style={{ padding: 0, backgroundColor: C.panelAlt }}>
                               <div style={{ padding: "14px 18px" }}>
                                 <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 2 }}>
                                   Eficiencia por operador — {f.carrier}
                                 </div>
                                 <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
                                   {filasOperador.length} operadores · el costo respeta el dedup (un operador repetido el mismo día en PETCO/Foráneo cobra una vez)
+                                  {colsHM ? " · las columnas de half mile se llevan aparte, nunca se promedian con la entrega final" : ""}
                                 </div>
                                 <div style={{ overflowX: "auto", maxHeight: 340 }}>
                                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                                     <thead style={{ position: "sticky", top: 0, backgroundColor: C.panelAlt }}>
                                       <tr>
-                                        {["Operador", "Días", "Rutas", "Paquetes", "Entregados", "% Entrega", "Paq/día", "Costo", "Costo/paq", "Operación"].map((h, i) => (
-                                          <th key={h} style={{ padding: "7px 10px", textAlign: i === 0 || i === 9 ? "left" : "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>{h}</th>
+                                        {["Operador", "Días", "Asignados", "Entregados", "% Entrega", "Paq/día", "$ / paq", "Costo",
+                                          ...(colsHM ? ["Movidos HM", "$ / movido", "Costo HM"] : []), "Operación"].map((h, i) => (
+                                          <th key={h} style={{ padding: "7px 10px", textAlign: i === 0 ? "left" : "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>{h}</th>
                                         ))}
                                       </tr>
                                     </thead>
@@ -1309,18 +1470,24 @@ function ModuleDashboard() {
                                         <tr key={o.operador} style={{ borderBottom: "1px solid " + C.border }}>
                                           <td style={{ padding: "7px 10px", fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap" }}>{o.operador}</td>
                                           <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: C.textMuted }}>{o.dias}</td>
-                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: C.textMuted }}>{o.rutas}</td>
-                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right" }}>{o.total.toLocaleString("es-MX")}</td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right" }}>{o.asignados.toLocaleString("es-MX")}</td>
                                           <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: C.green, fontWeight: 600 }}>{o.entregados.toLocaleString("es-MX")}</td>
                                           <td style={{ padding: "7px 10px", textAlign: "right" }}>
-                                            <span style={{ fontSize: 11, fontWeight: 800, color: colorPct(o.pctEntrega) }}>{o.pctEntrega.toFixed(1)}%</span>
+                                            <span style={{ fontSize: 11, fontWeight: 800, color: o.pctEntrega == null ? C.textMuted : colorPct(o.pctEntrega) }}>
+                                              {o.pctEntrega == null ? "—" : o.pctEntrega.toFixed(1) + "%"}
+                                            </span>
                                           </td>
-                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", fontWeight: 700, color: C.blue }}>{o.paqPorDia.toFixed(0)}</td>
-                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right" }}>{money(o.costo)}</td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", fontWeight: 700, color: o.paqPorDia == null ? C.textFaint : C.blue }}>
+                                            {o.paqPorDia == null ? "—" : o.paqPorDia.toFixed(0)}
+                                          </td>
                                           <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", fontWeight: 700, color: o.costoPaq == null ? C.textMuted : o.costoPaq <= 40 ? C.green : o.costoPaq <= 45 ? C.yellow : C.red }}>
                                             {o.costoPaq == null ? "—" : "$" + o.costoPaq.toFixed(2)}
                                           </td>
-                                          <td style={{ padding: "7px 10px", fontSize: 10, color: C.textMuted, whiteSpace: "nowrap" }}>{o.tipos.join(", ")}</td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right" }}>{money(o.costo)}</td>
+                                          {colsHM && <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: o.movidosHM ? C.blue : C.textFaint }}>{o.movidosHM ? o.movidosHM.toLocaleString("es-MX") : "—"}</td>}
+                                          {colsHM && <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: o.costoPaqHM == null ? C.textFaint : C.blue }}>{o.costoPaqHM == null ? "—" : "$" + o.costoPaqHM.toFixed(2)}</td>}
+                                          {colsHM && <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: o.costoHM ? C.text : C.textFaint }}>{o.costoHM ? money(o.costoHM) : "—"}</td>}
+                                          <td style={{ padding: "7px 10px", fontSize: 10, color: C.textMuted, textAlign: "right", whiteSpace: "nowrap" }}>{o.tipos.join(", ")}</td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -1334,16 +1501,21 @@ function ModuleDashboard() {
                     );
                   })}
                 </tbody>
+                {/* TOTAL derivado de filasProveedor (no de otra fuente): así no puede
+                    contradecir a sus propias filas, que fue el bug original. */}
                 <tfoot>
                   <tr style={{ borderTop: "2px solid " + C.border, backgroundColor: C.bg }}>
                     <td style={{ padding: "11px 12px", fontSize: 12, fontWeight: 800, color: C.text }}>TOTAL</td>
                     <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700 }}>{kpis.rutas.toLocaleString("es-MX")}</td>
                     <td />
-                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700 }}>{kpis.totalPaq.toLocaleString("es-MX")}</td>
-                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700, color: C.green }}>{kpis.entregados.toLocaleString("es-MX")}</td>
-                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800, color: colorPct(kpis.pct) }}>{kpis.pct.toFixed(1)}%</td>
-                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800 }}>{money(kpis.costo)}</td>
-                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800 }}>${(kpis.costoPaq || 0).toFixed(2)}</td>
+                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700 }}>{kpis.asignados.toLocaleString("es-MX")}</td>}
+                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700, color: C.green }}>{kpis.entregados.toLocaleString("es-MX")}</td>}
+                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800, color: kpis.pct == null ? C.textMuted : colorPct(kpis.pct) }}>{kpis.pct == null ? "—" : kpis.pct.toFixed(1) + "%"}</td>}
+                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800 }}>{kpis.costoPaq == null ? "—" : "$" + kpis.costoPaq.toFixed(2)}</td>}
+                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800 }}>{money(kpis.costo)}</td>}
+                    {colsHM && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800, color: C.blue }}>{kpis.movidosHM.toLocaleString("es-MX")}</td>}
+                    {colsHM && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800, color: C.blue }}>{kpis.costoPaqHM == null ? "—" : "$" + kpis.costoPaqHM.toFixed(2)}</td>}
+                    {colsHM && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800 }}>{money(kpis.costoHM)}</td>}
                     <td />
                   </tr>
                 </tfoot>
@@ -1394,8 +1566,10 @@ function ModuleDashboard() {
                 {/* Cobertura: honestidad sobre de dónde salen estos números */}
                 <div style={{ padding: "10px 18px", backgroundColor: C.blueBg, color: C.blue, fontSize: 11.5, fontWeight: 600, borderBottom: "1px solid " + C.border }}>
                   ℹ Este mapa usa las <b>{zonaTotal.toLocaleString("es-MX")}</b> órdenes con dirección georreferenciada del periodo
-                  ({kpis.entregados > 0 ? ((zonaTotal / kpis.entregados) * 100).toFixed(1) : "0"}% de los {kpis.entregados.toLocaleString("es-MX")} paquetes entregados que reportan las rutas).
-                  No es el total de la operación — sirve para ver <b>distribución geográfica</b>, no volumen absoluto.
+                  {soloHM
+                    ? " — half mile no genera órdenes georreferenciadas propias, así que el mapa muestra la operación de entrega final."
+                    : ` (${kpis.entregados > 0 ? ((zonaTotal / kpis.entregados) * 100).toFixed(1) : "0"}% de las ${kpis.entregados.toLocaleString("es-MX")} entregas finales que reportan las rutas — excluye half mile, que es movimiento intermedio).`}
+                  {" "}No es el total de la operación — sirve para ver <b>distribución geográfica</b>, no volumen absoluto.
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "minmax(0,2fr) minmax(260px,1fr)", gap: 0 }}>
                   <div ref={mapDivRef} style={{ height: 460, width: "100%", backgroundColor: C.panelAlt }} />
@@ -1525,6 +1699,35 @@ const normalizeOperacion = (raw) => {
     return "Foráneo Puebla"; // default si sólo dice "Foráneo"
   }
   return raw; // mantener cualquier otro tal cual
+};
+
+// Half mile es un movimiento intermedio, NO una entrega al cliente final.
+// esFinal() delimita el conjunto sobre el que SÍ tiene sentido calcular tasa de
+// entrega y costo por paquete; mezclar half mile en esos ratios da promedios sin
+// significado (un movimiento barato diluye el costo de una entrega cara).
+const esFinal = (r) => !isCrossdock(r);
+
+// Volumen de una ruta half mile. El negocio lo cuenta en `recolecciones`, pero
+// en la práctica hay periodos capturados en `entregados` (p.ej. julio 2026: las
+// 95 rutas HM traen recolecciones=0 y 18,643 en entregados). Coalescemos aquí,
+// en UN solo lugar con nombre propio, para que el volumen sea visible sin
+// contaminar ningún ratio de entrega. Cuando se corrija la captura, se borra el
+// fallback aquí y todo lo demás sigue cuadrando.
+const paqMovidos = (r) => {
+  const rec = parseInt(r.recolecciones) || 0;
+  return rec > 0 ? rec : (parseInt(r.entregados) || 0);
+};
+
+// Cubeta de operación de una ruta. A nivel de módulo porque el Dashboard la
+// necesita para poder ACOTAR el periodo a un solo tipo de operación (mezclar
+// última milla con half mile produce promedios sin sentido).
+const bucketDeOperacion = (r) => {
+  const op = normalizeOperacion(r.tipoRuta);
+  if (op === "Última milla") return "Última milla";
+  if (op === "Crossdock") return "Half mile";
+  if (op === "PETCO" || op === "PETCO Monterrey") return "PETCO";
+  if (op.startsWith("Foráneo")) return "Foráneo";
+  return "Otros";
 };
 
 // Fábrica: cierra sobre los catálogos (carriers) y la asistencia del periodo.
@@ -1703,14 +1906,6 @@ function calcularCostos(rutas, motor) {
   // Se calcula desde rutaCosto (motor real) y no desde costosData, porque la
   // clasificación por tipo vive en rutaCosto.r.tipoRuta. Suma costoContado para
   // que el total reconcilie con costoTotalDiaNuevo (respeta dedup).
-  const bucketDeOperacion = (r) => {
-    const op = normalizeOperacion(r.tipoRuta);
-    if (op === "Última milla") return "Última milla";
-    if (op === "Crossdock") return "Half mile";
-    if (op === "PETCO" || op === "PETCO Monterrey") return "PETCO";
-    if (op.startsWith("Foráneo")) return "Foráneo";
-    return "Otros";
-  };
   const DESGLOSE_ORDEN = ["Última milla", "Half mile", "Foráneo", "PETCO", "Otros"];
   const DESGLOSE_COLOR = { "Última milla": C.green, "Half mile": C.blue, "Foráneo": C.purple, "PETCO": C.accent, "Otros": C.textMuted };
   const desgloseOp = {};
@@ -1727,6 +1922,12 @@ function calcularCostos(rutas, motor) {
   // última milla. Regla: (costo total) / (entregados ÚM + foráneo + PETCO).
   const desgloseTotalPaqFinal = desgloseList.filter(d => d.tipo !== "Half mile").reduce((s, d) => s + d.paquetes, 0);
 
+  // NOMENCLATURA — conviven dos familias de nombres, a propósito:
+  //   · legacy (`entregadosUM`, `entregadosHM`, `desgloseList[].paquetes`): los
+  //     consume ModuleEnvios y sus valores NO deben cambiar nunca. Ojo:
+  //     `entregadosUM` está mal nombrado, incluye foráneo y PETCO.
+  //   · nuevos (`entregadosFinal`, `movidosHM`, `costoFinal`, ...): los usa el
+  //     Dashboard OPS. Son aditivos; agregar aquí nunca altera Envíos.
   // Costo por carrier — re-cableado al motor real (rutaCosto), no a costosData.
   // Divide costo y entregados por tipo. Costo ÚM = última milla; Costo HM = half
   // mile. Foráneo/PETCO suman al total y sus entregas cuentan como finales.
@@ -1739,9 +1940,16 @@ function calcularCostos(rutas, motor) {
   rutaCosto.forEach(x => {
     const orig = (x.r.carrier || "Sin carrier").trim() || "Sin carrier";
     const key = norm(orig) || "sin carrier";
-    if (!costosPorCarrier[key]) costosPorCarrier[key] = { carrier: orig, _nameCounts: {}, rutas: 0, rutasUM: 0, rutasHM: 0, costo: 0, costoUM: 0, costoHM: 0, entregadosUM: 0, entregadosHM: 0 };
+    if (!costosPorCarrier[key]) costosPorCarrier[key] = {
+      carrier: orig, _nameCounts: {}, _operadores: new Set(),
+      rutas: 0, rutasUM: 0, rutasHM: 0, costo: 0, costoUM: 0, costoHM: 0, entregadosUM: 0, entregadosHM: 0,
+      // --- campos NUEVOS (ver nota de nomenclatura arriba) ---
+      rutasFinal: 0, asignadosFinal: 0, entregadosFinal: 0, costoFinal: 0,
+      asignadosHM: 0, movidosHM: 0, unidades: 0,
+    };
     const cc = costosPorCarrier[key];
     cc._nameCounts[orig] = (cc._nameCounts[orig] || 0) + 1;
+    if (x.r.operador) cc._operadores.add(norm(x.r.operador));
     const bucket = bucketDeOperacion(x.r);
     cc.rutas += 1;
     cc.costo += x.costoContado;
@@ -1749,20 +1957,47 @@ function calcularCostos(rutas, motor) {
       cc.rutasHM += 1;
       cc.costoHM += x.costoContado;
       cc.entregadosHM += (parseInt(x.r.recolecciones) || 0);
+      cc.asignadosHM += (parseInt(x.r.total) || 0);
+      cc.movidosHM += paqMovidos(x.r);
     } else {
       cc.entregadosUM += (parseInt(x.r.entregados) || 0);
+      cc.rutasFinal += 1;
+      cc.asignadosFinal += (parseInt(x.r.total) || 0);
+      cc.entregadosFinal += (parseInt(x.r.entregados) || 0);
+      cc.costoFinal += x.costoContado;
       if (bucket === "Última milla") { cc.rutasUM += 1; cc.costoUM += x.costoContado; }
     }
   });
   // Nombre a mostrar = la grafía más frecuente entre las variantes agrupadas.
   Object.values(costosPorCarrier).forEach(cc => {
     cc.carrier = Object.entries(cc._nameCounts).sort((a, b) => b[1] - a[1])[0][0];
+    cc.unidades = cc._operadores.size;
   });
   const carrierCostList = Object.values(costosPorCarrier).sort((a, b) => b.costo - a.costo);
   const carrierTotCostoUM = carrierCostList.reduce((s, c) => s + c.costoUM, 0);
   const carrierTotCostoHM = carrierCostList.reduce((s, c) => s + c.costoHM, 0);
   const carrierTotEntHM = carrierCostList.reduce((s, c) => s + c.entregadosHM, 0);
-  return { esDedup, getDedupInfo, rutaCosto, costoTotalDiaNuevo, entregadosTotal, costoPorPaqGlobal, sinAsistencia, sinAsistenciaPermisible, crossSinRecol, bucketDeOperacion, DESGLOSE_ORDEN, DESGLOSE_COLOR, desgloseList, desgloseTotalPaqFinal, carrierCostList, carrierTotCostoUM, carrierTotCostoHM, carrierTotEntHM };
+
+  // --- Agregados NUEVOS para el Dashboard OPS ---
+  // Separan "entrega final" (última milla + foráneo + PETCO) de "half mile", que
+  // es movimiento intermedio. Sirven para que ningún ratio mezcle ambos mundos.
+  const asignadosFinalTotal = carrierCostList.reduce((s, c) => s + c.asignadosFinal, 0);
+  const entregadosFinalTotal = entregadosTotal;                       // alias explícito
+  const costoFinalTotal = costoTotalDiaNuevo - carrierTotCostoHM;
+  const movidosHMTotal = carrierCostList.reduce((s, c) => s + c.movidosHM, 0);
+  const asignadosHMTotal = carrierCostList.reduce((s, c) => s + c.asignadosHM, 0);
+  // Costo por paquete de ENTREGA FINAL: numerador y denominador del mismo
+  // conjunto. Distinto de costoPorPaqGlobal, que amortiza el costo de half mile
+  // sobre las entregas finales (métrica de red, válida sólo a nivel global).
+  const costoPorPaqFinal = entregadosFinalTotal > 0 ? costoFinalTotal / entregadosFinalTotal : 0;
+  // Rutas half mile cuyo volumen se capturó en `entregados` en vez de en
+  // `recolecciones` (dato mal capturado que paqMovidos() rescata).
+  const hmVolumenMalCapturado = rutaCosto.filter(x =>
+    isCrossdock(x.r) && !(parseInt(x.r.recolecciones) || 0) && (parseInt(x.r.entregados) || 0) > 0
+  ).length;
+
+  return { esDedup, getDedupInfo, rutaCosto, costoTotalDiaNuevo, entregadosTotal, costoPorPaqGlobal, sinAsistencia, sinAsistenciaPermisible, crossSinRecol, bucketDeOperacion, DESGLOSE_ORDEN, DESGLOSE_COLOR, desgloseList, desgloseTotalPaqFinal, carrierCostList, carrierTotCostoUM, carrierTotCostoHM, carrierTotEntHM,
+    asignadosFinalTotal, entregadosFinalTotal, costoFinalTotal, movidosHMTotal, asignadosHMTotal, costoPorPaqFinal, hmVolumenMalCapturado };
 }
 
 function ModuleEnvios() {
