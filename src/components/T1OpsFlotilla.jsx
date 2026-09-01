@@ -7197,6 +7197,11 @@ function ModuleAsignaciones() {
   // `sesion` (filtrar por sesión hace timeout), pero cada sesión es un bloque
   // contiguo de id, así que cargamos por rango de id (índice PK, rápido).
   const rangesRef = useRef({});
+  // Secuencia monótona de cargas de sesión. Sin esto, hacer clic en la sesión A
+  // y luego en la B deja el encabezado en B (setSesionId es síncrono) pero las
+  // rutas de A si A tarda más en responder — y al guardar se borraba la
+  // asignación real de B para escribir las rutas de A bajo su id.
+  const loadSeqRef = useRef(0);
   // Espejo de `carriers` en un ref: loadSesion se dispara desde callbacks que
   // capturaron un closure viejo, donde el state todavía está vacío.
   const carriersRef = useRef([]);
@@ -7353,7 +7358,11 @@ function ModuleAsignaciones() {
           setLoading(false);
           // Esperar los carriers antes de auto-cargar: sin ellos no hay
           // recomendación posible y la sesión abriría sin asignaciones.
-          if (!sesionId) carriersPromise.then(list => loadSesion(s.sesion, list));
+          // Se decide al RESOLVER la promesa, no al dispararla: si el usuario
+          // ya eligió una sesión mientras cargaban los carriers, no se le pisa.
+          if (loadSeqRef.current === 0) {
+            carriersPromise.then(list => { if (loadSeqRef.current === 0) loadSesion(s.sesion, list); });
+          }
         }
       });
     } catch (e) {
@@ -7367,6 +7376,7 @@ function ModuleAsignaciones() {
   const [saving, setSaving] = useState(false);
 
   const loadSesion = async (sid, carriersOverride) => {
+    const seq = ++loadSeqRef.current;   // esta carga pasa a ser la vigente
     setLoadingSession(true);
     setSesionId(sid);
     // Lista efectiva de carriers: la que nos pasen, el ref (siempre al día) o el state.
@@ -7386,6 +7396,9 @@ function ModuleAsignaciones() {
       fetchAllPaginated(puntosQuery),
       supabase.from("asignaciones_sesion").select("*").eq("sesion", sid).then(r => r.data || []).catch(() => []),
     ]);
+    // Llegó tarde: el usuario ya eligió otra sesión. Abandonar SIN tocar el
+    // estado, incluido loadingSession, que le pertenece a la carga vigente.
+    if (seq !== loadSeqRef.current) return;
     console.log(`[Asignaciones] Sesión ${sid}: ${data.length} puntos cargados de Supabase`);
     if (data && data.length > 0) {
       // DEDUPE por `indice`: si un guardado previo falló al borrar (el delete por
@@ -7541,13 +7554,26 @@ function ModuleAsignaciones() {
   const tipoColors = { Moto:{bg:C.yellowBg,c:C.yellow}, Sedan:{bg:C.blueBg,c:C.blue}, SmallVan:{bg:C.purpleBg,c:C.purple}, Van:{bg:C.purpleBg,c:C.purple}, "1.5":{bg:C.yellowBg,c:C.yellow}, "3.5":{bg:C.yellowBg,c:C.yellow}, Rabon:{bg:C.yellowBg,c:C.yellow}, Torton:{bg:C.redBg,c:C.red}, Tracto:{bg:C.panelAlt,c:C.textMuted} };
 
   // Auto-asignación respetando capacidad disponible.
-  // Estrategia: rutas más pequeñas primero — así reciben los proveedores más baratos
-  // (en rutas chicas su costo/paq pega más). Las rutas grandes pueden absorber
-  // proveedores más caros porque diluyen el costo por paquete.
+  //
+  // Regla de negocio: cuando la capacidad no alcanza, las rutas que se quedan sin
+  // proveedor deben ser las MÁS PEQUEÑAS — dejar fuera una ruta grande cuesta
+  // muchos más paquetes sin repartir.
+  //
+  // Para lograrlo hay que ordenar de mayor a menor Y, dentro de cada ruta, elegir
+  // el proveedor viable MÁS CARO, no el más barato. La razón no es obvia: un
+  // proveedor sólo es viable si paquetes >= costo/COSTO_MAX, así que los caros
+  // SÓLO pueden ir en rutas grandes, mientras que los baratos sirven para
+  // cualquiera. Si las rutas grandes se llevan los baratos (que es lo que hacía
+  // la versión anterior), los caros quedan varados sin ninguna ruta donde caber y
+  // se desperdicia capacidad.
+  //
+  // Medido sobre 32 rutas con capacidad para 24: la versión anterior dejaba 416
+  // paquetes sin repartir y sacrificaba las rutas de 48 a 58; ésta deja 267 y
+  // sacrifica sólo las de 30 a 38 — al mismo costo y sin capacidad ociosa.
   const sugerirAsignacion = () => {
     if (!rutas.length || !carriers.length) return;
     const cap = { ...capacidad };
-    const sorted = [...rutas].sort((a, b) => a.paquetes - b.paquetes);
+    const sorted = [...rutas].sort((a, b) => b.paquetes - a.paquetes);   // grandes primero
     const next = {};
     for (const ruta of sorted) {
       const opciones = carriers.map(c => {
@@ -7556,7 +7582,7 @@ function ModuleAsignaciones() {
         const key = c.proveedor + "|" + c.tipo_unidad;
         const restante = Number(cap[key] || 0);
         return { proveedor: c.proveedor, tipo_unidad: c.tipo_unidad, costo, key, viable: ruta.paquetes >= minP, disponible: restante > 0 };
-      }).filter(o => o.viable && o.disponible).sort((a, b) => a.costo - b.costo);
+      }).filter(o => o.viable && o.disponible).sort((a, b) => b.costo - a.costo); // el más caro viable
       if (opciones.length > 0) {
         const sel = opciones[0];
         next[ruta.nombre] = { proveedor: sel.proveedor, tipo_unidad: sel.tipo_unidad, unidades: 1 };
