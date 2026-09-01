@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
 import { buildCostEngine, DEDUP_TIPOS } from "../lib/costEngine";
-import { rutear, PARAMS_DEFAULT } from "../lib/ruteo";
+import { rutear, metricas as calcMetricas, PARAMS_DEFAULT } from "../lib/ruteo";
 
 // ============================================================
 // T1 ENVÍOS — OPS FLOTILLA KPI PLATFORM
@@ -5668,6 +5668,9 @@ function ModuleRuteo() {
   const [showParams, setShowParams] = useState(false);
   const [metricas, setMetricas] = useState(null);                  // D, CV, SLA (§6.7)
   const [diagRuteo, setDiagRuteo] = useState(null);
+  // true cuando el plan se editó a mano después de generarse: las métricas son
+  // las del plan vigente, pero la secuencia ya no está re-optimizada.
+  const [editadoManual, setEditadoManual] = useState(false);
   const mapDivRef = useRef(null);
   const canvasRef = useRef(null);
   const leafletMapRef = useRef(null);
@@ -5951,6 +5954,7 @@ function ModuleRuteo() {
   };
 
   const applyBulk = () => {
+    setEditadoManual(true);
     const indices = Array.from(selectedIndices);
     if (!indices.length) return;
     const nc = bulkCluster;
@@ -5962,6 +5966,7 @@ function ModuleRuteo() {
   };
 
   const excludeFromRoute = () => {
+    setEditadoManual(true);
     const indices = Array.from(selectedIndices);
     if (!indices.length) return;
     setAsignaciones(prev => { const next = [...prev]; indices.forEach(i => next[i] = -1); return next; });
@@ -5972,6 +5977,7 @@ function ModuleRuteo() {
   };
 
   const includeInRoute = () => {
+    setEditadoManual(true);
     const indices = Array.from(selectedIndices);
     if (!indices.length) return;
     const nc = bulkCluster;
@@ -6037,8 +6043,38 @@ function ModuleRuteo() {
     seqOrderRef.current = r.seqOrder;
     if (r.metricas) setMetricas(r.metricas);
     if (r.diagnostico) setDiagRuteo(r.diagnostico);
+    setEditadoManual(false);
     return r;
   };
+
+  // Recalcula D, CV y SLA (§6.7) cada vez que cambian las asignaciones.
+  //
+  // Hace falta porque la reasignación manual (clic, lazo, excluir, dividir,
+  // fusionar) altera los sectores sin pasar por el ruteador: las métricas
+  // quedaban congeladas mostrando el plan generado, no el plan vigente, y el
+  // balance m ≤ n_j ≤ M (9) podía romperse en silencio. Aquí se recalcula sobre
+  // el estado REAL, usando el orden de visita vigente.
+  //
+  // Ojo con lo que esto NO hace: mover un punto de ruta no re-optimiza la
+  // secuencia, así que las cifras son las del plan tal como está, no las de un
+  // plan re-optimizado. Por eso se marca como editado y se ofrece re-optimizar.
+  useEffect(() => {
+    if (!puntos.length || !asignaciones.length) { setMetricas(null); return; }
+    const seq = seqOrderRef.current;
+    const porCluster = new Map();
+    asignaciones.forEach((cl, i) => {
+      if (cl === -1) return;                     // excluidos: no salen del almacén
+      if (!porCluster.has(cl)) porCluster.set(cl, []);
+      porCluster.get(cl).push(i);
+    });
+    if (!porCluster.size) { setMetricas(null); return; }
+    const rutas = [...porCluster.values()].map(idxs => {
+      const orden = seq ? idxs.slice().sort((a, b) => (seq[a] ?? 0) - (seq[b] ?? 0)) : idxs;
+      return orden.map(i => puntos[i]);
+    });
+    setMetricas(calcMetricas(rutas, DEPOT, paramsRuteo));
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [asignaciones, puntos, paramsRuteo]);
 
   const handleFile = async e => {
     const file = e.target.files?.[0];
@@ -6653,7 +6689,14 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
           {metricas && (
             <div style={{ backgroundColor: C.white, borderRadius: 12, padding: "14px 18px", border: "1px solid " + C.border, marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Métricas del plan</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 8 }}>
+                  Métricas del plan
+                  {editadoManual && (
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, backgroundColor: C.yellowBg, color: C.yellow }}>
+                      editado a mano
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: 11, color: C.textMuted }}>
                   salida {pB0}:00 · jornada {pTmax} h · servicio {pSi} min/entrega
                   {diagRuteo ? ` · ${diagRuteo.iteracionesPD} iter. de balanceo · ${diagRuteo.msComputo} ms` : ""}
@@ -6689,6 +6732,21 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                   {showParams ? "▴ Ocultar parámetros" : "⚙ Parámetros del modelo"}
                 </button>
               </div>
+
+              {editadoManual && (
+                <div style={{ marginTop: 12, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ flex: "1 1 320px" }}>
+                    Estas cifras son las del plan <b>tal como está ahora</b>, con tus cambios manuales incluidos.
+                    El orden de visita de las rutas que tocaste ya no está optimizado — re-clusterizar vuelve a
+                    optimizarlo, pero descarta las reasignaciones manuales.
+                  </span>
+                  {metricas.fueraRango > 0 && (
+                    <span style={{ padding: "3px 10px", borderRadius: 10, backgroundColor: C.redBg, color: C.red, fontWeight: 700 }}>
+                      {metricas.fueraRango} ruta(s) fuera de [{pM}, {pMM}]
+                    </span>
+                  )}
+                </div>
+              )}
               {showParams && (
                 <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid " + C.border }}>
                   <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10, lineHeight: 1.5 }}>
@@ -6944,6 +7002,7 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                           <select value={cl} onChange={e => {
                             const nc = parseInt(e.target.value);
                             setAsignaciones(prev => { const n = [...prev]; n[i] = nc; return n; });
+                            setEditadoManual(true);
                             if (sesionId) supabase.from("ruteo_puntos").update({ cluster: nc, ruta: nc === -1 ? "Excluido" : "Ruta " + (nc + 1) }).eq("sesion", sesionId).eq("indice", i);
                           }} style={{ padding: "4px 8px", borderRadius: 5, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color, cursor: "pointer", backgroundColor: color + "12" }}>
                             <option value={-1}>✕ Excluido</option>
