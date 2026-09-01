@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
 import { buildCostEngine, DEDUP_TIPOS } from "../lib/costEngine";
+import { rutear, PARAMS_DEFAULT } from "../lib/ruteo";
 
 // ============================================================
 // T1 ENVÍOS — OPS FLOTILLA KPI PLATFORM
@@ -5658,6 +5659,15 @@ function ModuleRuteo() {
   const [historico, setHistorico] = useState([]);
   const [loadingHist, setLoadingHist] = useState(false);
   const [showHistorico, setShowHistorico] = useState(false);
+  // --- Parámetros del modelo (§6.1 de la tesis) ---
+  const [pB0, setPB0] = useState(String(PARAMS_DEFAULT.b0));       // b_0 hora de salida
+  const [pTmax, setPTmax] = useState(String(PARAMS_DEFAULT.Tmax)); // T_max jornada (h)
+  const [pSi, setPSi] = useState("3");                             // s_i servicio (min)
+  const [pM, setPM] = useState(String(PARAMS_DEFAULT.m));          // m paradas mín
+  const [pMM, setPMM] = useState(String(PARAMS_DEFAULT.M));        // M paradas máx
+  const [showParams, setShowParams] = useState(false);
+  const [metricas, setMetricas] = useState(null);                  // D, CV, SLA (§6.7)
+  const [diagRuteo, setDiagRuteo] = useState(null);
   const mapDivRef = useRef(null);
   const canvasRef = useRef(null);
   const leafletMapRef = useRef(null);
@@ -5973,221 +5983,61 @@ function ModuleRuteo() {
   };
 
   // ================================================================
-  // Capacity-Constrained Power Diagrams (CCPD) + Time-Dependent
-  // routing optimized with Guided Local Search (GLS) over 2-opt.
+  // RUTEADOR — el algoritmo vive en src/lib/ruteo.js, compartido con el Worker.
   //
-  //   1. KMeans++ seeding for centroids.
-  //   2. Power Diagram assignment: each point goes to the centroid
-  //      that minimizes the *power distance*  d²(p,c) - w(c).
-  //      Adjusting the weights w(c) balances cluster capacities
-  //      (all clusters tend toward |pts|/k points).
-  //   3. Lloyd centroid update.
-  //   4. Per-cluster TSP ordering refined with Guided Local Search
-  //      using a time-dependent edge cost (later visits cost more).
+  //   Módulo 1: Power Diagram capacitado con criterio de paro m ≤ n_j ≤ M.
+  //   Módulo 2: TD-VRP por sector, anclado al depósito, objetivo distancia pura
+  //             y tiempo de viaje dependiente de la hora con propiedad FIFO.
+  //
+  // Antes había una copia inline completa del algoritmo aquí y otra en el
+  // Worker; divergían con cada cambio. Ahora ambos caminos llaman a `rutear`.
   // ================================================================
-  const kMeans = (pts, k) => {
-    if (!pts.length || k < 1) return [];
-    const n = pts.length;
-    const targetCap = n / k;
+  const seqOrderRef = useRef(null);   // orden de visita del último ruteo
+  const paramsRuteo = useMemo(() => ({
+    b0: parseFloat(pB0) || PARAMS_DEFAULT.b0,
+    Tmax: parseFloat(pTmax) || PARAMS_DEFAULT.Tmax,
+    si: (parseFloat(pSi) || 3) / 60,
+    m: parseInt(pM) || PARAMS_DEFAULT.m,
+    M: parseInt(pMM) || PARAMS_DEFAULT.M,
+  }), [pB0, pTmax, pSi, pM, pMM]);
 
-    // --- KMeans++ centroid seeding ---
-    const centers = [{ lat: pts[Math.floor(Math.random() * n)].lat, lng: pts[Math.floor(Math.random() * n)].lng }];
-    while (centers.length < k) {
-      const dists = pts.map(p => Math.min(...centers.map(c => (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2)));
-      const total = dists.reduce((s, d) => s + d, 0);
-      let r = Math.random() * total, chosen = pts[n - 1];
-      for (let j = 0; j < n; j++) { r -= dists[j]; if (r <= 0) { chosen = pts[j]; break; } }
-      centers.push({ lat: chosen.lat, lng: chosen.lng });
-    }
+  const DEPOT = { lat: DEPOSITO_LAT, lng: DEPOSITO_LNG };
 
-    // --- Power Diagram + capacity-constrained Lloyd iterations ---
-    let weights = new Array(k).fill(0);
-    let assigns = new Array(n).fill(0);
-    const powerDist = (p, c, w) => (p.lat - c.lat) ** 2 + (p.lng - c.lng) ** 2 - w;
-    const lr = 5e-7; // weight learning rate (in deg² units)
-
-    for (let it = 0; it < 150; it++) {
-      const na = pts.map(p => {
-        let md = Infinity, nr = 0;
-        for (let ci = 0; ci < k; ci++) {
-          const d = powerDist(p, centers[ci], weights[ci]);
-          if (d < md) { md = d; nr = ci; }
-        }
-        return nr;
-      });
-      // Update centroids (Lloyd step)
-      for (let ci = 0; ci < k; ci++) {
-        const cp = pts.filter((_, i) => na[i] === ci);
-        if (cp.length) centers[ci] = {
-          lat: cp.reduce((s, p) => s + p.lat, 0) / cp.length,
-          lng: cp.reduce((s, p) => s + p.lng, 0) / cp.length,
-        };
-      }
-      // Adjust weights to balance capacities: oversized clusters
-      // get smaller weights (push points away), undersized get larger.
-      const sizes = new Array(k).fill(0);
-      na.forEach(a => sizes[a]++);
-      weights = weights.map((w, ci) => w + lr * (targetCap - sizes[ci]));
-
-      if (na.every((a, i) => a === assigns[i])) { assigns = na; break; }
-      assigns = na;
-    }
-
-    // --- Compact cluster IDs to 0..N-1 with no gaps ---
-    const used = [...new Set(assigns)].sort((a, b) => a - b);
-    if (used.length < k) {
-      const remap = {};
-      used.forEach((c, i) => { remap[c] = i; });
-      assigns = assigns.map(a => remap[a]);
-    }
-
-    // --- Per-cluster TSP ordering with Guided Local Search (2-opt) ---
-    // Time-dependent edge cost: visit i→j taking place at sequence
-    // position p has an extra (1 + p*tau) multiplier that simulates
-    // increasing congestion later in the route.
-    const numClustersFinal = Math.max(...assigns) + 1;
-    const tau = 0.02; // time-dependent decay factor
-    const haver = (a, b) => {
-      const R = 6371, toR = d => d * Math.PI / 180;
-      const dLat = toR(b.lat - a.lat), dLng = toR(b.lng - a.lng);
-      const s = Math.sin(dLat / 2) ** 2 + Math.cos(toR(a.lat)) * Math.cos(toR(b.lat)) * Math.sin(dLng / 2) ** 2;
-      return 2 * R * Math.asin(Math.sqrt(s));
-    };
-    const tdCost = (a, b, pos) => haver(a, b) * (1 + pos * tau);
-
-    // Per-point sequence position (1-based) within its cluster after GLS
-    const seqOrder = new Array(n).fill(0);
-
-    for (let ci = 0; ci < numClustersFinal; ci++) {
-      const idxs = [];
-      pts.forEach((_, i) => { if (assigns[i] === ci) idxs.push(i); });
-      if (idxs.length <= 2) { idxs.forEach((gi, lp) => { seqOrder[gi] = lp; }); continue; }
-
-      // Greedy nearest-neighbor seed tour starting at the centroid-closest point
-      let startIdx = idxs[0], minD = Infinity;
-      idxs.forEach(gi => {
-        const d = (pts[gi].lat - centers[ci].lat) ** 2 + (pts[gi].lng - centers[ci].lng) ** 2;
-        if (d < minD) { minD = d; startIdx = gi; }
-      });
-      const remaining = new Set(idxs);
-      remaining.delete(startIdx);
-      const tour = [startIdx];
-      while (remaining.size) {
-        const last = pts[tour[tour.length - 1]];
-        let best = null, bestD = Infinity;
-        remaining.forEach(gi => {
-          const d = haver(last, pts[gi]);
-          if (d < bestD) { bestD = d; best = gi; }
-        });
-        tour.push(best);
-        remaining.delete(best);
-      }
-
-      // Guided Local Search: penalize most-utilized edges to escape local optima
-      const m = tour.length;
-      const penalties = {}; // key: "min-max" of point indices in tour position
-      const lambda = 0.1;
-      const tourCost = (t, pen) => {
-        let s = 0;
-        for (let i = 0; i < t.length - 1; i++) {
-          const key = Math.min(t[i], t[i + 1]) + "-" + Math.max(t[i], t[i + 1]);
-          s += tdCost(pts[t[i]], pts[t[i + 1]], i) + lambda * (pen[key] || 0);
-        }
-        return s;
-      };
-      const augmentedCost = c => c;
-
-      const twoOpt = t => {
-        let improved = true, best = [...t];
-        while (improved) {
-          improved = false;
-          for (let i = 1; i < best.length - 2; i++) {
-            for (let j = i + 1; j < best.length - 1; j++) {
-              const cand = [...best.slice(0, i), ...best.slice(i, j + 1).reverse(), ...best.slice(j + 1)];
-              if (augmentedCost(tourCost(cand, penalties)) < augmentedCost(tourCost(best, penalties)) - 1e-9) {
-                best = cand; improved = true;
-              }
-            }
-          }
-        }
-        return best;
-      };
-
-      let current = twoOpt(tour);
-      let bestEver = [...current];
-      let bestEverCost = tourCost(current, {});
-      const glsIters = Math.min(10, Math.max(3, Math.floor(40 / m)));
-      for (let g = 0; g < glsIters; g++) {
-        // Penalize edges with highest utility = cost / (1 + penalty)
-        let maxUtil = -1, worstKey = null;
-        for (let i = 0; i < current.length - 1; i++) {
-          const key = Math.min(current[i], current[i + 1]) + "-" + Math.max(current[i], current[i + 1]);
-          const c = haver(pts[current[i]], pts[current[i + 1]]);
-          const util = c / (1 + (penalties[key] || 0));
-          if (util > maxUtil) { maxUtil = util; worstKey = key; }
-        }
-        if (worstKey) penalties[worstKey] = (penalties[worstKey] || 0) + 1;
-        current = twoOpt(current);
-        const realCost = tourCost(current, {});
-        if (realCost < bestEverCost) { bestEverCost = realCost; bestEver = [...current]; }
-      }
-
-      bestEver.forEach((gi, lp) => { seqOrder[gi] = lp; });
-    }
-
-    // Stash sequence order on assignment objects for the caller via closure
-    kMeans._lastSeqOrder = seqOrder;
-    return assigns;
-  };
-  kMeans._lastSeqOrder = null;
-
-  // Wrapper que ejecuta kMeans en un Web Worker (para datasets grandes).
-  // Si el worker falla a cargar (sin soporte de bundler o restricciones del
-  // navegador), cae al kMeans inline (que congela la UI pero al menos funciona).
-  // El worker reporta progreso vía postMessage para mostrar feedback.
-  const runKMeansAsync = async (pts, k, onProgress) => {
-    // Para datasets pequeños el overhead del worker no vale la pena
+  // Ejecuta el ruteador en un Web Worker; cae al camino inline si el worker no
+  // carga (sin soporte del bundler o restricciones del navegador).
+  const runRuteoAsync = async (pts, k, onProgress) => {
+    const limpios = pts.map(p => ({ lat: p.lat, lng: p.lng }));
     if (pts.length < 500 || typeof Worker === "undefined") {
-      const assigns = kMeans(pts, k);
-      return { assigns, seqOrder: kMeans._lastSeqOrder };
+      return rutear(limpios, k, DEPOT, paramsRuteo, onProgress);
     }
     return new Promise((resolve) => {
       let worker;
+      const inline = () => resolve(rutear(limpios, k, DEPOT, paramsRuteo, onProgress));
       try {
-        worker = new Worker(new URL("./kmeansWorker.js", import.meta.url));
+        worker = new Worker(new URL("./kmeansWorker.js", import.meta.url), { type: "module" });
       } catch (err) {
         console.warn("[Ruteo] Worker no disponible, fallback inline:", err);
-        const assigns = kMeans(pts, k);
-        resolve({ assigns, seqOrder: kMeans._lastSeqOrder });
-        return;
+        inline(); return;
       }
-      const fallback = () => {
-        try { worker.terminate(); } catch {}
-        const assigns = kMeans(pts, k);
-        resolve({ assigns, seqOrder: kMeans._lastSeqOrder });
-      };
-      worker.onerror = (e) => {
-        console.error("[Ruteo] Worker error:", e.message);
-        fallback();
-      };
+      const fallback = () => { try { worker.terminate(); } catch {} inline(); };
+      worker.onerror = (e) => { console.error("[Ruteo] Worker error:", e.message); fallback(); };
       worker.onmessage = (e) => {
-        if (e.data?.progress) {
-          onProgress?.(e.data.progress);
-          return;
-        }
-        if (e.data?.error) {
-          console.error("[Ruteo] Worker fallo:", e.data.error);
-          fallback();
-          return;
-        }
-        if (e.data?.result) {
-          worker.terminate();
-          resolve(e.data.result);
-        }
+        if (e.data?.progress) { onProgress?.(e.data.progress); return; }
+        if (e.data?.error) { console.error("[Ruteo] Worker falló:", e.data.error); fallback(); return; }
+        if (e.data?.result) { worker.terminate(); resolve(e.data.result); }
       };
-      // Enviar sólo lat/lng (no necesitamos todos los campos de cada punto)
-      worker.postMessage({ pts: pts.map(p => ({ lat: p.lat, lng: p.lng })), k });
+      worker.postMessage({ pts: limpios, k, depot: DEPOT, params: paramsRuteo });
     });
+  };
+
+  // Compatibilidad con los llamadores existentes (dividirRuta / fusionarRutas),
+  // que esperan { assigns, seqOrder }.
+  const runKMeansAsync = async (pts, k, onProgress) => {
+    const r = await runRuteoAsync(pts, k, onProgress);
+    seqOrderRef.current = r.seqOrder;
+    if (r.metricas) setMetricas(r.metricas);
+    if (r.diagnostico) setDiagRuteo(r.diagnostico);
+    return r;
   };
 
   const handleFile = async e => {
@@ -6235,8 +6085,8 @@ function ModuleRuteo() {
       const { assigns, seqOrder } = await runKMeansAsync(pts, k, (p) => {
         setMsg(`⏳ ${p.phase === "clustering" ? "Clusterizando" : "Optimizando rutas"}: ${p.value}%`);
       });
-      // Set seqOrder global vía kMeans (consumido más abajo por handlers/exports)
-      kMeans._lastSeqOrder = seqOrder;
+      // Orden de visita del ruteo (lo consumen split/merge y los exports)
+      seqOrderRef.current = seqOrder;
       setPuntos(pts);
       setAsignaciones(assigns);
       // Reuse the existing sesionId when the loaded points match rawRows
@@ -6307,7 +6157,7 @@ function ModuleRuteo() {
     const { assigns, seqOrder } = await runKMeansAsync(puntos, k, (p) => {
       setMsg(`⏳ ${p.phase === "clustering" ? "Clusterizando" : "Optimizando rutas"}: ${p.value}%`);
     });
-    kMeans._lastSeqOrder = seqOrder;
+    seqOrderRef.current = seqOrder;
     setAsignaciones(assigns);
     // Persist to DB: delete old rows and re-insert with new clusters
     if (sesionId) {
@@ -6367,13 +6217,13 @@ function ModuleRuteo() {
       const newClusterIds = Array.from({ length: n }, (_, i) => subToFinalId[i]);
       // Construir nueva asignación global
       const nuevasAsigns = [...asignaciones];
-      const nuevoSeq = kMeans._lastSeqOrder ? [...kMeans._lastSeqOrder] : new Array(asignaciones.length).fill(0);
+      const nuevoSeq = seqOrderRef.current ? [...seqOrderRef.current] : new Array(asignaciones.length).fill(0);
       idxs.forEach((globalIdx, localPos) => {
         nuevasAsigns[globalIdx] = subToFinalId[subAssigns[localPos]];
         if (subSeq) nuevoSeq[globalIdx] = subSeq[localPos];
       });
       setAsignaciones(nuevasAsigns);
-      kMeans._lastSeqOrder = nuevoSeq;
+      seqOrderRef.current = nuevoSeq;
       setSelectedIndices(new Set());
 
       // Persistir en BD: update por chunks de puntos, agrupados por nuevo cluster
@@ -6449,13 +6299,13 @@ function ModuleRuteo() {
         setMsg(`⏳ Fusionando: ${p.phase === "clustering" ? "Procesando" : "Optimizando orden"}: ${p.value}%`);
       });
       const nuevasAsigns = [...asignaciones];
-      const nuevoSeq = kMeans._lastSeqOrder ? [...kMeans._lastSeqOrder] : new Array(asignaciones.length).fill(0);
+      const nuevoSeq = seqOrderRef.current ? [...seqOrderRef.current] : new Array(asignaciones.length).fill(0);
       idxs.forEach((globalIdx, localPos) => {
         nuevasAsigns[globalIdx] = targetCluster;
         if (subSeq) nuevoSeq[globalIdx] = subSeq[localPos];
       });
       setAsignaciones(nuevasAsigns);
-      kMeans._lastSeqOrder = nuevoSeq;
+      seqOrderRef.current = nuevoSeq;
       setSelectedIndices(new Set());
 
       if (sesionId) {
@@ -6796,6 +6646,84 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
             <StatCard label="Promedio por ruta" value={Object.keys(clusterCount).length > 0 ? Math.round(puntos.length / Object.keys(clusterCount).length).toString() : "0"} subvalue="puntos por cluster" icon={<IC.Package />} color={C.green} />
             <StatCard label="Sesión ID" value={sesionId.substring(0, 10)} subvalue="guardado en BD" icon={<IC.Clock />} color={C.textMuted} />
           </div>
+
+          {/* Métricas del modelo (§6.7 de la tesis): D, CV y SLA%. Se calculan
+              sobre las rutas ANCLADAS AL DEPÓSITO y con tiempos de viaje
+              dependientes de la hora del día. */}
+          {metricas && (
+            <div style={{ backgroundColor: C.white, borderRadius: 12, padding: "14px 18px", border: "1px solid " + C.border, marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Métricas del plan</div>
+                <div style={{ fontSize: 11, color: C.textMuted }}>
+                  salida {pB0}:00 · jornada {pTmax} h · servicio {pSi} min/entrega
+                  {diagRuteo ? ` · ${diagRuteo.iteracionesPD} iter. de balanceo · ${diagRuteo.msComputo} ms` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Distancia total</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: C.blue }}>{metricas.D.toFixed(1)} <span style={{ fontSize: 12, fontWeight: 600 }}>km</span></div>
+                  <div style={{ fontSize: 10, color: C.textFaint }}>incluye ida y vuelta al depósito</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>CV de carga</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: metricas.CV <= 0.15 ? C.green : metricas.CV <= 0.30 ? C.yellow : C.red }}>{metricas.CV.toFixed(3)}</div>
+                  <div style={{ fontSize: 10, color: C.textFaint }}>{metricas.minN}–{metricas.maxN} paradas por ruta</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>SLA en jornada</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: metricas.SLA >= 95 ? C.green : metricas.SLA >= 80 ? C.yellow : C.red }}>{metricas.SLA.toFixed(1)}%</div>
+                  <div style={{ fontSize: 10, color: C.textFaint }}>la más larga: {metricas.durMax.toFixed(1)} h</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Balance</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: metricas.fueraRango === 0 ? C.green : C.yellow }}>
+                    {metricas.fueraRango === 0 ? "✓" : metricas.fueraRango}
+                  </div>
+                  <div style={{ fontSize: 10, color: C.textFaint }}>
+                    {metricas.fueraRango === 0 ? `todas dentro de [${pM}, ${pMM}]` : `fuera de [${pM}, ${pMM}]`}
+                  </div>
+                </div>
+                <button onClick={() => setShowParams(s => !s)}
+                  style={{ marginLeft: "auto", alignSelf: "center", padding: "6px 14px", borderRadius: 7, border: "1px solid " + C.border, backgroundColor: showParams ? C.accentLight : "transparent", color: showParams ? C.accent : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  {showParams ? "▴ Ocultar parámetros" : "⚙ Parámetros del modelo"}
+                </button>
+              </div>
+              {showParams && (
+                <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid " + C.border }}>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10, lineHeight: 1.5 }}>
+                    Estos parámetros entran en el modelo como restricciones: la jornada máxima y el tiempo de servicio
+                    definen qué secuencias son <b>temporalmente realizables</b>, y el rango de paradas fuerza el balance
+                    entre sectores. Cambiarlos exige volver a generar las rutas.
+                  </div>
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    {[
+                      ["Salida del depósito (h)", pB0, setPB0, "0", "23", "b₀"],
+                      ["Jornada máxima (h)", pTmax, setPTmax, "1", "24", "T_max"],
+                      ["Servicio por entrega (min)", pSi, setPSi, "0", "60", "s_i"],
+                      ["Paradas mínimas", pM, setPM, "1", "500", "m"],
+                      ["Paradas máximas", pMM, setPMM, "1", "500", "M"],
+                    ].map(([lab, val, set, min, max, sym]) => (
+                      <div key={lab}>
+                        <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.textMuted, marginBottom: 4 }}>
+                          {lab} <span style={{ color: C.textFaint, fontStyle: "italic" }}>{sym}</span>
+                        </label>
+                        <input type="number" min={min} max={max} step="0.5" value={val} onChange={e => set(e.target.value)}
+                          style={{ width: 110, padding: "7px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, fontWeight: 700, textAlign: "center", backgroundColor: C.white, color: C.text }} />
+                      </div>
+                    ))}
+                  </div>
+                  {puntos.length > 0 && Math.ceil(puntos.length / Math.max(numClusters, 1)) > (parseInt(pMM) || 60) && (
+                    <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
+                      ⚠ Con {puntos.length.toLocaleString()} puntos y {numClusters} rutas tocan ~{Math.ceil(puntos.length / numClusters)} paradas por sector,
+                      por encima del máximo de {pMM}. El balanceo no podrá cumplir el rango: sube el número de rutas a
+                      al menos <b>{Math.ceil(puntos.length / (parseInt(pMM) || 60))}</b> o sube el máximo.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Cluster legend */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, padding: "12px 18px", border: "1px solid " + C.border, marginBottom: 14, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
