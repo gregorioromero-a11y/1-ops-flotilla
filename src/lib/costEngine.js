@@ -10,11 +10,34 @@ const norm = (s) =>
   String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
 
 const TARIFAS_FIJAS = { "PETCO Monterrey": 50, "Foráneo Monterrey": 55, "Foráneo GDL": 55 };
+
+// UNIDADES DEDICADAS — costo plano por RUTA/DÍA, no por paquete.
+//
+// Es una familia de tarifa distinta de TARIFAS_FIJAS y la diferencia no es
+// cosmética: TARIFAS_FIJAS es $/paquete y se multiplica por lo entregado
+// ($55 × 30 = $1,650), mientras que aquí se contrata el vehículo por el día y
+// cobra lo mismo con 5 paquetes que con 40. Meter $1,500 en la tabla de $/paquete
+// haría que una ruta de 30 saliera en $45,000.
+//
+// Fuente única a propósito: el costo se recalcula en tres motores distintos
+// (este, crearMotorCostos de Registrar Envíos y ModuleConsultas). Las tarifas
+// viejas están copiadas en los tres y por eso pueden separarse; estas se
+// importan de aquí para que no puedan.
+export const TARIFAS_POR_RUTA = {
+  "Foráneo Veracruz": 1500,
+  "Foráneo Xalapa": 1500,
+};
+export const TIPOS_DEDICADOS = new Set(Object.keys(TARIFAS_POR_RUTA));
+
 const TIPOS_PERMISIBLES = new Set([
   "Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "PETCO", "PETCO Monterrey", "HalfMile",
+  // Las dedicadas son foráneas: el operador no siempre hace check-in en CDMX,
+  // así que no tener registro automático no puede invalidar su costo.
+  ...TIPOS_DEDICADOS,
 ]);
-// Tipos donde un operador repetido el mismo día cobra una sola vez.
-export const DEDUP_TIPOS = new Set(["PETCO", "Foráneo Puebla"]);
+// Tipos donde un operador repetido el mismo día cobra una sola vez. Las
+// dedicadas entran por definición: se paga el día del vehículo, no el viaje.
+export const DEDUP_TIPOS = new Set(["PETCO", "Foráneo Puebla", ...TIPOS_DEDICADOS]);
 
 export const isCrossdock = (r) => {
   const t = (r.tipoRuta || "").toLowerCase();
@@ -73,6 +96,11 @@ export function buildCostEngine(asistencia, carriers) {
   };
 
   const baseCost = (r) => {
+    // Dedicada: costo plano del día. Va ANTES que todo lo demás porque no
+    // depende de asistencia ni del catálogo — el precio es del contrato, no de
+    // qué unidad se haya registrado.
+    const tarifaRuta = TARIFAS_POR_RUTA[r.tipoRuta];
+    if (tarifaRuta != null) return tarifaRuta;
     const rateFija = TARIFAS_FIJAS[r.tipoRuta];
     if (rateFija != null) {
       const paq = (parseInt(r.entregados) || 0) + (isCrossdock(r) ? (parseInt(r.recolecciones) || 0) : 0);

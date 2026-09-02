@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
-import { buildCostEngine, DEDUP_TIPOS } from "../lib/costEngine";
+import { buildCostEngine, DEDUP_TIPOS, TARIFAS_POR_RUTA, TIPOS_DEDICADOS } from "../lib/costEngine";
 import { rutear, metricas as calcMetricas, PARAMS_DEFAULT } from "../lib/ruteo";
 import * as PRONO from "../lib/pronostico";
 
@@ -1705,6 +1705,8 @@ const normalizeOperacion = (raw) => {
   if (n.includes("foraneo")) {
     if (n.includes("monterrey") || n.includes("mty")) return "Foráneo Monterrey";
     if (n.includes("gdl") || n.includes("guadalajara")) return "Foráneo GDL";
+    if (n.includes("veracruz") || n === "ver") return "Foráneo Veracruz";
+    if (n.includes("xalapa") || n.includes("jalapa")) return "Foráneo Xalapa";
     if (n.includes("puebla")) return "Foráneo Puebla";
     return "Foráneo Puebla"; // default si sólo dice "Foráneo"
   }
@@ -1764,6 +1766,15 @@ function crearMotorCostos(carriers, asistencia) {
         tipo_unidad = "Override";
       }
       return { baseCost: baseCost || 0, proveedor: r.carrier, tipo_unidad: tipo_unidad || "Override", missing: false, tipo_operacion: r.tipoRuta, override: true };
+    }
+    // Unidad dedicada: costo plano del DÍA, sin multiplicar por paquetes y sin
+    // mirar asistencia ni catálogo. El precio lo fija el contrato de la plaza.
+    const tarifaRuta = TARIFAS_POR_RUTA[r.tipoRuta];
+    if (tarifaRuta != null) {
+      return {
+        baseCost: tarifaRuta, proveedor: r.carrier, tipo_unidad: "Dedicada",
+        missing: false, tipo_operacion: r.tipoRuta, tarifaPorRuta: true, tarifaPorRutaValor: tarifaRuta,
+      };
     }
     // Flat-rate tipos (per-package): bypass asistencia lookup entirely
     const rateFija = TARIFAS_FIJAS[r.tipoRuta];
@@ -1835,7 +1846,7 @@ function crearMotorCostos(carriers, asistencia) {
   };
 
   // Tipos de ruta donde es permisible no tener registro automático de operador
-  const TIPOS_PERMISIBLES = new Set(["Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "PETCO", "PETCO Monterrey", "HalfMile"]);
+  const TIPOS_PERMISIBLES = new Set(["Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "PETCO", "PETCO Monterrey", "HalfMile", ...TIPOS_DEDICADOS]);
   const esPermisible = r => TIPOS_PERMISIBLES.has(r.tipoRuta);
   // Tipos de tarifa fija: { tipo: $ por paquete operado }
   const TARIFAS_FIJAS = {
@@ -1859,7 +1870,10 @@ function crearMotorCostos(carriers, asistencia) {
 // ============================================================
 function calcularCostos(rutas, motor) {
   const { getCostoInfo, esPermisible } = motor;
-  const DEDUP_TIPOS = new Set(["PETCO", "Foráneo Puebla"]);
+  // Sombrea a propósito al DEDUP_TIPOS importado: aquí las llaves son camelCase
+  // (tipoRuta) y allá snake_case (tipo_ruta). Los tipos dedicados entran en
+  // ambos desde la misma fuente para que no puedan separarse.
+  const DEDUP_TIPOS = new Set(["PETCO", "Foráneo Puebla", ...TIPOS_DEDICADOS]);
   const esDedup = r => DEDUP_TIPOS.has(r.tipoRuta);
 
   // Agrupar rutas dedup por (fecha, operador, tipoRuta) para compartir costo
@@ -2475,7 +2489,7 @@ function ModuleEnvios() {
     return finales.sort();
   })();
 
-  // 7 operaciones canónicas — siempre se muestran en el popup
+  // Operaciones canónicas — siempre se muestran en el popup
   const OPERACIONES_CANONICAS = [
     "Última milla",
     "Crossdock",
@@ -2484,6 +2498,8 @@ function ModuleEnvios() {
     "Foráneo Puebla",
     "Foráneo Monterrey",
     "Foráneo GDL",
+    "Foráneo Veracruz",
+    "Foráneo Xalapa",
   ];
 
   // Mapea variantes de nombres (capitalización, acentos, alias) al canónico.
@@ -3632,6 +3648,8 @@ function ModuleEnvios() {
                         <option value="Foráneo Puebla">Foráneo Puebla</option>
                         <option value="Foráneo Monterrey">Foráneo MTY</option>
                         <option value="Foráneo GDL">Foráneo GDL</option>
+                        <option value="Foráneo Veracruz">Foráneo Veracruz</option>
+                        <option value="Foráneo Xalapa">Foráneo Xalapa</option>
                       </select>
                     );
                   })()}
@@ -3824,7 +3842,7 @@ function ModuleEnvios() {
           : [];
         const totalCalc = (parseInt(manualForm.entregados) || 0) + (parseInt(manualForm.intentados) || 0) + (parseInt(manualForm.noVisitados) || 0);
         const isHalfMile = (manualForm.tipoRuta || "").toLowerCase().includes("half") || (manualForm.tipoRuta || "").toLowerCase().includes("cross");
-        const tiposRuta = ["Última milla", "HalfMile", "PETCO", "PETCO Monterrey", "Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL"];
+        const tiposRuta = ["Última milla", "HalfMile", "PETCO", "PETCO Monterrey", "Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "Foráneo Veracruz", "Foráneo Xalapa"];
         return (
           <div style={{ position:"fixed", inset:0, backgroundColor:"rgba(12,20,37,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:10000, padding:16 }}
             onClick={() => !manualSaving && setManualOpen(false)}>
@@ -9152,8 +9170,18 @@ function ModuleConsultas() {
 
         final = all.map(r => {
           const tarFija = TARIFAS_FIJAS_LOCAL[r.tipo_ruta];
+          const tarRuta = TARIFAS_POR_RUTA[r.tipo_ruta];
           let proveedor = null, tipo_unidad = null, costo_base = 0;
-          if (tarFija != null) {
+          if (tarRuta != null) {
+            // Dedicada: plano por ruta. OJO — esta consulta NO aplica dedup, así
+            // que dos rutas del mismo operador y día se listan a $1,500 cada una
+            // mientras que Registrar Envíos y el Dashboard cobran una sola vez.
+            // Es el comportamiento que este módulo ya tenía con PETCO y Foráneo
+            // Puebla; se deja igual para no cambiar en silencio lo que exporta.
+            costo_base = tarRuta;
+            proveedor = r.carrier || r.tipo_ruta;
+            tipo_unidad = "Dedicada";
+          } else if (tarFija != null) {
             const isCross = /(half|cross)/i.test(r.tipo_ruta || "");
             const paqOp = (parseInt(r.entregados) || 0) + (isCross ? (parseInt(r.recolecciones) || 0) : 0);
             costo_base = tarFija * paqOp;
