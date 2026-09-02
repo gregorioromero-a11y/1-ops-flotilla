@@ -14,9 +14,9 @@ export const ROLE_MODULES = {
   operaciones: [
     "dashboard", "kpis", "envios", "unidades", "operadores",
     "t1envios", "warehouse", "halfmile", "sameday",
-    "ruteo", "asignaciones", "manifiesto", "consultas",
+    "pronostico", "ruteo", "asignaciones", "manifiesto", "consultas",
   ],
-  costos: ["dashboard", "kpis", "costos", "carriers", "asignaciones", "consultas", "facturacion"],
+  costos: ["dashboard", "kpis", "costos", "carriers", "pronostico", "asignaciones", "consultas", "facturacion"],
   facturacion: ["facturacion"],
   lectura: ["kpis"],
   kpis: ["kpis"],

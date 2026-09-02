@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
 import { buildCostEngine, DEDUP_TIPOS } from "../lib/costEngine";
 import { rutear, metricas as calcMetricas, PARAMS_DEFAULT } from "../lib/ruteo";
+import * as PRONO from "../lib/pronostico";
 
 // ============================================================
 // T1 ENVÍOS — OPS FLOTILLA KPI PLATFORM
@@ -86,6 +87,11 @@ const IC = {
   ExternalLink: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15,3 21,3 21,9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>,
 };
 
+// Depósito / almacén T1. A scope de módulo porque lo usan tanto el ruteador
+// (ModuleRuteo) como la simulación de flota del pronóstico (B2): dos copias de
+// la coordenada se separarían y las dos simulaciones dejarían de ser comparables.
+const DEPOSITO = { lat: 19.398892731487283, lng: -99.11677448852873 };
+
 // ---- NAV ITEMS ----
 const navSections = [
   { label: "DASHBOARD", items: [
@@ -105,6 +111,9 @@ const navSections = [
     { id: "warehouse", label: "Warehouse", icon: IC.Warehouse },
     { id: "halfmile", label: "HalfMile", icon: IC.Map },
     { id: "sameday", label: "Same Day", icon: IC.Zap },
+  ]},
+  { label: "PLANEACIÓN", items: [
+    { id: "pronostico", label: "Pronóstico de carga", icon: IC.BarChart },
   ]},
   { label: "HERRAMIENTAS", items: [
     { id: "ruteo", label: "Ruteo / Clusters", icon: IC.Map },
@@ -5682,8 +5691,8 @@ function ModuleRuteo() {
   const mapModeRef = useRef("click");
   const redrawTimerRef = useRef(null);
 
-  const DEPOSITO_LAT = 19.398892731487283;
-  const DEPOSITO_LNG = -99.11677448852873;
+  const DEPOSITO_LAT = DEPOSITO.lat;
+  const DEPOSITO_LNG = DEPOSITO.lng;
   const RCOLORS = ['#E63B2E','#2563EB','#16A34A','#D97706','#7C3AED','#EC4899','#0891B2','#059669','#F97316','#4B5563','#DC2626','#1D4ED8','#15803D','#B45309','#6D28D9'];
 
   useEffect(() => { sesionIdRef.current = sesionId; }, [sesionId]);
@@ -10125,6 +10134,1688 @@ function ModuleFacturacion() {
   );
 }
 
+// ============================================================
+// PRONÓSTICO DE CARGA Y DIMENSIONAMIENTO DE FLOTA
+//
+// UI del motor de src/lib/pronostico.js, que implementa el documento FCING
+// Q4 2026 v4. Toda la matemática vive en la librería; aquí sólo se cargan los
+// tres reportes, se editan los supuestos y se muestran los resultados.
+//
+// Las cinco pestañas siguen las etapas del documento:
+//   Datos    → ingesta + Bloque 0 (§2, §9)
+//   Carga    → Etapa A: backlog, maduración, inbound, reintentos (§4)
+//   Flota    → Etapa B: capacidad efectiva y asignación entera (§4)
+//   Decisión → Etapa C: quantil objetivo y plan a comprometer en D−2 (§4)
+//   Backtest → rolling-origin y criterios de aceptación (§7, §8)
+//
+// Regla de diseño: el módulo NUNCA rellena un insumo que no tiene. Si falta un
+// bloqueante P0, la etapa que depende de él se muestra apagada con el motivo,
+// en vez de producir un número que parece bueno y no lo es (§8, "falla
+// ruidosamente si le falta un insumo").
+// ============================================================
+
+const PRONO_KEY = "t1_pronostico_v1";
+
+const PRONO_CONFIG_DEFAULT = {
+  estatusBacklog: [],
+  tipos: PRONO.TIPOS_UNIDAD_DEFAULT.map(t => ({ ...t })),
+  cFaltante: "",
+  tasas: {},
+  incluirSinRegistro: true,
+  usarJornada: true,
+  leadDias: 2,
+  // Covariates de §5.D: overrides de factor por evento y ventanas manuales
+  // (overlay A4 de cuentas Top con go-live).
+  factoresCalendario: {},
+  overlays: [],
+  // §6: corregir el estimador descartando los días en que la capacidad ató.
+  corregirCensura: true,
+  umbralSaturacion: 25,
+  diasHorizonteMulti: 5,
+};
+
+const leerConfigPronostico = () => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRONO_KEY) || "{}");
+    return { ...PRONO_CONFIG_DEFAULT, ...raw, tipos: raw.tipos?.length ? raw.tipos : PRONO_CONFIG_DEFAULT.tipos };
+  } catch { return { ...PRONO_CONFIG_DEFAULT }; }
+};
+
+const nf = (v, d = 0) => (v == null || !isFinite(v)) ? "—" : Number(v).toLocaleString("es-MX", { minimumFractionDigits: d, maximumFractionDigits: d });
+const money = (v) => (v == null || !isFinite(v)) ? "—" : "$" + Math.round(v).toLocaleString("es-MX");
+const pct = (v, d = 1) => (v == null || !isFinite(v)) ? "—" : v.toFixed(d) + "%";
+
+// ---- Piezas de UI compartidas por el módulo ----
+
+function ProPanel({ title, sub, right, children, tone }) {
+  return (
+    <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${tone || C.border}`, marginBottom: 16, overflow: "hidden" }}>
+      {(title || right) && (
+        <div style={{ padding: "13px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>{title}</div>
+            {sub && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3, maxWidth: 780, lineHeight: 1.5 }}>{sub}</div>}
+          </div>
+          {right}
+        </div>
+      )}
+      <div style={{ padding: 18 }}>{children}</div>
+    </div>
+  );
+}
+
+function ProTabla({ cols, rows, vacio = "Sin datos", compacta }) {
+  if (!rows.length) return <div style={{ fontSize: 12, color: C.textMuted, padding: "8px 0" }}>{vacio}</div>;
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: compacta ? 11 : 12 }}>
+        <thead>
+          <tr>{cols.map((c, i) => (
+            <th key={i} style={{ textAlign: c.num ? "right" : "left", padding: "7px 10px", borderBottom: `1px solid ${C.border}`, color: C.textMuted, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{c.label}</th>
+          ))}</tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} style={{ backgroundColor: r._destaca ? C.accentLight : "transparent" }}>
+              {cols.map((c, j) => (
+                <td key={j} style={{ textAlign: c.num ? "right" : "left", padding: "7px 10px", borderBottom: `1px solid ${C.border}`, color: r._color && j === 0 ? r._color : C.text, fontWeight: r._destaca ? 700 : 400, whiteSpace: c.wrap ? "normal" : "nowrap" }}>
+                  {c.render ? c.render(r) : r[c.key]}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Curva de riesgo / supervivencia de la maduración (A1). Dos series sobre el
+// mismo eje: barras = h(k) (probabilidad de salir en el rezago k), línea = S(k)
+// (fracción que sigue en almacén). Donde la línea cruza 0.5 está la mediana.
+function ProCurvaMaduracion({ curva, alto = 150 }) {
+  const K = Math.min(curva.kMax, 12);
+  const ks = Array.from({ length: K + 1 }, (_, i) => i);
+  const maxH = Math.max(0.0001, ...ks.map(k => curva.h[k]));
+  const W = 100 / (K + 1);
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "flex-end", height: alto, gap: 2, position: "relative" }}>
+        <svg viewBox={`0 0 100 ${alto}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: alto, pointerEvents: "none" }}>
+          <line x1="0" y1={alto * 0.5} x2="100" y2={alto * 0.5} stroke={C.border} strokeWidth="0.4" strokeDasharray="2 2" />
+          <polyline points={ks.map((k, i) => `${i * W + W / 2},${alto - curva.S[k + 1] * alto}`).join(" ")}
+            fill="none" stroke={C.yellow} strokeWidth="1.2" vectorEffect="non-scaling-stroke" />
+        </svg>
+        {ks.map(k => (
+          <div key={k} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", height: "100%", zIndex: 1 }}
+            title={`Rezago ${k} d · h=${(curva.h[k] * 100).toFixed(1)}% sale · S=${(curva.S[k + 1] * 100).toFixed(1)}% sigue en almacén · ${curva.enRiesgo[k]} en riesgo`}>
+            <div style={{ height: `${(curva.h[k] / maxH) * 82}%`, backgroundColor: k === curva.medianaK ? C.accent : C.blue, opacity: k === curva.medianaK ? 1 : 0.55, borderRadius: "3px 3px 0 0", minHeight: 1 }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", marginTop: 4 }}>
+        {ks.map(k => <div key={k} style={{ flex: 1, textAlign: "center", fontSize: 9, color: k === curva.medianaK ? C.accent : C.textMuted, fontWeight: k === curva.medianaK ? 800 : 500 }}>{k}</div>)}
+      </div>
+      <div style={{ fontSize: 10, color: C.textMuted, marginTop: 6, display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <span><span style={{ display: "inline-block", width: 8, height: 8, background: C.blue, borderRadius: 2, marginRight: 4 }} />h(k) — sale en el día k</span>
+        <span><span style={{ display: "inline-block", width: 8, height: 2, background: C.yellow, marginRight: 4, verticalAlign: "middle" }} />S(k) — sigue en almacén</span>
+        <span>Eje x = días desde la creación</span>
+      </div>
+    </div>
+  );
+}
+
+// De dónde viene la incertidumbre: barra apilada de la varianza por término.
+// Es la lectura que separa lo observado (backlog, error cero en el conteo) de lo
+// que de verdad se está pronosticando (§1).
+function ProVarianza({ pron }) {
+  const c = pron.componentes;
+  const partes = [
+    { k: "Backlog", v: c.backlog.pctVar, color: C.green, det: `${nf(c.backlog.ordenes)} órdenes contadas · aporta ${nf(c.backlog.media)} pzas` },
+    { k: "Inbound 48 h", v: c.inbound.pctVar, color: C.accent, det: `aporta ${nf(c.inbound.media)} pzas` },
+    { k: "Reintentos", v: c.reintentos.pctVar, color: C.yellow, det: `aporta ${nf(c.reintentos.media)} pzas${c.reintentos.observado ? " (observados)" : " (proyectados)"}` },
+  ];
+  return (
+    <div>
+      <div style={{ display: "flex", height: 26, borderRadius: 6, overflow: "hidden", marginBottom: 10 }}>
+        {partes.map(p => p.v > 0.5 && (
+          <div key={p.k} style={{ width: `${p.v}%`, backgroundColor: p.color, display: "flex", alignItems: "center", justifyContent: "center" }} title={`${p.k}: ${p.v.toFixed(1)}% de la varianza`}>
+            <span style={{ fontSize: 10, fontWeight: 800, color: "#fff" }}>{p.v >= 8 ? `${Math.round(p.v)}%` : ""}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 }}>
+        {partes.map(p => (
+          <div key={p.k} style={{ fontSize: 11 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: p.color }} />
+              <strong style={{ color: C.text }}>{p.k}</strong>
+              <span style={{ color: C.textMuted }}>{p.v.toFixed(1)}% de la varianza</span>
+            </div>
+            <div style={{ color: C.textMuted, marginLeft: 13, marginTop: 2 }}>{p.det}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProAviso({ tipo = "warn", children }) {
+  const col = tipo === "error" ? C.red : tipo === "ok" ? C.green : C.yellow;
+  const bg = tipo === "error" ? C.redBg : tipo === "ok" ? C.greenBg : C.yellowBg;
+  return (
+    <div style={{ background: bg, border: `1px solid ${col}44`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.text, lineHeight: 1.6, marginBottom: 12 }}>
+      <span style={{ color: col, fontWeight: 800, marginRight: 6 }}>{tipo === "error" ? "BLOQUEADO" : tipo === "ok" ? "OK" : "OJO"}</span>
+      {children}
+    </div>
+  );
+}
+
+function ModulePronostico() {
+  const [tab, setTab] = useState("datos");
+  const [cfg, setCfg] = useState(PRONO_CONFIG_DEFAULT);
+  const [creacion, setCreacion] = useState([]);
+  const [piezas, setPiezas] = useState([]);
+  const [rutas, setRutas] = useState([]);
+  const [fuentes, setFuentes] = useState({ creacion: null, piezas: null, rutas: null });
+  const [mapeos, setMapeos] = useState({});
+  const [carriers, setCarriers] = useState([]);
+  const [cargando, setCargando] = useState("");
+  const [msg, setMsg] = useState("");
+  const [objetivo, setObjetivo] = useState(() => PRONO.sumarDias(PRONO.diaISO(new Date()), 2));
+  const [bt, setBt] = useState(null);
+  const [btCargando, setBtCargando] = useState(false);
+  const [vlt, setVlt] = useState(null);
+  const [nuevoOverlay, setNuevoOverlay] = useState({ nombre: "", desde: "", hasta: "", factor: "1.5" });
+  const [sim, setSim] = useState(null);
+  const [simEstado, setSimEstado] = useState("");
+  const [ds, setDs] = useState(null);
+  const [dsEstado, setDsEstado] = useState("");
+  const [a4, setA4] = useState(null);
+  const [a4Estado, setA4Estado] = useState("");
+
+  // La config se lee en el primer render del cliente (no en el inicializador del
+  // useState) para no romper la hidratación del SSR.
+  useEffect(() => { setCfg(leerConfigPronostico()); }, []);
+  const guardar = (parcial) => {
+    setCfg(prev => {
+      const next = { ...prev, ...parcial };
+      try { localStorage.setItem(PRONO_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  // ---------- Ingesta ----------
+  const leerArchivo = async (file) => {
+    const XLSX = await import("xlsx");
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(new Uint8Array(buf), { type: "array", cellDates: true });
+    return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+  };
+
+  const subir = async (kind, e) => {
+    const file = e.target.files?.[0];
+    if (e.target) e.target.value = "";
+    if (!file) return;
+    setCargando(kind); setMsg("");
+    try {
+      const rows = await leerArchivo(file);
+      if (!rows.length) throw new Error("El archivo está vacío.");
+      const p = kind === "creacion" ? PRONO.parsearCreacion(rows)
+        : kind === "piezas" ? PRONO.parsearPiezas(rows)
+        : PRONO.parsearRutas(rows);
+      if (!p.items.length) throw new Error(`No se reconoció ninguna fila válida. Headers leídos: ${p.headers.slice(0, 12).join(" | ")}`);
+      if (kind === "creacion") setCreacion(p.items); else if (kind === "piezas") setPiezas(p.items); else setRutas(p.items);
+      setFuentes(f => ({ ...f, [kind]: `${file.name} · ${p.items.length.toLocaleString("es-MX")} filas` }));
+      setMapeos(m => ({ ...m, [kind]: p.col }));
+      setMsg(`✓ ${kind}: ${p.items.length.toLocaleString("es-MX")} filas de ${rows.length.toLocaleString("es-MX")} leídas.`);
+    } catch (err) { setMsg("⚠ " + (err?.message || err)); }
+    setCargando("");
+  };
+
+  const paginar = async (tabla, orderCol) => {
+    const out = []; const PAGE = 1000;
+    for (let i = 0; i < 300; i++) {
+      const { data, error } = await supabase.from(tabla).select("*").order(orderCol, { ascending: true }).range(i * PAGE, i * PAGE + PAGE - 1);
+      if (error) throw error;
+      if (!data?.length) break;
+      out.push(...data);
+      if (data.length < PAGE) break;
+    }
+    return out;
+  };
+
+  const desdeSupabase = async (kind) => {
+    setCargando(kind); setMsg("");
+    try {
+      if (kind === "creacion") {
+        const rows = await paginar("flotilla_ordenes", "tracking");
+        const items = PRONO.creacionDesdeSupabase(rows);
+        setCreacion(items);
+        setFuentes(f => ({ ...f, creacion: `Supabase · flotilla_ordenes · ${items.length.toLocaleString("es-MX")} órdenes` }));
+      } else {
+        const rows = await paginar("rutas", "id");
+        const items = PRONO.rutasDesdeSupabase(rows);
+        setRutas(items);
+        setFuentes(f => ({ ...f, rutas: `Supabase · rutas · ${items.length.toLocaleString("es-MX")} rutas` }));
+      }
+      setMsg("✓ Cargado desde Supabase.");
+    } catch (err) { setMsg("⚠ " + (err?.message || err)); }
+    setCargando("");
+  };
+
+  useEffect(() => {
+    supabase.from("carriers").select("*").then(r => setCarriers(r.data || []));
+  }, []);
+
+  // ---------- Derivados ----------
+  const diag = useMemo(
+    () => PRONO.diagnosticar({ creacion, piezas, rutas, estatusBacklog: cfg.estatusBacklog }),
+    [creacion, piezas, rutas, cfg.estatusBacklog]
+  );
+
+  const corte = useMemo(() => PRONO.sumarDias(objetivo, -(cfg.leadDias || 2)), [objetivo, cfg.leadDias]);
+
+  // Llave pieza → salida real. Es el insumo más confiable para saber qué salió y
+  // qué no: si existe, manda sobre la heurística de estatus (§5.A).
+  const mapaSalida = useMemo(() => {
+    const m = new Map();
+    for (const p of piezas) if (p.tracking && p.movimiento) m.set(p.tracking, p.movimiento);
+    return m;
+  }, [piezas]);
+
+  // §6 · días en que la capacidad ató. El conjunto CON rebote es el que usa el
+  // estimador: el día siguiente a uno racionado carga las salidas diferidas.
+  const sat = useMemo(
+    () => rutas.length ? PRONO.diasSaturados(rutas, { umbralPct: +cfg.umbralSaturacion || 25 }) : null,
+    [rutas, cfg.umbralSaturacion]
+  );
+  const saturadosActivos = cfg.corregirCensura && sat?.conRebote?.size ? sat.conRebote : null;
+
+  // Curva de maduración. Se prefiere el reporte de piezas (creación → primer
+  // movimiento, que ES la salida a ruta). Si no está, se cae a creación →
+  // entrega, que incluye además el tramo de reparto y sobreestima el rezago:
+  // queda marcado para que nadie lo lea como equivalente.
+  const fuenteCurva = piezas.some(p => p.movimiento) ? "piezas" : creacion.some(o => o.entrega) ? "creacion" : null;
+  const curva = useMemo(() => {
+    if (!fuenteCurva) return null;
+    const items = fuenteCurva === "piezas"
+      ? piezas.map(p => ({ creacion: p.creacion, salida: p.movimiento }))
+      : creacion.map(o => ({ creacion: o.creacion, salida: o.entrega }));
+    return PRONO.curvaMaduracion(items, corte, { saturados: saturadosActivos });
+  }, [fuenteCurva, piezas, creacion, corte, saturadosActivos]);
+
+  const tasaExcepcion = diag.rutas?.cargadas > 0 ? diag.rutas.excepciones / diag.rutas.cargadas : 0;
+  const tauReintento = PRONO.tasaReintentoPonderada(diag, cfg.tasas);
+  const factorParada = diag.piezas?.piezasPorParada > 0 ? diag.piezas.piezasPorParada : 1;
+
+  const pron = useMemo(() => {
+    if (!curva || !creacion.length) return null;
+    return PRONO.pronosticarCargaMultiDia({
+      creacion, curva, corteISO: corte, objetivoISO: objetivo,
+      estatusBacklog: cfg.estatusBacklog,
+      salidaConocida: mapaSalida.size ? (o => { const s = mapaSalida.get(o.tracking); return s && s <= corte ? s : null; }) : null,
+      rutas, tasasReintento: cfg.tasas, incluirSinRegistro: cfg.incluirSinRegistro,
+      tasaExcepcion, tauReintento,
+      factoresCalendario: cfg.factoresCalendario || {}, eventosExtra: cfg.overlays || [],
+    });
+  }, [curva, creacion, corte, objetivo, cfg.estatusBacklog, cfg.tasas, cfg.incluirSinRegistro, cfg.factoresCalendario, cfg.overlays, mapaSalida, rutas, tasaExcepcion, tauReintento]);
+
+  // Horizonte multi-día desde el mismo corte: la cadena trae un pronóstico por
+  // día, que es lo que B2 necesita para ver el arrastre.
+  const horizonte = useMemo(() => {
+    if (!curva || !creacion.length) return null;
+    const fin = PRONO.sumarDias(objetivo, (+cfg.diasHorizonteMulti || 5) - 1);
+    const r = PRONO.pronosticarCargaMultiDia({
+      creacion, curva, corteISO: corte, objetivoISO: fin,
+      estatusBacklog: cfg.estatusBacklog,
+      salidaConocida: mapaSalida.size ? (o => { const s = mapaSalida.get(o.tracking); return s && s <= corte ? s : null; }) : null,
+      rutas, tasasReintento: cfg.tasas, incluirSinRegistro: cfg.incluirSinRegistro,
+      tasaExcepcion, tauReintento,
+      factoresCalendario: cfg.factoresCalendario || {}, eventosExtra: cfg.overlays || [],
+    });
+    if (!r?.cadena) return null;
+    return r.cadena.filter(c => c.objetivoISO >= objetivo).map(c => ({ dia: c.objetivoISO, pron: c }));
+  }, [curva, creacion, corte, objetivo, cfg.diasHorizonteMulti, cfg.estatusBacklog, cfg.tasas, cfg.incluirSinRegistro, cfg.factoresCalendario, cfg.overlays, mapaSalida, rutas, tasaExcepcion, tauReintento]);
+
+  const capacidad = useMemo(() => rutas.length ? PRONO.capacidadEfectiva(rutas, { porDSP: true }) : null, [rutas]);
+  const capJornada = cfg.usarJornada ? (capacidad?.global?.capacidadJornada ?? null) : null;
+
+  const tiposEfectivos = useMemo(
+    () => PRONO.techosEfectivos(cfg.tipos.map(t => ({ ...t, piso: +t.piso || 0, techo: +t.techo || 0, costo: +t.costo || 0 })), capJornada),
+    [cfg.tipos, capJornada]
+  );
+  const capacidadUnidad = useMemo(() => {
+    const act = tiposEfectivos.filter(t => !t.inviable);
+    return PRONO.media(act.map(t => t.techoEfectivo)) || 1;
+  }, [tiposEfectivos]);
+  const cOciosoMedio = useMemo(() => {
+    const cs = tiposEfectivos.filter(t => !t.inviable && t.costo > 0).map(t => t.costo);
+    return cs.length ? PRONO.media(cs) : 0;
+  }, [tiposEfectivos]);
+
+  const qObjetivo = PRONO.quantilObjetivo(cfg.cFaltante, cOciosoMedio, { capacidadUnidad });
+  const hayCostos = (+cfg.cFaltante > 0) && cOciosoMedio > 0;
+
+  const paradasEnQ = (q) => pron ? Math.round(PRONO.cargaEnCuantil(pron, q) / factorParada) : 0;
+  const planRecomendado = useMemo(
+    () => pron && hayCostos
+      ? PRONO.asignarUnidades(Math.round(PRONO.cargaEnCuantil(pron, qObjetivo) / factorParada), tiposEfectivos)
+      : null,
+    [pron, hayCostos, qObjetivo, tiposEfectivos, factorParada]
+  );
+
+  const multiDia = useMemo(() => {
+    if (!horizonte?.length || !hayCostos) return null;
+    return PRONO.simularFlotaMultiDia({
+      cargasPorDia: horizonte, tipos: tiposEfectivos, q: qObjetivo,
+      // El escenario de realización es el p90: planear y realizar en el mismo
+      // cuantil haría que la capacidad cubriera la demanda por construcción y el
+      // lazo se vería inexistente.
+      qEscenario: 0.9, factorParada, cFaltante: +cfg.cFaltante || 0,
+    });
+  }, [horizonte, hayCostos, tiposEfectivos, qObjetivo, factorParada, cfg.cFaltante]);
+
+  const curvaPol = useMemo(() => {
+    if (!pron || !hayCostos) return null;
+    return PRONO.curvaPolitica(pron, tiposEfectivos, { cFaltante: +cfg.cFaltante, cOcioso: cOciosoMedio, factorParada });
+  }, [pron, hayCostos, tiposEfectivos, cfg.cFaltante, cOciosoMedio, factorParada]);
+
+  // Precarga de costos desde el catálogo de carriers (tarifas de última milla).
+  const precargarCostos = () => {
+    const costoDe = (ids) => {
+      const cs = carriers
+        .filter(c => ids.includes(String(c.tipo_unidad || "")) && String(c.operacion || "").toLowerCase().includes("ltima"))
+        .map(c => parseFloat(c.costo_unidad)).filter(v => v > 0);
+      return cs.length ? Math.round(PRONO.mediana(cs)) : 0;
+    };
+    const mapa = { Moto: ["Moto"], Sedan: ["Sedan"], Van: ["Van", "SmallVan", "LargeVan"] };
+    const next = cfg.tipos.map(t => ({ ...t, costo: costoDe(mapa[t.id] || [t.id]) || t.costo }));
+    guardar({ tipos: next });
+    setMsg("✓ Costos precargados con la mediana de tarifas de última milla del catálogo de Carriers. Verifícalos: §5.C los pide por tipo Y por DSP.");
+  };
+
+  // ---------- B2 · Simulación de ruteo ----------
+  // Ejecuta el MISMO ruteador que el módulo Ruteo/Clusters (src/lib/ruteo.js)
+  // sobre las paradas muestreadas. Es lo que convierte "cuántas unidades caben
+  // por conteo" en "cuántas exige la geografía": §3, ata la que se rompa
+  // primero, y cuál se rompe depende de dónde caen las paradas ese día.
+  const correrRuteo = (pts, k, params) => new Promise((resolve) => {
+    const limpios = pts.map(p => ({ lat: p.lat, lng: p.lng }));
+    const inline = () => resolve(rutear(limpios, k, DEPOSITO, params));
+    if (limpios.length < 500 || typeof Worker === "undefined") { inline(); return; }
+    let worker;
+    try { worker = new Worker(new URL("./kmeansWorker.js", import.meta.url), { type: "module" }); }
+    catch { inline(); return; }
+    const fallback = () => { try { worker.terminate(); } catch {} inline(); };
+    worker.onerror = fallback;
+    worker.onmessage = (e) => {
+      if (e.data?.progress) return;
+      if (e.data?.error) { fallback(); return; }
+      if (e.data?.result) { worker.terminate(); resolve(e.data.result); }
+    };
+    worker.postMessage({ pts: limpios, k, depot: DEPOSITO, params });
+  });
+
+  // Tope de paradas de la simulación. El ruteador es O(n²) por sector en el
+  // 2-opt; arriba de esto la corrida bloquea el navegador varios minutos y el
+  // resultado ya no cambia la conclusión, así que se muestrea y se escala.
+  const MAX_PARADAS_SIM = 2500;
+
+  const simular = async () => {
+    if (!pron || !piezas.length) return;
+    setSim(null); setMsg("");
+    const activos = tiposEfectivos.filter(t => !t.inviable);
+    if (!activos.length) { setMsg("⚠ No hay ningún tipo de unidad viable con la jornada actual."); return; }
+    const M = Math.max(...activos.map(t => t.techoEfectivo));
+    const m = Math.min(...activos.map(t => t.piso));
+    const paradasTotales = Math.round(PRONO.cargaEnCuantil(pron, hayCostos ? qObjetivo : 0.5) / factorParada);
+    const nSim = Math.min(paradasTotales, MAX_PARADAS_SIM);
+    const escala = paradasTotales / Math.max(1, nSim);
+    try {
+      setSimEstado(`Muestreando ${nf(nSim)} paradas…`);
+      const pts = PRONO.muestrearParadas(piezas, nSim, { dow: PRONO.dowDe(objetivo), seed: 20260901 });
+      if (pts.length < 10) { setMsg("⚠ No hay suficientes paradas georreferenciadas para simular."); setSimEstado(""); return; }
+
+      // Calibración del tiempo de servicio contra B1. Primera pasada con si=0
+      // para aislar el traslado puro que el perfil de velocidad predice.
+      const Tmax = capacidad?.global?.horasRuta || PARAMS_DEFAULT.Tmax;
+      setSimEstado("Calibrando tiempo de servicio contra lo observado…");
+      const k0 = Math.max(1, Math.ceil(pts.length / M));
+      const cero = await correrRuteo(pts, k0, { ...PARAMS_DEFAULT, si: 0, Tmax: 24, m, M });
+      const trasladoH = (cero.metricas?.duraciones || []).reduce((s, d) => s + d, 0);
+      const cal = PRONO.calibrarServicio(capacidad?.global?.minPorEntrega, trasladoH, pts.length);
+      const params = { ...PARAMS_DEFAULT, si: cal.valido ? cal.si : PARAMS_DEFAULT.si, Tmax, m, M };
+
+      let pasos = 0;
+      const res = await PRONO.buscarKFactible(pts.length, {
+        M, m,
+        onPaso: (k, n) => { pasos = n; setSimEstado(`Probando ${k} unidades (corrida ${n})…`); },
+        correr: (k) => correrRuteo(pts, k, params),
+      });
+      setSim({ res, cal, params, pts: pts.length, escala, paradasTotales, Tmax, M, m, pasos });
+      setSimEstado("");
+    } catch (err) { setMsg("⚠ " + (err?.message || err)); setSimEstado(""); }
+  };
+
+  // ---------- Bloque 2 · Dataset de entrenamiento ----------
+  const construirDs = async () => {
+    setDs(null); setMsg(""); setDsEstado("Construyendo…");
+    await new Promise(r => setTimeout(r, 30));
+    try {
+      const t0 = Date.now();
+      const r = PRONO.construirDataset({
+        creacion, piezas, rutas, leadDias: cfg.leadDias || 2,
+        estatusBacklog: cfg.estatusBacklog, tasasReintento: cfg.tasas,
+        incluirSinRegistro: cfg.incluirSinRegistro, tasaExcepcion, tauReintento,
+        factoresCalendario: cfg.factoresCalendario || {}, eventosExtra: cfg.overlays || [],
+        corregirCensura: cfg.corregirCensura, umbralSaturacion: +cfg.umbralSaturacion || 25,
+        onProgress: (p) => setDsEstado(`Construyendo… ${p}%`),
+      });
+      setDs({ ...r, ms: Date.now() - t0 });
+      setA4(null);
+      setDsEstado("");
+      if (!r.filas.length) setMsg("⚠ " + (r.motivo || "No se pudo construir ninguna fila: hace falta más historia."));
+    } catch (err) { setMsg("⚠ " + (err?.message || err)); setDsEstado(""); }
+  };
+
+  // Fila del día que se está planeando: mismas features, target vacío. Es la que
+  // se le pasa al modelo entrenado para decidir la flota de mañana.
+  const exportarDataset = async (incluirFilaDeHoy) => {
+    if (!ds?.filas.length) return;
+    try {
+      let filas = ds.filas;
+      if (incluirFilaDeHoy) {
+        const extra = PRONO.construirDataset({
+          creacion, piezas, rutas, leadDias: cfg.leadDias || 2,
+          estatusBacklog: cfg.estatusBacklog, tasasReintento: cfg.tasas,
+          incluirSinRegistro: cfg.incluirSinRegistro, tasaExcepcion, tauReintento,
+          factoresCalendario: cfg.factoresCalendario || {}, eventosExtra: cfg.overlays || [],
+          corregirCensura: cfg.corregirCensura, umbralSaturacion: +cfg.umbralSaturacion || 25,
+          objetivos: [objetivo],
+        });
+        if (extra.filas.length) filas = [...filas.filter(f => f.dia !== objetivo), ...extra.filas];
+      }
+      const XLSX = await import("xlsx");
+      const wb = XLSX.utils.book_new();
+      const orden = PRONO.DICCIONARIO_DATASET.map(c => c.col);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas, { header: orden }), "dataset");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
+        PRONO.DICCIONARIO_DATASET.map(c => ({ columna: c.col, etapa: c.etapa, descripcion: c.desc }))
+      ), "diccionario");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{
+        generado: new Date().toISOString(), lead_dias: ds.meta.leadDias,
+        filas: filas.length, desde: ds.meta.desde, hasta: ds.meta.hasta,
+        ventana_hazard_dias: ds.meta.ventanaHazard, ventana_movil_dias: ds.meta.ventanaMovil,
+        fuente_target: ds.fuente, fuente_curva_maduracion: ds.fuenteCurva,
+        dias_censurados: ds.meta.censuradas,
+        nota: "Todas las columnas salvo y_* y residual se calcularon con información disponible en `corte`. Los días con y_censurado=1 son cota inferior de demanda, no demanda observada.",
+      }]), "meta");
+      XLSX.writeFile(wb, `dataset_pronostico_D-${ds.meta.leadDias}_${ds.meta.desde}_${ds.meta.hasta}.xlsx`);
+      setMsg(`✓ Exportadas ${filas.length} filas con diccionario y metadatos.`);
+    } catch (err) { setMsg("⚠ " + (err?.message || err)); }
+  };
+
+  const entrenarA4 = async () => {
+    if (!ds?.filas.length) return;
+    setA4Estado("Entrenando…"); setMsg("");
+    await new Promise(r => setTimeout(r, 30));
+    try { setA4(PRONO.modeloResidual(ds)); }
+    catch (err) { setMsg("⚠ " + (err?.message || err)); }
+    setA4Estado("");
+  };
+
+  const correrBacktest = async () => {
+    setBtCargando(true); setMsg("");
+    // Cede un frame para que el spinner pinte antes de bloquear el hilo.
+    await new Promise(r => setTimeout(r, 30));
+    try {
+      const args = {
+        creacion, piezas, rutas, estatusBacklog: cfg.estatusBacklog,
+        tasasReintento: cfg.tasas, incluirSinRegistro: cfg.incluirSinRegistro,
+        tasaExcepcion, tauReintento, tipos: tiposEfectivos,
+        factoresCalendario: cfg.factoresCalendario || {}, eventosExtra: cfg.overlays || [],
+        corregirCensura: cfg.corregirCensura, umbralSaturacion: +cfg.umbralSaturacion || 25,
+        cFaltante: +cfg.cFaltante || 0, cOcioso: cOciosoMedio, capacidadUnidad, factorParada,
+      };
+      setBt(PRONO.backtest({ ...args, leadDias: cfg.leadDias || 2 }));
+      setVlt(PRONO.valorLeadTime(args));
+    } catch (err) { setMsg("⚠ " + (err?.message || err)); }
+    setBtCargando(false);
+  };
+
+  // ---------- Render ----------
+  const TABS = [["datos", "Datos"], ["carga", "Carga · A"], ["flota", "Flota · B"], ["decision", "Decisión · C"], ["backtest", "Backtest"], ["dataset", "Dataset"]];
+  const p0Pendientes = diag.bloqueantes.filter(b => b.sev === "P0");
+
+  const cardFuente = (kind, titulo, desc, conSupabase) => (
+    <div style={{ background: C.panelGrad, border: `1px solid ${fuentes[kind] ? C.green + "55" : C.border}`, borderRadius: 10, padding: 16, flex: 1, minWidth: 250 }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: C.text }}>{titulo}</div>
+      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3, minHeight: 30, lineHeight: 1.5 }}>{desc}</div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+        <label style={{ padding: "7px 12px", borderRadius: 6, backgroundColor: C.accent, color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+          {cargando === kind ? "Procesando…" : "Subir archivo"}
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => subir(kind, e)} disabled={!!cargando} style={{ display: "none" }} />
+        </label>
+        {conSupabase && (
+          <button onClick={() => desdeSupabase(kind)} disabled={!!cargando}
+            style={{ padding: "7px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            Usar Supabase
+          </button>
+        )}
+      </div>
+      <div style={{ fontSize: 10, color: fuentes[kind] ? C.green : C.textMuted, marginTop: 8, fontWeight: 600 }}>
+        {fuentes[kind] || "Sin cargar"}
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 18 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Pronóstico de carga y flota</h1>
+        <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>
+          Backlog observado + maduración a 48 h → paradas → unidades. Compromiso en D−{cfg.leadDias || 2}.
+        </p>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+        {TABS.map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)}
+            style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${tab === id ? C.accent : C.border}`, background: tab === id ? C.accent : C.white, color: tab === id ? "#fff" : C.textMuted, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {msg && (
+        <div style={{ marginBottom: 14, fontSize: 12, fontWeight: 600, color: msg.startsWith("✓") ? C.green : C.red, lineHeight: 1.6 }}>{msg}</div>
+      )}
+
+      {/* ================= DATOS ================= */}
+      {tab === "datos" && (
+        <>
+          <ProPanel title="Los tres reportes" sub="El pedido de §9: los mismos tres reportes con 12 meses de historia y sin filtro de cliente. Mientras llegan, el módulo corre con lo que haya y marca qué queda apagado.">
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {cardFuente("creacion", "1 · Creación de órdenes", "Backlog (A0) e inbound (A1). Necesita fecha de creación y estatus de proceso.", true)}
+              {cardFuente("piezas", "2 · Piezas operadas", "Curva de maduración (A1) y geografía de paradas (A3). Necesita fecha de primer movimiento y lat/long.", false)}
+              {cardFuente("rutas", "3 · Cargas por operador por día", "Capacidad efectiva (B1) y reintentos (A2). Necesita piezas cargadas/entregadas, motivos y tiempos.", true)}
+            </div>
+          </ProPanel>
+
+          {creacion.length > 0 && (
+            <ProPanel
+              title="¿Qué estatus significa «sigue en almacén»?"
+              sub="A0 no se pronostica, se cuenta — pero contarlo bien depende de esta lista. Marca los estatus que significan que la orden NO ha salido a ruta. Si el reporte de piezas trae la fecha de primer movimiento, esa manda y esto queda de respaldo."
+            >
+              {mapaSalida.size > 0 && (
+                <ProAviso tipo="ok">
+                  Hay llave de salida real para {nf(mapaSalida.size)} guías (fecha de primer movimiento). El backlog se decide con ella; el estatus sólo cubre lo que no empate.
+                </ProAviso>
+              )}
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {(diag.creacion?.estatusUnicos || []).map(([est, n]) => {
+                  const activo = cfg.estatusBacklog.includes(est);
+                  return (
+                    <button key={est}
+                      onClick={() => guardar({ estatusBacklog: activo ? cfg.estatusBacklog.filter(x => x !== est) : [...cfg.estatusBacklog, est] })}
+                      style={{ padding: "6px 12px", borderRadius: 16, border: `1px solid ${activo ? C.accent : C.border}`, background: activo ? C.accentLight : C.panelAlt, color: activo ? C.accent : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      {est} <span style={{ opacity: 0.7 }}>({nf(n)})</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <button onClick={() => guardar({ estatusBacklog: PRONO.sugerirEstatusBacklog((diag.creacion?.estatusUnicos || []).map(x => x[0])) })}
+                  style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  Sugerir automáticamente
+                </button>
+                <span style={{ fontSize: 12, color: C.textMuted }}>
+                  Backlog resultante: <strong style={{ color: C.text }}>{nf(diag.creacion?.backlog)}</strong> de {nf(diag.creacion?.ordenes)} órdenes ({pct(diag.creacion?.pctBacklog)})
+                </span>
+              </div>
+            </ProPanel>
+          )}
+
+          {diag.rutas && (
+            <ProPanel
+              title="Bloque 0 — la pregunta que hay que cerrar antes de modelar"
+              tone={diag.rutas.pctSinRegistro > 2 ? C.red + "66" : C.border}
+              sub="Piezas cargadas que no aparecen ni como entrega ni como excepción. Si son piezas que no dio tiempo de intentar, el problema es sobrecarga de ruta y se corrige sin modelo. Si es subregistro, la tabla de fallidas está incompleta y A2 entrenaría sobre datos rotos."
+            >
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                <StatCard label="Piezas sin registro" value={pct(diag.rutas.pctSinRegistro)} subvalue={`${nf(diag.rutas.sinRegistro)} de ${nf(diag.rutas.cargadas)} cargadas`} icon={<IC.Package />} color={diag.rutas.pctSinRegistro > 2 ? C.red : C.green} />
+                <StatCard label="Min por entrega" value={diag.rutas.minPorEntrega ? diag.rutas.minPorEntrega.toFixed(1) : "—"} subvalue={`p25 ${nf(diag.rutas.minP25, 1)} · p75 ${nf(diag.rutas.minP75, 1)}`} icon={<IC.Clock />} color={C.blue} />
+                <StatCard label="Techo de jornada" value={nf(diag.rutas.techoJornada)} subvalue={`se cargan ${nf(diag.rutas.cargadasMediana)} (mediana)`} icon={<IC.Truck />} color={diag.rutas.techoJornada && diag.rutas.cargadasMediana > diag.rutas.techoJornada ? C.red : C.green} />
+                <StatCard label="Horas en ruta" value={diag.rutas.horasRuta ? diag.rutas.horasRuta.toFixed(1) : "—"} subvalue={diag.rutas.horasCheck ? `${diag.rutas.horasCheck.toFixed(1)} h check-in→out` : "primera→última parada"} icon={<IC.Clock />} color={C.purple} />
+              </div>
+              {diag.rutas.techoJornada && diag.rutas.cargadasMediana > diag.rutas.techoJornada && (
+                <ProAviso tipo="warn">
+                  A {nf(diag.rutas.minPorEntrega, 1)} min por entrega y {nf(diag.rutas.horasRuta, 1)} h en ruta caben <strong>{nf(diag.rutas.techoJornada)}</strong> entregas por jornada; se están cargando <strong>{nf(diag.rutas.cargadasMediana)}</strong>.
+                  La restricción que ata hoy es el <strong>tiempo</strong>, no el conteo. §6: entrenar sobre estos días enseña un techo falso — quedan marcados como censurados en la etapa B.
+                </ProAviso>
+              )}
+              <ProTabla
+                cols={[
+                  { label: "Motivo", key: "m" }, { label: "Código", key: "cod" },
+                  { label: "Piezas", num: true, render: r => nf(r.n) },
+                  { label: "% de la carga", num: true, render: r => pct(r.pctCarga, 2) },
+                  { label: "Tasa de reintento", num: true, render: r => (
+                    <input type="number" step="0.05" min="0" max="1" value={cfg.tasas[r.cod] ?? r.def}
+                      onChange={(e) => guardar({ tasas: { ...cfg.tasas, [r.cod]: Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)) } })}
+                      style={{ width: 62, padding: "3px 6px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 11, textAlign: "right" }} />
+                  ) },
+                ]}
+                rows={PRONO.MOTIVOS.map(m => ({
+                  m: m.etiqueta, cod: m.cod, n: diag.rutas.motivos[m.cod] || 0, def: m.reintenta,
+                  pctCarga: diag.rutas.cargadas ? 100 * (diag.rutas.motivos[m.cod] || 0) / diag.rutas.cargadas : 0,
+                })).filter(r => r.n > 0 || !diag.rutas.motivosDesglosados)}
+                vacio="El reporte cargado no trae el desglose por código de motivo (la tabla `rutas` de Supabase sólo guarda el agregado). Sube el Excel de rutas para ponderar A2 por motivo."
+              />
+              <div style={{ marginTop: 12, fontSize: 12, color: C.textMuted, display: "flex", gap: 20, flexWrap: "wrap" }}>
+                <span>Curva de intentos: <strong style={{ color: C.text }}>{pct(diag.rutas.entregadas ? 100 * diag.rutas.curvaIntentos.i1 / diag.rutas.entregadas : null)}</strong> al primer intento</span>
+                <span>2º: {nf(diag.rutas.curvaIntentos.i2)} · 3º: {nf(diag.rutas.curvaIntentos.i3)} · 4º+: {nf(diag.rutas.curvaIntentos.i4)}</span>
+                <span>Recolecciones: <strong style={{ color: C.text }}>{nf(diag.rutas.recolecciones)}</strong></span>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: C.text }}>
+                  <input type="checkbox" checked={cfg.incluirSinRegistro} onChange={(e) => guardar({ incluirSinRegistro: e.target.checked })} />
+                  Contar el sin-registro como carga que vuelve
+                </label>
+              </div>
+            </ProPanel>
+          )}
+
+          {sat && (
+            <ProPanel
+              title="§6 · Censura por capacidad"
+              tone={sat.pct > 50 ? C.red + "66" : C.border}
+              sub="El histórico sólo contiene los días que se pudieron operar con la flota que hubo. Si en un pico había 10 motos, el registro dice 10 aunque se necesitaran 14. Entrenar sobre eso enseña un techo falso y subdimensiona justo los días que importan."
+            >
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                <StatCard label="Días saturados" value={pct(sat.pct, 0)} subvalue={`${nf(sat.dias)} de ${nf(sat.total)} días operados`} icon={<IC.Package />} color={sat.pct > 50 ? C.red : sat.pct > 0 ? C.yellow : C.green} />
+                <StatCard label="Descartados del estimador" value={nf(sat.diasConRebote)} subvalue={`incluye ${nf(sat.diasConRebote - sat.dias)} día(s) de rebote`} icon={<IC.Clock />} color={C.purple} />
+                <StatCard label="Corrección" value={cfg.corregirCensura ? (curva?.corregidaPorCensura ? "Activa" : "Omitida") : "Apagada"}
+                  subvalue={curva?.corregidaPorCensura ? `${nf(curva.descartadasPorSaturacion)} salidas descartadas` : "la curva va sin corregir"}
+                  icon={<IC.Zap />} color={curva?.corregidaPorCensura ? C.green : C.yellow} />
+              </div>
+              <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap", marginBottom: 14, fontSize: 12 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: C.text }}>
+                  <input type="checkbox" checked={cfg.corregirCensura} onChange={(e) => guardar({ corregirCensura: e.target.checked })} />
+                  Descartar los días saturados al estimar la maduración
+                </label>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ color: C.textMuted }}>Umbral: rutas sin cerrar ≥</span>
+                  <input type="number" min="1" max="100" value={cfg.umbralSaturacion}
+                    onChange={(e) => guardar({ umbralSaturacion: Math.max(1, Math.min(100, parseInt(e.target.value) || 25)) })}
+                    style={{ width: 62, padding: "4px 7px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 12, textAlign: "right" }} />
+                  <span style={{ color: C.textMuted }}>% del día</span>
+                </div>
+              </div>
+              {curva?.censuraOmitida && (
+                <ProAviso tipo="error">
+                  {curva.censuraOmitida.motivo} Con {nf(curva.censuraOmitida.diasSaturados)} días marcados no queda evidencia limpia:
+                  antes de confiar en el dimensionamiento hay que resolver el Bloque 0, porque el modelo está aprendiendo el techo de la flota que hubo y no la demanda que había.
+                </ProAviso>
+              )}
+              {sat.pct > 50 && !curva?.censuraOmitida && (
+                <ProAviso tipo="warn">
+                  Más de la mitad de los días vienen saturados. La corrección está funcionando, pero la muestra limpia es chica: trata los resultados como provisionales hasta cerrar el Bloque 0.
+                </ProAviso>
+              )}
+              <ProTabla
+                compacta
+                cols={[
+                  { label: "Día", key: "dia" },
+                  { label: "Rutas", num: true, render: r => nf(r.rutas) },
+                  { label: "Sin cerrar", num: true, render: r => nf(r.saturadas) },
+                  { label: "% del día", num: true, render: r => pct(r.pctSaturadas, 0) },
+                  { label: "Piezas sin registro", num: true, render: r => nf(r.sinRegistro) },
+                  { label: "Estado", render: r => r.saturado
+                    ? <span style={{ color: C.red, fontWeight: 700 }}>saturado</span>
+                    : r.rebote ? <span style={{ color: C.yellow, fontWeight: 700 }}>rebote</span>
+                    : <span style={{ color: C.green }}>operable</span> },
+                ]}
+                rows={sat.detalle.slice(-30).reverse().map(r => ({ ...r, _destaca: r.saturado }))}
+              />
+            </ProPanel>
+          )}
+
+          <ProPanel title="Estado de los insumos" sub="§5. P0 bloquea el arranque · P1 separa un forecast decente de uno bueno.">
+            {diag.bloqueantes.length === 0
+              ? <ProAviso tipo="ok">No hay bloqueantes detectados con los datos cargados.</ProAviso>
+              : <ProTabla
+                  cols={[
+                    { label: "Sev", render: r => <span style={{ padding: "2px 7px", borderRadius: 4, fontSize: 10, fontWeight: 800, background: r.sev === "P0" ? C.redBg : C.yellowBg, color: r.sev === "P0" ? C.red : C.yellow }}>{r.sev}</span> },
+                    { label: "Hueco", key: "hueco" },
+                    { label: "Estado hoy", key: "estado" },
+                    { label: "Impacto", key: "impacto", wrap: true },
+                  ]}
+                  rows={diag.bloqueantes}
+                />}
+          </ProPanel>
+
+          {(diag.piezas || diag.creacion || diag.join) && (
+            <ProPanel title="Lo que ya está resuelto" sub="Medido sobre los archivos cargados, no supuesto.">
+              <ProTabla
+                cols={[{ label: "Métrica", key: "k" }, { label: "Valor", key: "v", num: true }]}
+                rows={[
+                  diag.piezas && { k: "Piezas con latitud y longitud", v: `${pct(diag.piezas.pctGeo)} (${nf(diag.piezas.conGeo)} de ${nf(diag.piezas.total)})` },
+                  diag.piezas && { k: "Piezas por parada (factor de colapso)", v: nf(diag.piezas.piezasPorParada, 2) },
+                  diag.piezas && { k: "Paradas únicas", v: nf(diag.piezas.paradas) },
+                  diag.piezas && { k: "Mediana de creación a primer movimiento", v: `${nf(diag.piezas.lagMediana)} días (media ${nf(diag.piezas.lagMedia, 2)}, máx ${nf(diag.piezas.lagMax)})` },
+                  diag.piezas && { k: "Cobertura geográfica", v: `${nf(diag.piezas.cps)} CP · ${nf(diag.piezas.municipios)} municipios` },
+                  diag.creacion && { k: "Órdenes que nunca salieron a ruta", v: `${pct(diag.creacion.pctBacklog)} (${nf(diag.creacion.backlog)} de ${nf(diag.creacion.ordenes)})` },
+                  diag.creacion && { k: "Días de historia (creación)", v: `${nf(diag.creacion.dias)} · ${diag.creacion.desde} → ${diag.creacion.hasta}` },
+                  diag.rutas && { k: "DSPs operando", v: `${diag.rutas.dsps.length} — ${diag.rutas.dsps.join(", ")}` },
+                  diag.rutas && { k: "Piezas cargadas vs entregadas por ruta", v: `${nf(diag.rutas.cargadasMediana)} → ${nf(diag.rutas.entregadasMediana)} (mediana)` },
+                  diag.rutas && { k: "Porcentaje de entrega", v: pct(diag.rutas.pctMediana) },
+                  diag.join && { k: "Join pieza → ruta", v: diag.join.porIdRuta > 0 ? `${nf(diag.join.porIdRuta)} piezas con ID de ruta` : `por nombre de operador: ${diag.join.empatan} de ${diag.join.opsPiezas} (${pct(diag.join.pct, 0)})` },
+                ].filter(Boolean)}
+              />
+            </ProPanel>
+          )}
+
+          {Object.keys(mapeos).length > 0 && (
+            <ProPanel title="Mapeo de columnas detectado" sub="Si algo quedó en rojo, el campo no se encontró y la etapa que depende de él va a estar apagada.">
+              {Object.entries(mapeos).map(([kind, col]) => (
+                <div key={kind} style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: C.text, marginBottom: 6, textTransform: "capitalize" }}>{kind}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 5 }}>
+                    {Object.entries(col).map(([campo, header]) => (
+                      <div key={campo} style={{ fontSize: 11 }}>
+                        <span style={{ color: C.textMuted }}>{campo}: </span>
+                        <span style={{ color: header ? C.text : C.red, fontWeight: 600 }}>{header || "no encontrada"}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </ProPanel>
+          )}
+        </>
+      )}
+
+      {/* ================= CARGA · ETAPA A ================= */}
+      {tab === "carga" && (
+        <>
+          <ProPanel title="Día a planear" sub="El único horizonte que decide algo es el del compromiso. Todo lo que entra al modelo se corta en la fecha de corte: nada de lo que pasó después existe para el pronóstico.">
+            <div style={{ display: "flex", gap: 18, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, marginBottom: 4 }}>DÍA OBJETIVO (D)</div>
+                {/* Ignora el vacío: limpiar el campo dejaría el corte sin fecha
+                    y todo el pipeline calcularía sobre un día inexistente. */}
+                <input type="date" value={objetivo} onChange={(e) => e.target.value && setObjetivo(e.target.value)}
+                  style={{ padding: "7px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 13 }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, marginBottom: 4 }}>LEAD TIME (DÍAS)</div>
+                <input type="number" min="1" max="7" value={cfg.leadDias} onChange={(e) => guardar({ leadDias: Math.max(1, Math.min(7, parseInt(e.target.value) || 2)) })}
+                  style={{ width: 70, padding: "7px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 13 }} />
+              </div>
+              <div style={{ fontSize: 12, color: C.textMuted, paddingBottom: 8 }}>
+                Corte en <strong style={{ color: C.accent }}>{corte}</strong> · horizonte {cfg.leadDias} día{cfg.leadDias > 1 ? "s" : ""}
+              </div>
+            </div>
+          </ProPanel>
+
+          {!creacion.length && <ProAviso tipo="error">Falta el reporte de creación: sin él no hay backlog (A0) ni inbound (A1).</ProAviso>}
+          {creacion.length > 0 && !fuenteCurva && <ProAviso tipo="error">No hay ninguna fecha de salida a ruta ni de entrega en los datos: la curva de maduración (A1) no se puede estimar.</ProAviso>}
+          {fuenteCurva === "creacion" && (
+            <ProAviso tipo="warn">
+              La curva de maduración se está estimando con <strong>creación → entrega</strong> porque no hay reporte de piezas. Eso incluye además el tramo de reparto, así que <strong>sobreestima el rezago</strong> y el pronóstico saldrá conservador. Sube el reporte de piezas operadas para usar la fecha de primer movimiento, que es la salida real a ruta.
+            </ProAviso>
+          )}
+          {creacion.length > 0 && cfg.estatusBacklog.length === 0 && mapaSalida.size === 0 && (
+            <ProAviso tipo="error">
+              No hay forma de saber qué órdenes siguen en almacén: no hay llave de salida (reporte de piezas) ni estatus marcados como backlog. Ve a <strong>Datos</strong> y marca los estatus, o sube el reporte de piezas.
+            </ProAviso>
+          )}
+
+          {pron && (
+            <>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                <StatCard label={`Carga esperada ${objetivo}`} value={nf(pron.media)} subvalue={`± ${nf(pron.desv)} (1σ) · p10–p90 ${nf(PRONO.cargaEnCuantil(pron, 0.1))}–${nf(PRONO.cargaEnCuantil(pron, 0.9))}`} icon={<IC.Package />} color={C.accent} />
+                <StatCard label="A0 · Backlog al corte" value={nf(pron.backlog.total)} subvalue={`${nf(pron.backlog.anejo)} con 5+ días (${pct(pron.backlog.pctAnejo, 0)}) · error cero, se cuenta`} icon={<IC.Warehouse />} color={C.green} />
+                <StatCard label="A1 · Inbound a 48 h" value={nf(pron.componentes.inbound.media)} subvalue={pron.perfil.confiable ? "perfil por día de semana" : `nivel global (${nf(pron.perfil.dias)} días de historia)`} icon={<IC.ArrowDown />} color={C.blue} />
+                <StatCard label="A2 · Reintentos" value={nf(pron.componentes.reintentos.media)} subvalue={pron.componentes.reintentos.observado ? "de fallidas observadas" : `proyectados · τ=${(tasaExcepcion * tauReintento).toFixed(3)}`} icon={<IC.ArrowUp />} color={C.yellow} />
+                <StatCard label="Paradas a rutear" value={nf(pron.media / factorParada)} subvalue={`colapsado con ${nf(factorParada, 2)} piezas por parada`} icon={<IC.MapPin />} color={C.purple} />
+              </div>
+
+              <ProPanel title="De dónde viene la incertidumbre" sub="El backlog es un conteo, no un pronóstico: su error de conteo es cero y sólo es incierto CUÁNDO sale cada orden. Lo que de verdad se está pronosticando son dos días de inbound y los reintentos.">
+                <ProVarianza pron={pron} />
+              </ProPanel>
+
+              <ProPanel title="Distribución de la carga" sub="La aproximación normal aplica porque cada término es una suma de muchas variables acotadas. Los cuantiles son lo que alimenta la etapa C: no se planea con la media.">
+                <ProTabla
+                  cols={[
+                    { label: "Cuantil", key: "q" },
+                    { label: "Piezas", num: true, render: r => nf(r.piezas) },
+                    { label: "Paradas", num: true, render: r => nf(r.paradas) },
+                    { label: "vs p50", num: true, render: r => (r.delta > 0 ? "+" : "") + nf(r.delta) },
+                  ]}
+                  rows={[0.1, 0.25, 0.5, qObjetivo, 0.75, 0.9].filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b).map(q => {
+                    const v = PRONO.cargaEnCuantil(pron, q);
+                    return {
+                      q: `p${(q * 100).toFixed(0)}${Math.abs(q - qObjetivo) < 1e-9 && hayCostos ? " ← objetivo" : ""}`,
+                      piezas: v, paradas: Math.round(v / factorParada), delta: v - PRONO.cargaEnCuantil(pron, 0.5),
+                      _destaca: Math.abs(q - qObjetivo) < 1e-9 && hayCostos,
+                    };
+                  })}
+                />
+              </ProPanel>
+
+              {curva && (
+                <ProPanel
+                  title="A1 · Curva de maduración"
+                  sub={`Estimador de riesgo discreto con censura: una orden creada ayer que aún no sale no es evidencia de que no vaya a salir. ${nf(curva.observaciones)} salidas observadas y ${nf(curva.censuradas)} censuradas al corte. Fuente: ${fuenteCurva === "piezas" ? "primer movimiento" : "fecha de entrega (sobreestima)"}.`}
+                >
+                  {curva.corregidaPorCensura && (
+                    <div style={{ marginBottom: 12 }}>
+                      <ProAviso tipo="ok">
+                        Curva corregida por censura: se descartaron {nf(curva.descartadasPorSaturacion)} salidas ocurridas en días saturados o en su rebote.
+                        Así estima <strong>demanda</strong> (qué habría salido con flota suficiente) y no <strong>throughput</strong> (qué salió con la flota que hubo) — dimensionar contra throughput es circular, pides la flota que ya tenías.
+                      </ProAviso>
+                    </div>
+                  )}
+                  <ProCurvaMaduracion curva={curva} />
+                  <div style={{ marginTop: 12, fontSize: 12, color: C.textMuted }}>
+                    Mediana de maduración: <strong style={{ color: C.text }}>{curva.medianaK == null ? "no alcanzada" : `${curva.medianaK} días`}</strong>
+                    {curva.medianaK === (cfg.leadDias || 2) && " — coincide con el lead time: al planear en D−" + cfg.leadDias + ", los paquetes que van a salir el día D ya existen como órdenes creadas."}
+                  </div>
+                </ProPanel>
+              )}
+
+              <ProPanel title="A0 · Backlog por antigüedad" sub="Detecta backlog añejándose y es lo que A1 necesita para proyectar: una orden de 5 días no tiene el mismo riesgo de salir que una de 1.">
+                <ProTabla
+                  cols={[
+                    { label: "Días en almacén", key: "edad" },
+                    { label: "Órdenes", num: true, render: r => nf(r.n) },
+                    { label: `P(sale el ${objetivo})`, num: true, render: r => pct(r.p * 100, 1) },
+                    { label: "Aporte esperado", num: true, render: r => nf(r.aporte, 1) },
+                  ]}
+                  rows={pron.backlog.porEdad.map(e => {
+                    const p = curva ? PRONO.probSalidaCondicional(curva, e.edad, pron.horizonteDias) : 0;
+                    return { edad: e.edad, n: e.n, p, aporte: e.n * p, _destaca: e.edad >= 5 };
+                  })}
+                />
+              </ProPanel>
+
+              <ProPanel title="A1 · Inbound proyectado" sub="Naive estacional por día de semana con la dispersión medida sobre los mismos residuales. Es deliberadamente simple: con poca historia, un modelo más sofisticado es ruido con más parámetros. El FVA del backtest es lo que debe justificar reemplazarlo.">
+                <ProTabla
+                  cols={[
+                    { label: "Día de creación", key: "dia" },
+                    { label: "Órdenes esperadas", num: true, render: r => nf(r.esperado, 1) },
+                    { label: `P(sale el ${objetivo})`, num: true, render: r => pct(r.pSalida * 100, 1) },
+                    { label: "Calendario", render: r => r.aplicados?.length
+                      ? r.aplicados.map(a => `${a.evento} ×${nf(a.factor, 2)}${a.confundido ? " ⚠" : ""}`).join(" · ")
+                      : <span style={{ color: C.textMuted }}>día normal</span> },
+                    { label: "Aporte", num: true, render: r => nf(r.aporte, 1) },
+                  ]}
+                  rows={pron.componentes.inbound.detalle}
+                  vacio="El horizonte es cero: no hay inbound futuro que proyectar."
+                />
+                {!pron.perfil.confiable && (
+                  <div style={{ marginTop: 10, fontSize: 11, color: C.yellow }}>
+                    Perfil por día de semana no confiable ({nf(pron.perfil.dias)} días de historia, se necesitan ≥14 con ≥2 observaciones por día de semana). Se está usando el nivel global y una varianza Poisson.
+                  </div>
+                )}
+                <div style={{ marginTop: 10, fontSize: 11, color: C.textMuted }}>
+                  Nivel base fijado con <strong style={{ color: C.text }}>{nf(pron.perfil.diasNormales)}</strong> días normales de {nf(pron.perfil.dias)}
+                  {!pron.perfil.usaSoloNormales && " — no alcanzan los 7 mínimos, así que se está usando la serie completa y feriados y campañas están contaminando la línea base."}
+                </div>
+              </ProPanel>
+
+              <ProPanel
+                title="Covariates de calendario"
+                sub="El único insumo que se conoce con certeza para cualquier día futuro. Un feriado no es un día flojo cualquiera: promediarlo dentro de su día de semana hunde la línea base de todos los martes del año. Las campañas mueven el inbound en múltiplos, no en puntos, y caen en fecha distinta cada año."
+              >
+                {(() => {
+                  const dias = PRONO.rangoDias(corte, PRONO.sumarDias(objetivo, 5)).map(d => {
+                    const fc = PRONO.factorCalendario(pron.perfil, d);
+                    return { d, cal: fc.cal, factor: fc.factor, aplicados: fc.aplicados };
+                  });
+                  const DOWN = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+                  const claves = [...new Set(dias.flatMap(x => x.aplicados.map(a => a.evento)))];
+                  const clavesRaw = [...new Set(dias.flatMap(x => (x.cal?.eventos || []).concat(x.cal?.esFeriado ? ["__feriado__"] : [])))];
+                  return (
+                    <>
+                      <ProTabla
+                        compacta
+                        cols={[
+                          { label: "Día", render: r => <span style={{ fontWeight: r.d === objetivo ? 800 : 400, color: r.d === objetivo ? C.accent : C.text }}>{r.d} {DOWN[r.cal?.dow ?? 0]}</span> },
+                          { label: "Feriado", render: r => r.cal?.feriado || "—" },
+                          { label: "Campañas", render: r => r.cal?.eventos.join(", ") || "—" },
+                          { label: "Quincena", render: r => r.cal?.esQuincena ? "sí" : "—" },
+                          { label: "Hábil", render: r => <span style={{ color: r.cal?.habil ? C.green : C.red }}>{r.cal?.habil ? "sí" : "no"}</span> },
+                          { label: "Factor inbound", num: true, render: r => <strong style={{ color: Math.abs(r.factor - 1) < 1e-9 ? C.textMuted : C.accent }}>×{nf(r.factor, 2)}</strong> },
+                        ]}
+                        rows={dias.map(r => ({ ...r, _destaca: r.d === objetivo || r.d === corte }))}
+                      />
+                      {clavesRaw.length > 0 && (
+                        <div style={{ marginTop: 16 }}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: C.text, marginBottom: 8 }}>Factores del horizonte</div>
+                          <ProTabla
+                            cols={[
+                              { label: "Evento", render: r => r.k === "__feriado__" ? "Feriado (LFT)" : r.k },
+                              { label: "Medido", num: true, render: r => r.med ? `×${nf(r.med.factor, 2)} (${r.med.n} días)` : <span style={{ color: C.textMuted }}>sin historia</span> },
+                              { label: "", render: r => r.med?.confundido ? <span style={{ color: C.yellow, fontSize: 10 }}>⚠ se traslapa con otro evento</span> : "" },
+                              { label: "Override manual", num: true, render: r => (
+                                <input type="number" step="0.1" min="0" placeholder={r.med ? nf(r.med.factor, 2) : "1.0"}
+                                  value={cfg.factoresCalendario?.[r.k] ?? ""}
+                                  onChange={(e) => guardar({ factoresCalendario: { ...(cfg.factoresCalendario || {}), [r.k]: e.target.value } })}
+                                  style={{ width: 72, padding: "3px 6px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 11, textAlign: "right" }} />
+                              ) },
+                            ]}
+                            rows={clavesRaw.map(k => ({ k, med: pron.perfil.factoresMedidos?.[k] }))}
+                          />
+                        </div>
+                      )}
+                      {claves.some(k => dias.some(d => d.aplicados.some(a => a.evento === k && a.fuente === "sin dato"))) && (
+                        <div style={{ marginTop: 10 }}>
+                          <ProAviso tipo="warn">
+                            Hay eventos en el horizonte sin factor medido (no hay historia de ese evento). Se están tratando como días normales, que casi seguro subestima. Captura un override manual mientras llegan los 12 meses de historia.
+                          </ProAviso>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </ProPanel>
+
+              <ProPanel
+                title="A4 · Overlay de cuentas Top"
+                sub="Volumen comprometido con fecha de go-live que el histórico no puede conocer: un seller que arranca el mes que viene no está en ninguna serie. Se declara aquí como ventana con factor y entra al inbound igual que una campaña."
+              >
+                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12, lineHeight: 1.7 }}>
+                  Dos usos, uno por factor. Con <strong>factor ≠ 1</strong> es volumen comprometido: un onboarding con go-live que ninguna serie puede conocer.
+                  Con <strong>factor = 1</strong> es un <strong>outlier de oferta</strong> — una caída de sistema, un paro, el incidente SPEI: días que no fueron flojos por demanda sino porque no se pudo operar.
+                  En ambos casos la ventana queda fuera del nivel base, que es lo que §6 pide para no contaminar la línea con eventos que no se repiten.
+                </div>
+                <ProTabla
+                  cols={[
+                    { label: "Cuenta / campaña", render: r => r.nombre },
+                    { label: "Desde", render: r => r.desde },
+                    { label: "Hasta", render: r => r.hasta },
+                    { label: "Tipo", render: r => (cfg.factoresCalendario?.[r.nombre] == null || +cfg.factoresCalendario[r.nombre] === 1)
+                      ? <span style={{ color: C.yellow }}>outlier de oferta</span>
+                      : <span style={{ color: C.accent }}>volumen</span> },
+                    { label: "Factor", num: true, render: r => `×${nf(cfg.factoresCalendario?.[r.nombre] ?? 1, 2)}` },
+                    { label: "", render: r => (
+                      <button onClick={() => guardar({ overlays: (cfg.overlays || []).filter(o => o.nombre !== r.nombre) })}
+                        style={{ padding: "2px 8px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.red, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Quitar</button>
+                    ) },
+                  ]}
+                  rows={cfg.overlays || []}
+                  vacio="Sin overlays. Agrega uno si hay un onboarding firmado con go-live dentro del horizonte."
+                />
+                <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+                  {[["nombre", "Nombre", "text", 190], ["desde", "Desde", "date", 150], ["hasta", "Hasta", "date", 150], ["factor", "Factor", "number", 80]].map(([k, label, tipo, w]) => (
+                    <div key={k}>
+                      <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, marginBottom: 3 }}>{label.toUpperCase()}</div>
+                      <input type={tipo} step={tipo === "number" ? "0.1" : undefined} value={nuevoOverlay[k]}
+                        onChange={(e) => setNuevoOverlay(o => ({ ...o, [k]: e.target.value }))}
+                        style={{ width: w, padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 12 }} />
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => {
+                      const { nombre, desde, hasta, factor } = nuevoOverlay;
+                      if (!nombre.trim() || !desde || !hasta || !(+factor > 0)) { setMsg("⚠ El overlay necesita nombre, ventana de fechas y un factor mayor que cero."); return; }
+                      if (hasta < desde) { setMsg("⚠ La fecha final del overlay es anterior a la inicial."); return; }
+                      guardar({
+                        overlays: [...(cfg.overlays || []).filter(o => o.nombre !== nombre.trim()), { nombre: nombre.trim(), desde, hasta, tipo: "overlay" }],
+                        factoresCalendario: { ...(cfg.factoresCalendario || {}), [nombre.trim()]: factor },
+                      });
+                      setNuevoOverlay({ nombre: "", desde: "", hasta: "", factor: "1.5" });
+                      setMsg("✓ Overlay agregado: ya está afectando el inbound del horizonte.");
+                    }}
+                    style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: C.accent, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    Agregar
+                  </button>
+                </div>
+              </ProPanel>
+            </>
+          )}
+        </>
+      )}
+
+      {/* ================= FLOTA · ETAPA B ================= */}
+      {tab === "flota" && (
+        <>
+          {!rutas.length && <ProAviso tipo="error">Falta el reporte de rutas: sin él no hay curva de capacidad efectiva (B1) y la asignación sólo puede usar los rangos nominales.</ProAviso>}
+
+          {capacidad && (
+            <ProPanel
+              title="B1 · Curva de capacidad efectiva"
+              sub="Sustituye los rangos nominales por la capacidad que la jornada permite: ⌊horas × 60 ÷ min por entrega⌋. Se estima por DSP además de global, porque la operación está repartida entre varios proveedores. Ojo con la censura: lo censurado es la DEMANDA de los días saturados, no el ritmo — una ruta que cargó 36 y entregó 23 sigue midiendo bien sus minutos por entrega."
+            >
+              <ProTabla
+                compacta
+                cols={[
+                  { label: "DSP", key: "clave" },
+                  { label: "Rutas", num: true, render: r => nf(r.rutas) },
+                  { label: "Min/entrega", num: true, render: r => r.minPorEntrega ? `${r.minPorEntrega.toFixed(1)} (${nf(r.minP25, 1)}–${nf(r.minP75, 1)})` : "—" },
+                  { label: "Horas en ruta", num: true, render: r => nf(r.horasRuta, 1) },
+                  { label: "Capacidad jornada", num: true, render: r => <strong style={{ color: C.accent }}>{nf(r.capacidadJornada)}</strong> },
+                  { label: "Se carga", num: true, render: r => nf(r.cargadasMediana) },
+                  { label: "Sobrecarga", num: true, render: r => <span style={{ color: r.sobrecarga > 0 ? C.red : C.green, fontWeight: 700 }}>{r.sobrecarga > 0 ? "+" : ""}{nf(r.sobrecarga)}</span> },
+                  { label: "% entrega", num: true, render: r => pct(r.pctEntrega, 0) },
+                  { label: "Censuradas", num: true, render: r => pct(r.pctCensuradas, 0) },
+                ]}
+                rows={capacidad.filas.map(f => ({ ...f, _destaca: f.clave === "TODOS" }))}
+              />
+              <div style={{ marginTop: 12, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: C.text }}>
+                  <input type="checkbox" checked={cfg.usarJornada} onChange={(e) => guardar({ usarJornada: e.target.checked })} />
+                  Acotar los techos con la capacidad de jornada ({nf(capacidad.global?.capacidadJornada)})
+                </label>
+                <span style={{ color: C.textMuted }}>Ata la restricción que se rompa primero: conteo o jornada.</span>
+              </div>
+            </ProPanel>
+          )}
+
+          <ProPanel
+            title="Tipos de unidad"
+            sub="Los rangos son piso y techo, no promedio. El techo es capacidad física; el piso es donde despachar deja de rendir. Se traslapan a propósito: por eso elegir la combinación más barata es optimización entera y no una división."
+            right={<button onClick={precargarCostos} disabled={!carriers.length}
+              style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.accent}`, background: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              Precargar costos de Carriers
+            </button>}
+          >
+            <ProTabla
+              cols={[
+                { label: "Unidad", render: r => <strong style={{ color: r.inviable ? C.red : C.text }}>{r.label}</strong> },
+                ...[["piso", "Piso"], ["techo", "Techo"], ["costo", "Costo día ($)"], ["disponibles", "Disponibles"]].map(([campo, label]) => ({
+                  label, num: true, render: r => (
+                    <input type="number" min="0" value={r[campo] ?? ""} placeholder={campo === "disponibles" ? "∞" : ""}
+                      onChange={(e) => guardar({ tipos: cfg.tipos.map(t => t.id === r.id ? { ...t, [campo]: e.target.value === "" ? (campo === "disponibles" ? null : 0) : Number(e.target.value) } : t) })}
+                      style={{ width: 78, padding: "4px 7px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 12, textAlign: "right" }} />
+                  )
+                })),
+                { label: "Techo efectivo", num: true, render: r => (
+                  <span style={{ color: r.inviable ? C.red : r.limitadoPorJornada ? C.yellow : C.text, fontWeight: 700 }}>
+                    {r.inviable ? "inviable" : nf(r.techoEfectivo)}{r.limitadoPorJornada && !r.inviable ? " ↓" : ""}
+                  </span>
+                ) },
+                { label: "$ por parada", num: true, render: r => r.costo > 0 && r.techoEfectivo > 0 ? money(r.costo / r.techoEfectivo) : "—" },
+              ]}
+              rows={cfg.tipos.map(t => {
+                const ef = tiposEfectivos.find(x => x.id === t.id) || {};
+                return { ...t, techoEfectivo: ef.techoEfectivo, limitadoPorJornada: ef.limitadoPorJornada, inviable: ef.inviable };
+              })}
+            />
+            {tiposEfectivos.some(t => t.inviable) && (
+              <div style={{ marginTop: 10 }}>
+                <ProAviso tipo="warn">
+                  Con una jornada de {nf(capacidad?.global?.capacidadJornada)} paradas hay tipos cuyo <strong>piso no cabe en el día</strong>: se marcan inviables y quedan fuera de la asignación. No es un error del catálogo — es la señal de que hoy ata el tiempo y no el conteo.
+                </ProAviso>
+              </div>
+            )}
+            {tiposEfectivos.every(t => !(t.costo > 0)) && (
+              <div style={{ marginTop: 10 }}><ProAviso tipo="error">Sin costo día por tipo de unidad, la etapa C no existe (§5.C). Precárgalos del catálogo de Carriers o captúralos aquí.</ProAviso></div>
+            )}
+          </ProPanel>
+
+          {pron && (
+            <ProPanel
+              title="B3 · Plan por cuantil"
+              sub="Minimiza Σ costo sujeto a Σpiso ≤ paradas ≤ Σtecho. La condición es exacta: como cada unidad admite cualquier entero en su rango, la suma alcanza todos los enteros del intervalo. Ninguna unidad sale por debajo de su piso salvo que la carga completa no llegue al piso mínimo, y en ese caso se avisa."
+            >
+              <ProTabla
+                cols={[
+                  { label: "Cuantil", key: "q" },
+                  { label: "Paradas", num: true, render: r => nf(r.paradas) },
+                  { label: "Plan", render: r => r.plan.factible || r.plan.bajoPiso
+                    ? (r.plan.plan.filter(t => t.n > 0).map(t => `${t.n} × ${t.label}`).join(" + ") || "—")
+                    : <span style={{ color: C.red }}>{r.plan.motivo}</span> },
+                  { label: "Reparto", render: r => r.plan.plan.filter(t => t.n > 0).map(t => t.cargas.join("/")).join(" · ") },
+                  { label: "Unidades", num: true, render: r => nf(r.plan.unidades) },
+                  { label: "Costo día", num: true, render: r => money(r.plan.costo) },
+                  { label: "Holgura", num: true, render: r => r.plan.factible ? nf(r.plan.ociosidad) : <span style={{ color: C.red }}>−{nf(r.plan.faltantes)}</span> },
+                ]}
+                rows={[0.1, 0.25, 0.5, 0.75, 0.9, 0.95].map(q => {
+                  const paradas = paradasEnQ(q);
+                  return { q: `p${(q * 100).toFixed(0)}`, paradas, plan: PRONO.asignarUnidades(paradas, tiposEfectivos), _destaca: q === 0.5 };
+                })}
+              />
+            </ProPanel>
+          )}
+
+          {piezas.length > 0 && pron && (
+            <ProPanel
+              title="B2 · Simulación de ruteo"
+              sub="Corre el ruteador de la tesis sobre las paradas muestreadas y busca el mínimo de vehículos con el que TODAS las rutas caben en la jornada. El conteo dice cuántas unidades caben por capacidad; esto dice cuántas exige la geografía. Ata la que se rompa primero."
+              right={
+                <button onClick={simular} disabled={!!simEstado}
+                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: simEstado ? C.border : C.accent, color: "#fff", fontSize: 12, fontWeight: 700, cursor: simEstado ? "default" : "pointer" }}>
+                  {simEstado ? "Simulando…" : "Simular ruteo"}
+                </button>
+              }
+            >
+              {simEstado && <div style={{ fontSize: 12, color: C.accent, fontWeight: 600 }}>{simEstado}</div>}
+              {!sim && !simEstado && (
+                <div style={{ fontSize: 12, color: C.textMuted }}>
+                  Sin correr. La simulación usa el mismo depósito y el mismo algoritmo que Ruteo / Clusters, con la jornada
+                  {capacidad?.global?.horasRuta ? ` observada de ${nf(capacidad.global.horasRuta, 1)} h` : " por defecto"} y el tiempo de servicio calibrado contra los minutos por entrega de B1.
+                </div>
+              )}
+              {sim && (() => {
+                const { res, cal, escala, paradasTotales, pts, Tmax, M, pasos } = sim;
+                const planConteo = PRONO.asignarUnidades(paradasTotales, tiposEfectivos);
+                const kEscalado = res?.k != null ? Math.ceil(res.k * escala) : null;
+                const ata = kEscalado == null ? null : kEscalado > planConteo.unidades ? "jornada" : kEscalado < planConteo.unidades ? "conteo" : "empate";
+                return (
+                  <>
+                    {!cal.valido && (
+                      <ProAviso tipo="warn">
+                        No se pudo calibrar el tiempo de servicio: {cal.motivo} Se corrió con el valor por defecto de {nf(PARAMS_DEFAULT.si * 60, 1)} min, así que la simulación es optimista respecto al campo.
+                      </ProAviso>
+                    )}
+                    {res?.sinSolucion && (
+                      <ProAviso tipo="error">
+                        Ninguna cantidad de vehículos hasta el tope de búsqueda logra que todas las rutas quepan en {nf(Tmax, 1)} h. Con esta geografía y este tiempo de servicio, el día no es operable tal como está planteado.
+                      </ProAviso>
+                    )}
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                      <StatCard label="Unidades por conteo (B3)" value={nf(planConteo.unidades)} subvalue={`${nf(paradasTotales)} paradas ÷ techos`} icon={<IC.Package />} color={C.blue} />
+                      <StatCard label="Unidades por geografía (B2)" value={kEscalado == null ? "—" : nf(kEscalado)} subvalue={escala > 1 ? `simulado con ${nf(pts)} paradas, escalado ×${nf(escala, 2)}` : `simulado con ${nf(pts)} paradas`} icon={<IC.Map />} color={C.purple} />
+                      <StatCard
+                        label="Restricción que ata"
+                        value={ata === "jornada" ? "Jornada" : ata === "conteo" ? "Conteo" : ata === "empate" ? "Empate" : "—"}
+                        subvalue={ata === "jornada" ? `la geografía pide ${nf(kEscalado - planConteo.unidades)} unidad(es) más` : ata === "conteo" ? "la capacidad física es el límite" : "ambas coinciden"}
+                        icon={<IC.Zap />} color={ata === "jornada" ? C.red : C.green}
+                      />
+                      {res?.metricas && (
+                        <StatCard label="Ruta más larga" value={`${nf(res.metricas.durMax, 1)} h`} subvalue={`jornada ${nf(Tmax, 1)} h · SLA ${pct(res.metricas.SLA, 0)}`} icon={<IC.Clock />} color={res.metricas.durMax <= Tmax ? C.green : C.red} />
+                      )}
+                    </div>
+                    {ata === "jornada" && (
+                      <ProAviso tipo="warn">
+                        El plan por conteo pediría <strong>{nf(planConteo.unidades)}</strong> unidades, pero con las paradas de ese día repartidas como caen, <strong>{nf(kEscalado)}</strong> son las que realmente terminan la jornada. Comprometer el número del conteo deja entregas sin hacer aunque la capacidad física alcance.
+                      </ProAviso>
+                    )}
+                    {res?.bajoPiso && (
+                      <ProAviso tipo="warn">
+                        En el óptimo de geografía la ruta más chica queda con {nf(res.metricas?.minN)} paradas, por debajo del piso de {nf(sim.m)}: hay unidades despachadas donde no rinde. §8 lo pide explícito.
+                      </ProAviso>
+                    )}
+                    <ProTabla
+                      compacta
+                      cols={[
+                        { label: "Corrida", render: (r) => `${r.k} unidades` },
+                        { label: "SLA (rutas dentro de jornada)", num: true, render: r => pct(r.SLA, 0) },
+                        { label: "Ruta más larga", num: true, render: r => `${nf(r.durMax, 1)} h` },
+                        { label: "Paradas mín/máx", num: true, render: r => `${nf(r.minN)} / ${nf(r.maxN)}` },
+                        { label: "Distancia total", num: true, render: r => `${nf(r.D)} km` },
+                        { label: "CV (balance)", num: true, render: r => nf(r.CV, 3) },
+                        { label: "", render: r => <span style={{ color: r.ok ? C.green : C.red, fontWeight: 800 }}>{r.ok ? "cabe" : "no cabe"}</span> },
+                      ]}
+                      rows={(res?.intentos || []).map(i => ({ ...i, _destaca: i.k === res?.k }))}
+                    />
+                    <div style={{ marginTop: 12, fontSize: 11, color: C.textMuted, lineHeight: 1.7 }}>
+                      {pasos} corrida(s) del ruteador por bisección · tiempo de servicio {cal.valido ? `calibrado a ${nf(cal.siMin, 1)} min/parada (el ${pct(cal.pctTraslado, 0)} del tiempo observado es traslado)` : "por defecto"} · jornada {nf(Tmax, 1)} h · techo por ruta {nf(M)}
+                      {escala > 1 && ` · el resultado se escaló ×${nf(escala, 2)} porque la simulación se acotó a ${nf(MAX_PARADAS_SIM)} paradas para no bloquear el navegador`}
+                    </div>
+                  </>
+                );
+              })()}
+            </ProPanel>
+          )}
+
+          {horizonte?.length > 0 && (
+            <ProPanel
+              title="B2 · Simulación multi-día y arrastre"
+              sub="Las fallidas de hoy vuelven mañana: subdimensionar un día contamina el siguiente, y un déficit chico en lunes puede arrastrarse toda la semana. Se comparan dos políticas sobre la misma demanda — dimensionar cada día como si empezara de cero, contra sumar lo que quedó pendiente ayer."
+              right={
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, color: C.textMuted }}>Días</span>
+                  <input type="number" min="2" max="14" value={cfg.diasHorizonteMulti}
+                    onChange={(e) => guardar({ diasHorizonteMulti: Math.max(2, Math.min(14, parseInt(e.target.value) || 5)) })}
+                    style={{ width: 58, padding: "5px 8px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 12, textAlign: "right" }} />
+                </div>
+              }
+            >
+              {!hayCostos ? (
+                <ProAviso tipo="error">Sin los dos costos no se puede comparar una política contra otra: captúralos en la pestaña Decisión.</ProAviso>
+              ) : !multiDia ? (
+                <div style={{ fontSize: 12, color: C.textMuted }}>Sin horizonte que simular.</div>
+              ) : (
+                <>
+                  {!multiDia.lazoActivo && (
+                    <ProAviso tipo="ok">
+                      En este horizonte el lazo no ata: la política miope nunca deja carga sin servir, así que las dos coinciden y el ahorro es cero. No es un hallazgo, es que la holgura alcanza.
+                    </ProAviso>
+                  )}
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                    <StatCard label="Costo · dimensionar día a día" value={money(multiDia.miope.costoTotal)} subvalue={`${nf(multiDia.miope.unidades)} unidades · ${nf(multiDia.miope.faltantes)} paradas sin servir`} icon={<IC.Dollar />} color={C.textMuted} />
+                    <StatCard label="Costo · reconociendo el arrastre" value={money(multiDia.arrastre.costoTotal)} subvalue={`${nf(multiDia.arrastre.unidades)} unidades · ${nf(multiDia.arrastre.faltantes)} sin servir`} icon={<IC.Dollar />} color={C.accent} />
+                    <StatCard label="Costo de ignorar el lazo" value={money(multiDia.ahorro)} subvalue={pct(multiDia.pctAhorro) + " del costo total"} icon={<IC.Zap />} color={multiDia.ahorro > 0 ? C.green : C.textMuted} />
+                  </div>
+                  <ProTabla
+                    compacta
+                    cols={[
+                      { label: "Día", key: "dia" },
+                      { label: "Demanda planeada", num: true, render: r => nf(r.demanda) },
+                      { label: "Escenario p90", num: true, render: r => nf(r.realizado) },
+                      { label: "Arrastre de ayer", num: true, render: r => <span style={{ color: r.arrastreEntrada > 0 ? C.red : C.textMuted }}>{nf(r.arrastreEntrada)}</span> },
+                      { label: "Se planea para", num: true, render: r => nf(r.aPlanear) },
+                      { label: "Unidades", num: true, render: r => nf(r.unidades) },
+                      { label: "Capacidad", num: true, render: r => nf(r.capacidad) },
+                      { label: "Sin servir", num: true, render: r => <span style={{ color: r.sinServir > 0 ? C.red : C.green, fontWeight: r.sinServir > 0 ? 700 : 400 }}>{nf(r.sinServir)}</span> },
+                      { label: "Utilización", num: true, render: r => pct(r.utilizacion, 0) },
+                    ]}
+                    rows={multiDia.miope.dias.map((d, i) => ({ ...d, _destaca: i === 0 }))}
+                  />
+                  <div style={{ marginTop: 10, fontSize: 11, color: C.textMuted, lineHeight: 1.7 }}>
+                    La tabla muestra la política <strong>miope</strong> (dimensionar con la demanda del día). Planea con el cuantil objetivo p{(qObjetivo * 100).toFixed(0)} y se realiza el escenario p90 —
+                    si ambos salieran del mismo cuantil, la capacidad cubriría la demanda por construcción y el lazo se vería inexistente, que es justo el error de leer el histórico como si fuera la demanda.
+                    {multiDia.miope.pendienteFinal > 0 && ` Al cierre del horizonte quedan ${nf(multiDia.miope.pendienteFinal)} paradas pendientes, que se cobran completas: diferir no es gratis.`}
+                  </div>
+                </>
+              )}
+            </ProPanel>
+          )}
+
+          {piezas.length > 0 && pron && (
+            <ProPanel
+              title="A3 · Distribución espacial de paradas"
+              sub="La zona no es un dato de entrada: la zonifica el ruteador. El modelo entrega paradas georreferenciadas muestreadas del histórico y deja que Ruteo/Clusters agrupe. El muestreo es determinista para que dos corridas del mismo plan den las mismas paradas."
+            >
+              {(() => {
+                const n = Math.round(PRONO.cargaEnCuantil(pron, hayCostos ? qObjetivo : 0.5) / factorParada);
+                const muestra = PRONO.muestrearParadas(piezas, Math.min(n, 5000), { dow: PRONO.dowDe(objetivo), seed: 20260901 });
+                const porMuni = {};
+                for (const p of muestra) porMuni[p.municipio || "—"] = (porMuni[p.municipio || "—"] || 0) + 1;
+                const filas = Object.entries(porMuni).sort((a, b) => b[1] - a[1]).slice(0, 12);
+                return muestra.length ? (
+                  <>
+                    <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>
+                      {nf(muestra.length)} paradas muestreadas para el {objetivo}. Descárgalas y súbelas a <strong style={{ color: C.text }}>Ruteo / Clusters</strong> para simular el ruteo y validar cuántas unidades pide de verdad la geografía.
+                    </div>
+                    <button onClick={() => {
+                      const csv = "Latitud,Longitud,Codigo postal,Municipio\n" + muestra.map(p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)},${p.cp || ""},${(p.municipio || "").replace(/,/g, " ")}`).join("\n");
+                      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+                      const a = document.createElement("a"); a.href = url; a.download = `paradas_pronostico_${objetivo}.csv`; a.click(); URL.revokeObjectURL(url);
+                    }} style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: C.accent, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>
+                      Descargar paradas para el ruteador
+                    </button>
+                    <ProTabla
+                      cols={[{ label: "Municipio", key: "m" }, { label: "Paradas", num: true, render: r => nf(r.n) }, { label: "%", num: true, render: r => pct(100 * r.n / muestra.length, 1) }]}
+                      rows={filas.map(([m, n2]) => ({ m, n: n2 }))}
+                    />
+                  </>
+                ) : <div style={{ fontSize: 12, color: C.textMuted }}>No hay piezas georreferenciadas con fecha de salida para muestrear.</div>;
+              })()}
+            </ProPanel>
+          )}
+        </>
+      )}
+
+      {/* ================= DECISIÓN · ETAPA C ================= */}
+      {tab === "decision" && (
+        <>
+          <ProPanel
+            title="Los dos números que faltan"
+            sub="Con ellos el quantil objetivo deja de ser criterio y pasa a ser cálculo. Hoy no vienen en ningún reporte (§5.C)."
+          >
+            <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <div>
+                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, marginBottom: 4 }}>C_FALTANTE — COSTO DE UNA ENTREGA NO REALIZADA ($)</div>
+                <input type="number" min="0" value={cfg.cFaltante} placeholder="reprogramación + reintento + SLA + cliente"
+                  onChange={(e) => guardar({ cFaltante: e.target.value })}
+                  style={{ width: 260, padding: "8px 10px", borderRadius: 6, border: `1px solid ${+cfg.cFaltante > 0 ? C.border : C.red}`, background: C.panelAlt, color: C.text, fontSize: 13 }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, marginBottom: 4 }}>C_OCIOSO — DÍA DE UNIDAD ($)</div>
+                <div style={{ padding: "8px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: cOciosoMedio > 0 ? C.text : C.red, fontSize: 13, width: 240 }}>
+                  {cOciosoMedio > 0 ? `${money(cOciosoMedio)} (media de los tipos activos)` : "captúralos en la pestaña Flota"}
+                </div>
+              </div>
+            </div>
+          </ProPanel>
+
+          {!hayCostos ? (
+            <ProAviso tipo="error">
+              Faltan los costos. Sin costo día por tipo de unidad y costo de entrega no realizada, la etapa C no existe: el quantil objetivo sería una convención, no un cálculo.
+            </ProAviso>
+          ) : !pron ? (
+            <ProAviso tipo="error">No hay pronóstico: revisa la pestaña Carga.</ProAviso>
+          ) : (
+            <>
+              <ProPanel
+                title="Quantil objetivo"
+                sub="Newsvendor. El documento escribe q* = C_faltante / (C_faltante + C_ocioso), pero define C_ocioso por unidad-día y C_faltante por paquete: son unidades distintas y el cociente directo daría un q* por DEBAJO de la mediana, lo contrario de lo que el propio documento concluye. Aquí el día de unidad se prorratea entre las paradas que esa unidad cubre, que es lo que el newsvendor pide."
+              >
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                  <StatCard label="Quantil objetivo q*" value={`p${(qObjetivo * 100).toFixed(0)}`} subvalue={`${money(+cfg.cFaltante)} ÷ (${money(+cfg.cFaltante)} + ${money(cOciosoMedio / capacidadUnidad)}/parada)`} icon={<IC.BarChart />} color={C.accent} />
+                  <StatCard label="Carga a comprometer" value={nf(PRONO.cargaEnCuantil(pron, qObjetivo))} subvalue={`${nf(paradasEnQ(qObjetivo))} paradas · p50 sería ${nf(PRONO.cargaEnCuantil(pron, 0.5))}`} icon={<IC.Package />} color={C.blue} />
+                  <StatCard label="Holgura deliberada" value={`+${nf(PRONO.cargaEnCuantil(pron, qObjetivo) - PRONO.cargaEnCuantil(pron, 0.5))}`} subvalue="sobre la mediana, por asimetría de costos" icon={<IC.ArrowUp />} color={C.yellow} />
+                </div>
+                {qObjetivo <= 0.5 && (
+                  <ProAviso tipo="warn">
+                    q* quedó en o por debajo del p50: eso significa que hoy sale más caro tener una unidad parada que dejar una entrega sin hacer. Verifica C_faltante — debe incluir reprogramación, el reintento que consume capacidad al día siguiente, la penalización de SLA y el efecto en el cliente.
+                  </ProAviso>
+                )}
+              </ProPanel>
+
+              {planRecomendado && (
+                <ProPanel
+                  title={`Plan a comprometer en ${corte} para el ${objetivo}`}
+                  tone={planRecomendado.factible ? C.green + "55" : C.red + "66"}
+                  sub="Esto es lo que se pide al proveedor. El reparto muestra cuántos paquetes lleva cada unidad respetando su piso y su techo."
+                >
+                  {!planRecomendado.factible && <ProAviso tipo="error">{planRecomendado.motivo}{planRecomendado.faltantes > 0 ? ` — ${nf(planRecomendado.faltantes)} paradas se quedarían sin cubrir.` : ""}</ProAviso>}
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                    <StatCard label="Unidades" value={nf(planRecomendado.unidades)} subvalue={planRecomendado.plan.filter(t => t.n > 0).map(t => `${t.n} ${t.label}`).join(" · ")} icon={<IC.Truck />} color={C.accent} />
+                    <StatCard label="Costo del día" value={money(planRecomendado.costo)} subvalue={`${money(planRecomendado.costo / Math.max(1, paradasEnQ(qObjetivo)))} por parada`} icon={<IC.Dollar />} color={C.green} />
+                    <StatCard label="Holgura del plan" value={nf(planRecomendado.ociosidad)} subvalue={planRecomendado.holgura ? `capacidad ${nf(planRecomendado.holgura.techoTotal)} · piso ${nf(planRecomendado.holgura.pisoTotal)}` : ""} icon={<IC.Package />} color={C.purple} />
+                  </div>
+                  <ProTabla
+                    cols={[
+                      { label: "Unidad", key: "label" },
+                      { label: "Cantidad", num: true, render: r => nf(r.n) },
+                      { label: "Rango", num: true, render: r => `${nf(r.piso)}–${nf(r.techoEfectivo != null ? r.techoEfectivo : r.techo)}` },
+                      { label: "Reparto de paquetes", render: r => r.cargas.join(" · ") || "—" },
+                      { label: "Costo", num: true, render: r => money(r.n * r.costo) },
+                    ]}
+                    rows={planRecomendado.plan.filter(t => t.n > 0)}
+                    vacio="El plan no despacha ninguna unidad."
+                  />
+                </ProPanel>
+              )}
+
+              {curvaPol && (
+                <ProPanel
+                  title="Curva de política"
+                  sub="Costo total esperado = costo de las unidades comprometidas + faltantes × C_faltante. El día ocioso NO se suma aparte: ya está dentro del costo del plan, porque la unidad se paga por comprometerla. El mínimo empírico de esta curva y el q* teórico deben coincidir; cuando no lo hacen es porque los pisos hacen saltar el plan de forma discreta, y eso conviene verlo antes de comprometer."
+                >
+                  {(() => {
+                    const mejor = curvaPol.slice().sort((a, b) => a.costo.costoTotal - b.costo.costoTotal)[0];
+                    return (
+                      <>
+                        <ProTabla
+                          compacta
+                          cols={[
+                            { label: "Cuantil", render: r => `p${(r.p * 100).toFixed(0)}` },
+                            { label: "Paradas", num: true, render: r => nf(r.paradas) },
+                            { label: "Unidades", num: true, render: r => nf(r.plan.unidades) },
+                            { label: "Costo unidades", num: true, render: r => money(r.plan.costo) },
+                            { label: "Faltantes esp.", num: true, render: r => nf(r.costo.faltantesEsperados, 1) },
+                            { label: "Costo faltantes", num: true, render: r => money(r.costo.costoFaltantes) },
+                            { label: "Unidades ociosas", num: true, render: r => nf(r.costo.unidadesOciosas, 1) },
+                            { label: "COSTO TOTAL", num: true, render: r => <strong style={{ color: r === mejor ? C.green : C.text }}>{money(r.costo.costoTotal)}</strong> },
+                          ]}
+                          rows={curvaPol.map(r => ({ ...r, _destaca: r === mejor }))}
+                        />
+                        <div style={{ marginTop: 12, fontSize: 12, color: C.textMuted }}>
+                          Mínimo empírico en <strong style={{ color: C.green }}>p{(mejor.p * 100).toFixed(0)}</strong> · q* teórico <strong style={{ color: C.accent }}>p{(qObjetivo * 100).toFixed(0)}</strong>
+                          {Math.abs(mejor.p - qObjetivo) > 0.12 && <span style={{ color: C.yellow }}> — se separan más de 12 puntos: revisa si los pisos están forzando saltos discretos en el plan.</span>}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </ProPanel>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {/* ================= BACKTEST ================= */}
+      {tab === "backtest" && (
+        <>
+          <ProPanel
+            title={`Rolling-origin con corte en D−${cfg.leadDias || 2}`}
+            sub="Replica la información disponible al comprometer la flota: en cada fold, todo lo que entra al modelo se corta en la fecha de compromiso. Se evalúa end-to-end — carga, paradas, asignación de unidades y costo — porque lo que decide algo son las unidades que el sistema habría pedido, no el error en paquetes."
+            right={
+              <button onClick={correrBacktest} disabled={btCargando || !creacion.length}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: creacion.length ? C.accent : C.border, color: "#fff", fontSize: 12, fontWeight: 700, cursor: creacion.length ? "pointer" : "default" }}>
+                {btCargando ? "Corriendo…" : "Correr backtest"}
+              </button>
+            }
+          >
+            {!bt && <div style={{ fontSize: 12, color: C.textMuted }}>Corre el backtest para ver si el modelo pasa los criterios de aceptación de §8.</div>}
+            {bt && !bt.metricas && <ProAviso tipo="error">{bt.motivo}</ProAviso>}
+            {bt?.metricas && (
+              <>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                  <StatCard label="Folds evaluados" value={nf(bt.metricas.folds)} subvalue={bt.suficiente ? "≥12, cumple §7" : "§7 pide mínimo 12"} icon={<IC.BarChart />} color={bt.suficiente ? C.green : C.yellow} />
+                  <StatCard label={`WQL a ${cfg.leadDias * 24} h`} value={nf(bt.metricas.WQL, 4)} subvalue="pérdida de cuantil normalizada" icon={<IC.BarChart />} color={C.accent} />
+                  <StatCard label="MASE" value={nf(bt.metricas.MASE, 3)} subvalue={bt.metricas.MASE < 1 ? "mejor que el naive estacional" : "PEOR que el naive estacional"} icon={<IC.BarChart />} color={bt.metricas.MASE < 1 ? C.green : C.red} />
+                  <StatCard label="Sesgo" value={nf(bt.metricas.sesgo, 1)} subvalue={bt.metricas.sesgo > 0 ? "sobreestima" : "subestima"} icon={<IC.ArrowUp />} color={C.purple} />
+                </div>
+                <ProTabla
+                  cols={[
+                    { label: "Criterio de aceptación (§8)", key: "k", wrap: true },
+                    { label: "Umbral", key: "u" },
+                    { label: "Medido", key: "v", num: true },
+                    { label: "", render: r => <span style={{ color: r.pasa ? C.green : C.red, fontWeight: 800 }}>{r.pasa ? "PASA" : "NO PASA"}</span> },
+                  ]}
+                  rows={[
+                    { k: "Cobertura — el intervalo p10–p90 cubre entre 75% y 85% de los días reales", u: "75–85%", v: pct(bt.metricas.cobertura, 0), pasa: bt.metricas.cobertura >= 75 && bt.metricas.cobertura <= 85 },
+                    { k: "Capacidad — error ≤1 unidad en el 80% de los días", u: "≥80%", v: pct(bt.metricas.dentroDeUna, 0), pasa: bt.metricas.dentroDeUna >= 80 },
+                    { k: "Carga — mejora sobre el naive estacional", u: "MASE < 1", v: nf(bt.metricas.MASE, 3), pasa: bt.metricas.MASE < 1 },
+                    { k: "Piso — ninguna unidad se despacha por debajo de su piso", u: "0 días", v: `${nf(bt.metricas.diasBajoPiso)} días`, pasa: bt.metricas.diasBajoPiso === 0 },
+                    { k: "Operable — corre completo antes del corte y falla ruidosamente si le falta un insumo", u: "—", v: p0Pendientes.length ? `${p0Pendientes.length} P0 abiertos` : "sin P0", pasa: p0Pendientes.length === 0 },
+                  ]}
+                />
+                <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 12, color: C.textMuted }}>
+                  <span>Utilización media: <strong style={{ color: C.text }}>{pct(bt.metricas.utilizacion, 0)}</strong></span>
+                  <span>Error medio de unidades: <strong style={{ color: C.text }}>{nf(bt.metricas.errorUnidadesMedio, 2)}</strong> (abs {nf(bt.metricas.errorUnidadesAbs, 2)})</span>
+                  <span>Entregas no realizadas acumuladas: <strong style={{ color: C.text }}>{nf(bt.metricas.faltantes)}</strong></span>
+                  <span>Costo total simulado: <strong style={{ color: C.text }}>{money(bt.metricas.costoTotal)}</strong></span>
+                  <span>Fuente de la verdad: {bt.fuente}</span>
+                </div>
+              </>
+            )}
+          </ProPanel>
+
+          {bt?.fva && (
+            <ProPanel
+              title="FVA — valor agregado de cada capa"
+              sub="Cuánto aporta cada capa sobre la anterior, en los mismos folds. §8 pide mejora ≥5% del WQL sin empeorar el sesgo: las dos condiciones, porque una capa puede bajar el WQL a costa de sesgar y eso se paga después en flota. Una capa que no le gane al naive estacional no merece estar en producción."
+            >
+              <ProTabla
+                cols={[
+                  { label: "Capa", key: "label" },
+                  { label: "WQL", num: true, render: r => nf(r.wql, 4) },
+                  { label: "MAE", num: true, render: r => nf(r.mae, 1) },
+                  { label: "Sesgo", num: true, render: r => <span style={{ color: r.sesgoEmpeora ? C.red : C.text }}>{r.sesgo > 0 ? "+" : ""}{nf(r.sesgo, 1)}</span> },
+                  { label: "Mejora vs capa anterior", num: true, render: r => r.mejoraPct == null
+                    ? <span style={{ color: C.textMuted }}>línea base</span>
+                    : <strong style={{ color: r.mejoraPct >= 5 ? C.green : r.mejoraPct > 0 ? C.yellow : C.red }}>{r.mejoraPct > 0 ? "+" : ""}{nf(r.mejoraPct, 1)}%</strong> },
+                  { label: "§8", render: r => r.pasa == null ? "—" : <span style={{ color: r.pasa ? C.green : C.red, fontWeight: 800 }}>{r.pasa ? "PASA" : "NO PASA"}</span> },
+                ]}
+                rows={bt.fva.map(f => ({ ...f, _destaca: f.capa === "completo" }))}
+              />
+              {bt.fva.some(f => f.pasa === false) && (
+                <div style={{ marginTop: 12 }}>
+                  <ProAviso tipo="warn">
+                    Hay capas que no justifican su lugar en el stack. Una capa con mejora negativa está <strong>empeorando</strong> el pronóstico respecto a la anterior: revísala antes de agregar sofisticación encima. Ojo con A0 sola — el backlog sin inbound subestima por construcción, así que su “no pasa” es esperado y no es un defecto.
+                  </ProAviso>
+                </div>
+              )}
+            </ProPanel>
+          )}
+
+          {vlt?.disponible && (
+            <ProPanel
+              title="Valor del lead time"
+              sub="La misma política con corte en D−1 en vez de D−2. Si la diferencia es grande, negociar el lead time rinde más que cualquier mejora de modelo."
+            >
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <StatCard label="Costo simulado D−2" value={money(vlt.d2.metricas.costoTotal)} subvalue={`WQL ${nf(vlt.d2.metricas.WQL, 4)}`} icon={<IC.Dollar />} color={C.textMuted} />
+                <StatCard label="Costo simulado D−1" value={money(vlt.d1.metricas.costoTotal)} subvalue={`WQL ${nf(vlt.d1.metricas.WQL, 4)}`} icon={<IC.Dollar />} color={C.accent} />
+                <StatCard label="Ahorro de bajar a D−1" value={money(vlt.ahorro)} subvalue={pct(vlt.pctAhorro) + " del costo total"} icon={<IC.Zap />} color={vlt.ahorro > 0 ? C.green : C.red} />
+              </div>
+            </ProPanel>
+          )}
+
+          {bt?.folds?.length > 0 && (
+            <ProPanel title="Folds" sub="Cada fila es un día pronosticado con la información que había en su fecha de corte.">
+              <ProTabla
+                compacta
+                cols={[
+                  { label: "Día", key: "dia" }, { label: "Corte", key: "corte" },
+                  { label: "Real", num: true, render: r => nf(r.real) },
+                  { label: "p50", num: true, render: r => nf(r.p50) },
+                  { label: "Error", num: true, render: r => <span style={{ color: Math.abs(r.p50 - r.real) > 0.15 * Math.max(1, r.real) ? C.red : C.text }}>{r.p50 - r.real > 0 ? "+" : ""}{nf(r.p50 - r.real)}</span> },
+                  { label: "Naive", num: true, render: r => nf(r.naive) },
+                  { label: "En banda", render: r => <span style={{ color: r.dentroBanda ? C.green : C.red, fontWeight: 700 }}>{r.dentroBanda ? "sí" : "no"}</span> },
+                  { label: "Unid. pedidas", num: true, render: r => nf(r.unidadesPron) },
+                  { label: "Unid. necesarias", num: true, render: r => nf(r.unidadesReal) },
+                  { label: "Δ", num: true, render: r => <span style={{ color: Math.abs(r.errorUnidades) <= 1 ? C.green : C.red, fontWeight: 700 }}>{r.errorUnidades > 0 ? "+" : ""}{nf(r.errorUnidades)}</span> },
+                  { label: "Utilización", num: true, render: r => pct(r.utilizacion, 0) },
+                  { label: "Faltantes", num: true, render: r => nf(r.faltantes) },
+                ]}
+                rows={bt.folds.slice(-60).reverse()}
+              />
+            </ProPanel>
+          )}
+        </>
+      )}
+
+      {/* ================= DATASET · BLOQUE 2 ================= */}
+      {tab === "dataset" && (
+        <>
+          <ProPanel
+            title="Tabla de entrenamiento point-in-time"
+            sub="El entregable verificable del Bloque 2 es el dataset, no un modelo. Una fila por día objetivo con cada feature calculada exactamente como se veía en su fecha de corte. Las features no se calculan aparte: se leen del mismo pronóstico que corre en producción, con el mismo corte — si estuvieran separados, uno podría mentir y el otro no."
+            right={
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={construirDs} disabled={!!dsEstado || !creacion.length}
+                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: creacion.length ? C.accent : C.border, color: "#fff", fontSize: 12, fontWeight: 700, cursor: creacion.length ? "pointer" : "default" }}>
+                  {dsEstado || "Construir dataset"}
+                </button>
+                {ds?.filas.length > 0 && (
+                  <button onClick={() => exportarDataset(true)}
+                    style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.accent}`, background: C.accentLight, color: C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    Exportar XLSX
+                  </button>
+                )}
+              </div>
+            }
+          >
+            {!creacion.length && <ProAviso tipo="error">Falta el reporte de creación: sin él no hay filas que construir.</ProAviso>}
+            {!ds && !dsEstado && creacion.length > 0 && (
+              <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.7 }}>
+                Sin construir. Genera {PRONO.DICCIONARIO_DATASET.length} columnas por día: calendario, backlog por antigüedad, curva de maduración,
+                fallidas por motivo, capacidad móvil, dispersión geográfica y el pronóstico del propio modelo — más los targets y el residual, que es lo que A4 debe explicar.
+                El export incluye la fila del <strong style={{ color: C.text }}>{objetivo}</strong> con el target vacío: es la que se le pasa al modelo entrenado para planear.
+              </div>
+            )}
+            {ds?.filas.length > 0 && (
+              <>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                  <StatCard label="Filas" value={nf(ds.meta.filas)} subvalue={`${ds.meta.desde} → ${ds.meta.hasta}`} icon={<IC.BarChart />} color={C.accent} />
+                  <StatCard label="Columnas" value={nf(ds.columnas.length)} subvalue={ds.meta.columnasVacias.length ? `${ds.meta.columnasVacias.length} sin datos` : "todas con datos"} icon={<IC.ClipboardCheck />} color={ds.meta.columnasVacias.length ? C.yellow : C.green} />
+                  <StatCard label="Días censurados" value={pct(ds.meta.pctCensuradas, 0)} subvalue={`${nf(ds.meta.censuradas)} días saturados: cota inferior, no demanda`} icon={<IC.Package />} color={ds.meta.pctCensuradas > 20 ? C.red : C.green} />
+                  <StatCard label="Corte" value={`D−${ds.meta.leadDias}`} subvalue={`hazard ${ds.meta.ventanaHazard} d · móvil ${ds.meta.ventanaMovil} d`} icon={<IC.Clock />} color={C.purple} />
+                </div>
+                {ds.meta.pctCensuradas > 20 && (
+                  <ProAviso tipo="warn">
+                    El <strong>{pct(ds.meta.pctCensuradas, 0)}</strong> de los días viene marcado como censurado: se cargó más de lo que se alcanzó a tocar. Esas filas NO son observaciones de demanda, son cotas inferiores.
+                    Quien entrene con esta tabla tiene que tratarlas como censuradas (verosimilitud censurada o excluirlas del ajuste del nivel); usarlas como demanda real enseña un techo falso y subdimensiona justo los días que importan.
+                  </ProAviso>
+                )}
+                {ds.meta.columnasVacias.length > 0 && (
+                  <ProAviso tipo="warn">
+                    Columnas sin un solo dato: <strong>{ds.meta.columnasVacias.join(", ")}</strong>. Corresponden a insumos que hoy no llegan en los reportes — revisa la pestaña Datos.
+                  </ProAviso>
+                )}
+                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>
+                  Construido en {nf(ds.ms)} ms · target desde {ds.fuente} · curva de maduración desde {ds.fuenteCurva === "piezas" ? "primer movimiento" : "fecha de entrega (sobreestima)"}
+                </div>
+                <ProTabla
+                  compacta
+                  cols={[
+                    { label: "Día", key: "dia" }, { label: "Corte", key: "corte" },
+                    { label: "Backlog", num: true, render: r => nf(r.backlog_total) },
+                    { label: "Inb. lag1", num: true, render: r => nf(r.inbound_lag_1) },
+                    { label: "h(2)", num: true, render: r => nf(r.h_2, 3) },
+                    { label: "Fallidas", num: true, render: r => nf(r.fallidas_total) },
+                    { label: "Cap. jornada", num: true, render: r => nf(r.capacidad_jornada) },
+                    { label: "Radio km", num: true, render: r => nf(r.radio_km, 1) },
+                    { label: "HHI", num: true, render: r => nf(r.hhi_municipio, 3) },
+                    { label: "Calendario", render: r => [r.feriado, r.campanas, r.es_quincena ? "quincena" : ""].filter(Boolean).join(" · ") || "—" },
+                    { label: "pred", num: true, render: r => nf(r.pred_media) },
+                    { label: "y_carga", num: true, render: r => r.y_carga == null ? <span style={{ color: C.accent }}>por planear</span> : nf(r.y_carga) },
+                    { label: "residual", num: true, render: r => r.residual == null ? "—" : <span style={{ color: Math.abs(r.residual) > 0.2 * Math.max(1, r.y_carga) ? C.red : C.text }}>{r.residual > 0 ? "+" : ""}{nf(r.residual)}</span> },
+                    { label: "cens.", render: r => r.y_censurado ? <span style={{ color: C.red, fontWeight: 700 }}>sí</span> : "—" },
+                  ]}
+                  rows={ds.filas.slice(-40).reverse()}
+                />
+              </>
+            )}
+          </ProPanel>
+
+          {ds?.filas.length > 0 && (
+            <ProPanel
+              title="A4 · Modelo de residual"
+              sub="Árboles de regresión con gradiente sobre el residual del stack A0–A2, con las features de negocio del dataset. La validación es un bloque final contiguo, no aleatoria: barajar filas de días consecutivos filtra el futuro por la puerta de atrás. Los días censurados se excluyen del entrenamiento — su residual mide falta de camiones, no error de pronóstico."
+              right={
+                <button onClick={entrenarA4} disabled={!!a4Estado}
+                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: a4Estado ? C.border : C.accent, color: "#fff", fontSize: 12, fontWeight: 700, cursor: a4Estado ? "default" : "pointer" }}>
+                  {a4Estado || "Entrenar A4"}
+                </button>
+              }
+            >
+              {!a4 && !a4Estado && (
+                <div style={{ fontSize: 12, color: C.textMuted }}>
+                  Sin entrenar. Un residual que no se puede predecir es un resultado legítimo y frecuente: significa que A0–A2 ya se llevaron la señal. La capa entra sólo si pasa el umbral de §8.
+                </div>
+              )}
+              {a4 && !a4.entrenado && <ProAviso tipo="warn">{a4.motivo}</ProAviso>}
+              {a4?.entrenado && (
+                <>
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                    <StatCard label="MAE sin A4" value={nf(a4.maeSin, 1)} subvalue={`${nf(a4.nValidacion)} días de validación`} icon={<IC.BarChart />} color={C.textMuted} />
+                    <StatCard label="MAE con A4" value={nf(a4.maeCon, 1)} subvalue={`${a4.mejoraPct > 0 ? "+" : ""}${nf(a4.mejoraPct, 1)}% de mejora`} icon={<IC.BarChart />} color={a4.mejoraPct >= 5 ? C.green : C.yellow} />
+                    <StatCard label="Sesgo" value={`${nf(a4.sesgoSin, 1)} → ${nf(a4.sesgoCon, 1)}`} subvalue={Math.abs(a4.sesgoCon) <= Math.abs(a4.sesgoSin) ? "no empeora" : "EMPEORA el sesgo"} icon={<IC.ArrowUp />} color={Math.abs(a4.sesgoCon) <= Math.abs(a4.sesgoSin) ? C.green : C.red} />
+                    <StatCard label="Veredicto §8" value={a4.pasa ? "PASA" : "NO PASA"} subvalue={a4.pasa ? "la capa se queda" : "no justifica su lugar"} icon={<IC.Check />} color={a4.pasa ? C.green : C.red} />
+                  </div>
+                  {!a4.pasa && (
+                    <ProAviso tipo="warn">
+                      A4 no alcanza el umbral de §8 (mejora ≥5% del error sin empeorar el sesgo). Déjala fuera: agregar una capa que no gana su lugar cuesta mantenimiento y esconde el problema real, que casi siempre son datos y no modelo.
+                    </ProAviso>
+                  )}
+                  <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>
+                    {nf(a4.modelo.arboles.length)} árboles · {nf(a4.nEntrenamiento)} filas de entrenamiento · {nf(a4.filas)} filas no censuradas de {nf(ds.filas.length)}
+                  </div>
+                  <ProTabla
+                    cols={[
+                      { label: "Feature", render: r => <code style={{ fontSize: 11, color: C.text }}>{r.feature}</code> },
+                      { label: "Cortes", num: true, render: r => nf(r.cortes) },
+                      { label: "Peso", num: true, render: r => pct(r.pct, 1) },
+                      { label: "", render: r => <div style={{ width: 120, height: 6, background: C.panelAlt, borderRadius: 3 }}><div style={{ width: `${Math.min(100, r.pct * 2)}%`, height: "100%", background: C.accent, borderRadius: 3 }} /></div> },
+                    ]}
+                    rows={a4.importancia.slice(0, 10)}
+                  />
+                  <div style={{ marginTop: 12, fontSize: 11, color: C.textMuted }}>
+                    Qué está explicando el residual. Si domina una feature de calendario, es que A1 no la absorbió; si domina una de capacidad, el residual está midiendo la flota y no la demanda — y eso se arregla en el Bloque 0, no con más árboles.
+                  </div>
+                </>
+              )}
+            </ProPanel>
+          )}
+
+          <ProPanel title="Diccionario de columnas" sub="Se exporta junto con los datos: una tabla sin diccionario no es un entregable, es un archivo.">
+            <ProTabla
+              compacta
+              cols={[
+                { label: "Etapa", render: r => <span style={{ padding: "2px 7px", borderRadius: 4, fontSize: 10, fontWeight: 800, background: C.panelAlt, color: r.etapa === "target" ? C.green : r.etapa === "modelo" ? C.purple : C.textMuted }}>{r.etapa}</span> },
+                { label: "Columna", render: r => <code style={{ fontSize: 11, color: C.text }}>{r.col}</code> },
+                { label: "Qué es", key: "desc", wrap: true },
+              ]}
+              rows={PRONO.DICCIONARIO_DATASET}
+            />
+          </ProPanel>
+        </>
+      )}
+    </div>
+  );
+}
+
+
 function ModulePlaceholder({ title, desc }) {
   return (
     <div>
@@ -10192,6 +11883,7 @@ export default function T1OpsFlotilla({ user, onLogout }) {
       case "warehouse": return <ModuleOpsType tipo="Warehouse" color={C.blue} />;
       case "halfmile": return <ModuleOpsType tipo="HalfMile" color={C.purple} />;
       case "sameday": return <ModuleOpsType tipo="Same Day" color={C.yellow} />;
+      case "pronostico": return <ModulePronostico />;
       case "ruteo": return <ModuleRuteo />;
       case "asignaciones": return <ModuleAsignaciones />;
       case "manifiesto": return <ModuleManifiesto />;
