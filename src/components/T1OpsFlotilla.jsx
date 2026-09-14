@@ -6026,6 +6026,22 @@ function ModuleRuteo() {
     }
   }, [mapMaximized]);
 
+  // Cuántas rutas hay REALMENTE para elegir en los menús de reasignación.
+  //
+  // No puede salir de `numClusters`: ese es el número que se pidió al GENERAR, y
+  // dividir una ruta crea un cluster nuevo (maxCluster + 1) sin tocarlo. Por eso
+  // la ruta recién creada no aparecía en el selector y no había forma de moverle
+  // más paquetes: existía en el mapa y en la tabla, pero no en la lista.
+  //
+  // Se toma el MÁXIMO de los dos y no sólo los clusters ocupados, para no perder
+  // las rutas que quedaron vacías tras una fusión: hoy sí se listan y quitarlas
+  // impediría volver a llenarlas.
+  const totalRutas = useMemo(() => {
+    let maxCl = -1;
+    for (const c of asignaciones) if (c > maxCl) maxCl = c;
+    return Math.max(numClusters, maxCl + 1);
+  }, [asignaciones, numClusters]);
+
   const drawMarkers = (map, pts, assigns, nk, selSet, gKey) => {
     const L = window.L;
     // Limpiar layers anteriores
@@ -7151,7 +7167,7 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                 <span style={{ fontSize: 13, fontWeight: 700, color: C.yellow }}>{selectedIndices.size} punto(s) seleccionado(s)</span>
                 <span style={{ fontSize: 12, color: C.textMuted }}>Reasignar a:</span>
                 <select value={bulkCluster} onChange={e => setBulkCluster(parseInt(e.target.value))} style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                  {Array.from({ length: numClusters }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
+                  {Array.from({ length: totalRutas }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
                 </select>
                 <button onClick={applyBulk} style={{ padding: "5px 16px", borderRadius: 6, border: "none", backgroundColor: C.green, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✓ Aplicar</button>
                 <div style={{ width: 1, height: 22, backgroundColor: C.border }} />
@@ -7218,7 +7234,7 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                             if (!res.ok) { setAsignaciones(previas); setMsg("⚠ No se guardó el cambio y se revirtió. " + res.error); }
                           }} style={{ padding: "4px 8px", borderRadius: 5, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color, cursor: "pointer", backgroundColor: color + "12" }}>
                             <option value={-1}>✕ Excluido</option>
-                            {Array.from({ length: numClusters }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
+                            {Array.from({ length: totalRutas }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
                           </select>
                         </td>
                         <td style={{ padding: "7px 14px" }}>
