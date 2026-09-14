@@ -5,6 +5,7 @@ import { canAccess, ROLE_LABELS } from "../lib/auth";
 import { buildCostEngine, DEDUP_TIPOS, TARIFAS_POR_RUTA, TIPOS_DEDICADOS } from "../lib/costEngine";
 import { rutear, metricas as calcMetricas, PARAMS_DEFAULT } from "../lib/ruteo";
 import * as PRONO from "../lib/pronostico";
+import { cargarIndiceMunicipios, municipioDeFila, municipioDeCoordenada, canonizarMunicipio, resumenMunicipios, etiquetaMunicipios } from "../lib/municipios";
 
 // ============================================================
 // T1 ENVÍOS — OPS FLOTILLA KPI PLATFORM
@@ -4344,8 +4345,14 @@ function ModuleOperadores() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [showBulk, setShowBulk] = useState(false);
-  const [form, setForm] = useState({ nombre: "", proveedor: "", tipo_licencia: "A" });
+  const [form, setForm] = useState({ nombre: "", proveedor: "", tipo_licencia: "A", municipios: [] });
   const [saveMsg, setSaveMsg] = useState("");
+  // Catálogo INEGI para el selector de zonas conocidas. Se pide una sola vez por
+  // carga de página y se comparte con Asignaciones vía la caché del módulo.
+  const [catMun, setCatMun] = useState(null);
+  const [catMunErr, setCatMunErr] = useState("");
+  const [editMun, setEditMun] = useState(null);   // operador cuyo picker está abierto
+  const [munBusy, setMunBusy] = useState(false);
   const [bulkProveedor, setBulkProveedor] = useState("");
   const [bulkPreview, setBulkPreview] = useState([]);
   const [bulkMsg, setBulkMsg] = useState("");
@@ -4357,6 +4364,12 @@ function ModuleOperadores() {
   const [bulkBusy, setBulkBusy] = useState(false);
 
   const LICENCIAS = ["A", "B", "C", "D", "E"];
+
+  useEffect(() => {
+    cargarIndiceMunicipios()
+      .then(idx => setCatMun(idx.nombres))
+      .catch(e => setCatMunErr(e.message || String(e)));
+  }, []);
 
   useEffect(() => { loadData(); }, []);
 
@@ -4397,10 +4410,18 @@ function ModuleOperadores() {
       nombre: form.nombre.trim(),
       proveedor: form.proveedor,
       tipo_licencia: form.tipo_licencia,
+      municipios: form.municipios,
       activo: true,
     });
-    if (error) { setSaveMsg("Error: " + error.message); return; }
-    setForm({ nombre: "", proveedor: "", tipo_licencia: "A" });
+    if (error) {
+      // La columna se agrega con supabase_ruteo_asignaciones.sql. Si aún no
+      // corrió, se dice qué falta en vez de un error de Postgres en crudo.
+      if (/municipios/i.test(error.message || "")) {
+        setSaveMsg("Falta la columna `municipios` en la tabla operadores. Corre supabase_ruteo_asignaciones.sql en el SQL Editor.");
+      } else setSaveMsg("Error: " + error.message);
+      return;
+    }
+    setForm({ nombre: "", proveedor: "", tipo_licencia: "A", municipios: [] });
     setShowForm(false);
     loadData();
   };
@@ -4413,6 +4434,20 @@ function ModuleOperadores() {
 
   const toggleActivo = async (id, activo) => {
     await supabase.from("operadores").update({ activo: !activo }).eq("id", id);
+    loadData();
+  };
+
+  const guardarMunicipios = async (id, municipios) => {
+    setMunBusy(true);
+    const { error } = await supabase.from("operadores").update({ municipios }).eq("id", id);
+    setMunBusy(false);
+    if (error) {
+      setSaveMsg(/municipios/i.test(error.message || "")
+        ? "Falta la columna `municipios` en la tabla operadores. Corre supabase_ruteo_asignaciones.sql en el SQL Editor."
+        : "Error: " + error.message);
+      return;
+    }
+    setEditMun(null);
     loadData();
   };
 
@@ -4666,6 +4701,14 @@ function ModuleOperadores() {
               Guardar operador
             </button>
           </div>
+          <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid " + C.border }}>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 2 }}>Municipios que conoce</label>
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
+              Las zonas donde ya operó y se mueve bien. En Asignaciones se marcan los proveedores que tienen gente que conoce el municipio de cada ruta.
+            </div>
+            <SelectorMunicipios valor={form.municipios} onChange={m => setForm({ ...form, municipios: m })}
+              catalogo={catMun} cargando={!catMun && !catMunErr} error={catMunErr} />
+          </div>
         </div>
       )}
 
@@ -4739,14 +4782,14 @@ function ModuleOperadores() {
                 <th style={{ padding: "10px 14px", width: 36 }}>
                   <input type="checkbox" checked={allFilteredSelected} onChange={toggleSelectAll} style={{ width: 16, height: 16, cursor: "pointer" }} title="Seleccionar todos" />
                 </th>
-                {["Nombre", "Proveedor", "Licencia", "Status", ""].map(h => (
+                {["Nombre", "Proveedor", "Licencia", "Municipios que conoce", "Status", ""].map(h => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filteredOps.length === 0 ? (
-                <tr><td colSpan={6} style={{ padding: 48, textAlign: "center", color: C.textMuted }}>
+                <tr><td colSpan={7} style={{ padding: 48, textAlign: "center", color: C.textMuted }}>
                   <div style={{ fontSize: 36, marginBottom: 10 }}>👤</div>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>Sin operadores registrados</div>
                   <div style={{ fontSize: 12, marginTop: 4 }}>Agrega operadores para usarlos en el check-in</div>
@@ -4763,6 +4806,23 @@ function ModuleOperadores() {
                   <td style={{ padding: "12px 14px" }}>
                     <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, backgroundColor: C.blueBg, color: C.blue }}>Tipo {o.tipo_licencia}</span>
                   </td>
+                  <td style={{ padding: "12px 14px", maxWidth: 320 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      {(o.municipios || []).slice(0, 3).map(m => (
+                        <span key={m} style={{ fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 10, backgroundColor: C.accentLight, color: C.accent }}>{m}</span>
+                      ))}
+                      {(o.municipios || []).length > 3 && (
+                        <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 600 }}>+{o.municipios.length - 3}</span>
+                      )}
+                      {(!o.municipios || o.municipios.length === 0) && (
+                        <span style={{ fontSize: 11, color: C.textMuted, fontStyle: "italic" }}>sin zonas</span>
+                      )}
+                      <button onClick={() => setEditMun(o)} title="Configurar municipios que conoce"
+                        style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid " + C.border, backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                        editar
+                      </button>
+                    </div>
+                  </td>
                   <td style={{ padding: "12px 14px" }}>
                     <button onClick={() => toggleActivo(o.id, o.activo)} style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20, border: "none", cursor: "pointer", backgroundColor: o.activo ? C.greenBg : C.redBg, color: o.activo ? C.green : C.red }}>
                       {o.activo ? "Activo" : "Inactivo"}
@@ -4777,10 +4837,88 @@ function ModuleOperadores() {
           </table>
         )}
       </div>
+
+      {editMun && (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(12,20,37,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000, padding: 16 }}
+          onClick={() => !munBusy && setEditMun(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ backgroundColor: C.white, borderRadius: 14, width: 520, maxWidth: "96vw", maxHeight: "92vh", overflow: "auto", boxShadow: "0 16px 56px rgba(0,0,0,0.28)" }}>
+            <div style={{ padding: "18px 24px", borderBottom: "1px solid " + C.border }}>
+              <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Municipios que conoce</div>
+              <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{editMun.nombre} · {editMun.proveedor}</div>
+            </div>
+            <div style={{ padding: 24 }}>
+              <SelectorMunicipios valor={editMun.municipios || []} onChange={m => setEditMun({ ...editMun, municipios: m })}
+                catalogo={catMun} cargando={!catMun && !catMunErr} error={catMunErr} alto={240} />
+            </div>
+            <div style={{ padding: "14px 24px", borderTop: "1px solid " + C.border, display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button onClick={() => setEditMun(null)} disabled={munBusy}
+                style={{ padding: "9px 18px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: "transparent", color: C.textMuted, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
+              <button onClick={() => guardarMunicipios(editMun.id, editMun.municipios || [])} disabled={munBusy}
+                style={{ padding: "9px 22px", borderRadius: 8, border: "none", backgroundColor: munBusy ? C.border : C.accent, color: "#fff", fontSize: 13, fontWeight: 700, cursor: munBusy ? "default" : "pointer" }}>
+                {munBusy ? "Guardando…" : "Guardar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+
+// Selector de municipios con búsqueda. Son 534 en el catálogo INEGI, así que un
+// <select multiple> es inservible: sin filtro nadie encuentra "Cuajimalpa de
+// Morelos" entre quinientos. Los ya elegidos se muestran como chips arriba para
+// que quitar uno no obligue a buscarlo de nuevo.
+function SelectorMunicipios({ valor, onChange, catalogo, cargando, error, alto = 190 }) {
+  const [q, setQ] = useState("");
+  const sel = valor || [];
+  const nq = norm(q);
+  const opciones = (catalogo || []).filter(m => !nq || norm(m).includes(nq)).slice(0, 300);
+  const toggle = (m) => onChange(sel.includes(m) ? sel.filter(x => x !== m) : [...sel, m]);
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8, minHeight: sel.length ? 0 : 0 }}>
+        {sel.map(m => (
+          <span key={m} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 14, backgroundColor: C.accentLight, color: C.accent }}>
+            {m}
+            <button type="button" onClick={() => toggle(m)} style={{ border: "none", background: "transparent", color: C.accent, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
+          </span>
+        ))}
+        {sel.length > 0 && (
+          <button type="button" onClick={() => onChange([])} style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>limpiar</button>
+        )}
+      </div>
+      {error ? (
+        <div style={{ fontSize: 12, color: C.red }}>{error}</div>
+      ) : cargando ? (
+        <div style={{ fontSize: 12, color: C.textMuted }}>Cargando catálogo de municipios…</div>
+      ) : (
+        <>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar municipio o alcaldía…"
+            style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt, color: C.text }} />
+          <div style={{ maxHeight: alto, overflowY: "auto", marginTop: 6, border: "1px solid " + C.border, borderRadius: 6 }}>
+            {opciones.length === 0 ? (
+              <div style={{ padding: 12, fontSize: 12, color: C.textMuted }}>Sin coincidencias.</div>
+            ) : opciones.map(m => {
+              const on = sel.includes(m);
+              return (
+                <div key={m} onClick={() => toggle(m)}
+                  style={{ padding: "7px 10px", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, backgroundColor: on ? C.accentLight : "transparent", color: on ? C.accent : C.text, fontWeight: on ? 700 : 400 }}>
+                  <span style={{ width: 13, height: 13, borderRadius: 3, border: "1.5px solid " + (on ? C.accent : C.border), backgroundColor: on ? C.accent : "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, flexShrink: 0 }}>{on ? "✓" : ""}</span>
+                  {m}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 5 }}>
+            {sel.length} seleccionado(s){opciones.length === 300 ? " · escribe para acotar la lista" : ""}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 // --- REGISTRO DIARIO (unificado con Asistencia) ---
 function ModuleCostos() {
@@ -5980,40 +6118,82 @@ function ModuleRuteo() {
     });
   };
 
-  const applyBulk = () => {
-    setEditadoManual(true);
-    const indices = Array.from(selectedIndices);
-    if (!indices.length) return;
-    const nc = bulkCluster;
-    setAsignaciones(prev => { const next = [...prev]; indices.forEach(i => next[i] = nc); return next; });
-    const sid = sesionIdRef.current;
-    if (sid) Promise.all(indices.map(i => supabase.from("ruteo_puntos").update({ cluster: nc, ruta: "Ruta " + (nc + 1) }).eq("sesion", sid).eq("indice", i)));
-    setSelectedIndices(new Set());
-    setMsg(`✓ ${indices.length} punto(s) reasignados a Ruta ${nc + 1}.`);
+  // Escribe el cluster de un conjunto de puntos y VERIFICA que la base lo haya
+  // aceptado, devolviendo cuántas filas tocó.
+  //
+  // Antes estas escrituras eran fire-and-forget: se disparaba el update y nadie
+  // miraba el resultado. Si fallaba —típicamente por timeout, que es justo lo
+  // que pasa cuando falta el índice en `ruteo_puntos.sesion`, el mismo que ya
+  // rompía el borrado— el ruteo quedaba correcto en pantalla y viejo en la base.
+  // El síntoma aparecía mucho después y en OTRO módulo: dividías la Ruta 40,
+  // Ruteo mostraba 41, y Asignaciones seguía listando 40 sin ninguna pista.
+  //
+  // `.select("indice")` obliga a Postgres a devolver las filas afectadas, que es
+  // la única forma de distinguir "se guardó" de "no encontró nada que guardar".
+  const persistirClusters = async (sid, cambios) => {
+    if (!sid) return { ok: false, actualizados: 0, error: "La sesión no está guardada en la base: los cambios sólo viven en pantalla. Usa «Guardar ruteo» primero." };
+    if (!cambios.length) return { ok: true, actualizados: 0 };
+    const porCluster = new Map();
+    for (const { indice, cluster } of cambios) {
+      if (!porCluster.has(cluster)) porCluster.set(cluster, []);
+      porCluster.get(cluster).push(indice);
+    }
+    let actualizados = 0;
+    for (const [cluster, indices] of porCluster) {
+      const CHUNK = 100;   // Supabase no acepta .in() con miles de elementos
+      for (let i = 0; i < indices.length; i += CHUNK) {
+        const slice = indices.slice(i, i + CHUNK);
+        const { data, error } = await supabase.from("ruteo_puntos")
+          .update({ cluster, ruta: cluster === -1 ? "Excluido" : "Ruta " + (cluster + 1) })
+          .eq("sesion", sid).in("indice", slice).select("indice");
+        if (error) {
+          const esTimeout = error.code === "57014" || /timeout/i.test(error.message || "");
+          return {
+            ok: false, actualizados,
+            error: esTimeout
+              ? "La base excedió el tiempo límite porque falta un índice. Corre en el SQL editor de Supabase:  CREATE INDEX IF NOT EXISTS idx_ruteo_puntos_sesion ON ruteo_puntos(sesion);"
+              : (error.message || String(error)),
+          };
+        }
+        actualizados += (data || []).length;
+      }
+    }
+    // Una sesión puede tener puntos duplicados por índice (guardados previos
+    // cuyo borrado no alcanzó a completarse), así que tocar MÁS filas de las
+    // pedidas es normal y no es un error. Lo que no puede pasar es tocar MENOS:
+    // eso significa que hay puntos que la base no reconoció, y el ruteo quedaría
+    // partido entre lo que se ve y lo que está guardado.
+    if (actualizados < cambios.length) {
+      return { ok: false, actualizados, error: `La base sólo aceptó ${actualizados} de ${cambios.length} puntos. Lo que ves en pantalla y lo que está guardado no coinciden.` };
+    }
+    return { ok: true, actualizados };
   };
 
-  const excludeFromRoute = () => {
+  // Aplica un cambio de cluster a los puntos seleccionados: primero en pantalla
+  // (para que responda de inmediato) y luego en la base. Si la base lo rechaza
+  // se REVIERTE la pantalla, porque una vista que miente sobre lo guardado es
+  // peor que una operación que falla a la vista.
+  const reasignarSeleccion = async (nuevoCluster, mensajeOk) => {
     setEditadoManual(true);
     const indices = Array.from(selectedIndices);
     if (!indices.length) return;
-    setAsignaciones(prev => { const next = [...prev]; indices.forEach(i => next[i] = -1); return next; });
-    const sid = sesionIdRef.current;
-    if (sid) Promise.all(indices.map(i => supabase.from("ruteo_puntos").update({ cluster: -1, ruta: "Excluido" }).eq("sesion", sid).eq("indice", i)));
+    const previas = asignaciones;
+    setAsignaciones(prev => { const next = [...prev]; indices.forEach(i => next[i] = nuevoCluster); return next; });
     setSelectedIndices(new Set());
-    setMsg(`✓ ${indices.length} punto(s) excluidos de ruta — no saldrán del almacén.`);
+    const sid = sesionIdRef.current;
+    if (!sid) { setMsg(`✓ ${mensajeOk} (sin guardar: la sesión aún no existe en la base)`); return; }
+    const res = await persistirClusters(sid, indices.map(i => ({ indice: i, cluster: nuevoCluster })));
+    if (!res.ok) {
+      setAsignaciones(previas);
+      setMsg("⚠ No se guardó el cambio y se revirtió en pantalla. " + res.error);
+      return;
+    }
+    setMsg(`✓ ${mensajeOk}`);
   };
 
-  const includeInRoute = () => {
-    setEditadoManual(true);
-    const indices = Array.from(selectedIndices);
-    if (!indices.length) return;
-    const nc = bulkCluster;
-    setAsignaciones(prev => { const next = [...prev]; indices.forEach(i => next[i] = nc); return next; });
-    const sid = sesionIdRef.current;
-    if (sid) Promise.all(indices.map(i => supabase.from("ruteo_puntos").update({ cluster: nc, ruta: "Ruta " + (nc + 1) }).eq("sesion", sid).eq("indice", i)));
-    setSelectedIndices(new Set());
-    setMsg(`✓ ${indices.length} punto(s) reincluidos en Ruta ${nc + 1}.`);
-  };
+  const applyBulk = () => reasignarSeleccion(bulkCluster, `${selectedIndices.size} punto(s) reasignados a Ruta ${bulkCluster + 1}.`);
+  const excludeFromRoute = () => reasignarSeleccion(-1, `${selectedIndices.size} punto(s) excluidos de ruta — no saldrán del almacén.`);
+  const includeInRoute = () => reasignarSeleccion(bulkCluster, `${selectedIndices.size} punto(s) reincluidos en Ruta ${bulkCluster + 1}.`);
 
   // ================================================================
   // RUTEADOR — el algoritmo vive en src/lib/ruteo.js, compartido con el Worker.
@@ -6280,6 +6460,7 @@ function ModuleRuteo() {
       const newClusterIds = Array.from({ length: n }, (_, i) => subToFinalId[i]);
       // Construir nueva asignación global
       const nuevasAsigns = [...asignaciones];
+      const seqPrevio = seqOrderRef.current;   // para revertir si la BD rechaza
       const nuevoSeq = seqOrderRef.current ? [...seqOrderRef.current] : new Array(asignaciones.length).fill(0);
       idxs.forEach((globalIdx, localPos) => {
         nuevasAsigns[globalIdx] = subToFinalId[subAssigns[localPos]];
@@ -6289,28 +6470,21 @@ function ModuleRuteo() {
       seqOrderRef.current = nuevoSeq;
       setSelectedIndices(new Set());
 
-      // Persistir en BD: update por chunks de puntos, agrupados por nuevo cluster
+      // Persistir en BD. Si esto falla la división NO existe para el resto de la
+      // plataforma: Asignaciones lee de la base, así que vería las rutas de
+      // antes. Por eso se verifica y, si no se guardó, se revierte la pantalla.
       if (sesionId) {
-        // Agrupar índices por nuevo cluster id
-        const porNuevoCluster = {};
-        idxs.forEach((globalIdx, localPos) => {
-          const newCl = newClusterIds[subAssigns[localPos]];
-          if (!porNuevoCluster[newCl]) porNuevoCluster[newCl] = [];
-          porNuevoCluster[newCl].push(globalIdx);
-        });
-        const updatePromises = Object.entries(porNuevoCluster).map(async ([newCl, gIdxs]) => {
-          const clNum = parseInt(newCl);
-          // Supabase no acepta .in() con miles de elementos. Chunkar.
-          const CHUNK = 100;
-          for (let i = 0; i < gIdxs.length; i += CHUNK) {
-            const slice = gIdxs.slice(i, i + CHUNK);
-            await supabase.from("ruteo_puntos")
-              .update({ cluster: clNum, ruta: "Ruta " + (clNum + 1) })
-              .eq("sesion", sesionId)
-              .in("indice", slice);
-          }
-        });
-        await Promise.all(updatePromises);
+        const cambios = idxs.map((globalIdx, localPos) => ({
+          indice: globalIdx, cluster: newClusterIds[subAssigns[localPos]],
+        }));
+        const res = await persistirClusters(sesionId, cambios);
+        if (!res.ok) {
+          setAsignaciones(asignaciones);
+          seqOrderRef.current = seqPrevio;
+          setMsg("⚠ No se pudo guardar la división: se revirtió en pantalla para que no quede una ruta que sólo existe aquí y no en Asignaciones. " + res.error);
+          setSplitSaving(false);
+          return;
+        }
 
         // Heredar asignación: si Ruta clusterId+1 tenía asignación en
         // asignaciones_sesion, copiarla a las N nuevas Rutas
@@ -6362,6 +6536,7 @@ function ModuleRuteo() {
         setMsg(`⏳ Fusionando: ${p.phase === "clustering" ? "Procesando" : "Optimizando orden"}: ${p.value}%`);
       });
       const nuevasAsigns = [...asignaciones];
+      const seqPrevio = seqOrderRef.current;   // para revertir si la BD rechaza
       const nuevoSeq = seqOrderRef.current ? [...seqOrderRef.current] : new Array(asignaciones.length).fill(0);
       idxs.forEach((globalIdx, localPos) => {
         nuevasAsigns[globalIdx] = targetCluster;
@@ -6372,10 +6547,17 @@ function ModuleRuteo() {
       setSelectedIndices(new Set());
 
       if (sesionId) {
-        await supabase.from("ruteo_puntos")
-          .update({ cluster: targetCluster, ruta: "Ruta " + (targetCluster + 1) })
-          .eq("sesion", sesionId)
-          .eq("cluster", srcCluster);
+        // Por índice y no por `.eq("cluster", srcCluster)`: así se verifica que
+        // se tocaron exactamente los puntos que la pantalla movió. Filtrar por
+        // cluster no permite saber cuántos debían cambiar.
+        const res = await persistirClusters(sesionId, idxs.map(i => ({ indice: i, cluster: targetCluster })));
+        if (!res.ok) {
+          setAsignaciones(asignaciones);
+          seqOrderRef.current = seqPrevio;
+          setMsg("⚠ No se pudo guardar la fusión: se revirtió en pantalla. " + res.error);
+          setMergeSaving(false);
+          return;
+        }
         await supabase.from("asignaciones_sesion").delete()
           .eq("sesion", sesionId)
           .eq("ruta_nombre", "Ruta " + (srcCluster + 1));
@@ -7026,11 +7208,14 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                         <td style={{ padding: "7px 14px", fontSize: 12 }}>{p.lat.toFixed(6)}</td>
                         <td style={{ padding: "7px 14px", fontSize: 12 }}>{p.lng.toFixed(6)}</td>
                         <td style={{ padding: "7px 14px" }}>
-                          <select value={cl} onChange={e => {
+                          <select value={cl} onChange={async e => {
                             const nc = parseInt(e.target.value);
+                            const previas = asignaciones;
                             setAsignaciones(prev => { const n = [...prev]; n[i] = nc; return n; });
                             setEditadoManual(true);
-                            if (sesionId) supabase.from("ruteo_puntos").update({ cluster: nc, ruta: nc === -1 ? "Excluido" : "Ruta " + (nc + 1) }).eq("sesion", sesionId).eq("indice", i);
+                            if (!sesionId) return;
+                            const res = await persistirClusters(sesionId, [{ indice: i, cluster: nc }]);
+                            if (!res.ok) { setAsignaciones(previas); setMsg("⚠ No se guardó el cambio y se revirtió. " + res.error); }
                           }} style={{ padding: "4px 8px", borderRadius: 5, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color, cursor: "pointer", backgroundColor: color + "12" }}>
                             <option value={-1}>✕ Excluido</option>
                             {Array.from({ length: numClusters }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
@@ -7237,6 +7422,11 @@ function ModuleAsignaciones() {
     try { return JSON.parse(localStorage.getItem("t1_capacidad_v1") || "{}"); } catch { return {}; }
   });
   const [capacidadOpen, setCapacidadOpen] = useState(false);
+  // Operadores con sus zonas conocidas + catálogo INEGI. Con esto cada ruta sabe
+  // su municipio y cada proveedor sabe si tiene gente que lo conoce.
+  const [operadores, setOperadores] = useState([]);
+  const [idxMun, setIdxMun] = useState(null);
+  const [munMsg, setMunMsg] = useState("");
   const persistCapacidad = (next) => {
     setCapacidad(next);
     try { localStorage.setItem("t1_capacidad_v1", JSON.stringify(next)); } catch {}
@@ -7275,6 +7465,44 @@ function ModuleAsignaciones() {
 
   const COSTO_IDEAL = 40;
   const COSTO_MAX = 45;
+
+  useEffect(() => {
+    supabase.from("operadores").select("id, nombre, proveedor, municipios, activo")
+      .then(r => {
+        if (r.error) {
+          // Sin la columna todavía, el módulo sigue funcionando: sólo no puede
+          // marcar cobertura. Se dice qué falta en vez de romper la vista.
+          if (/municipios/i.test(r.error.message || "")) setMunMsg("Para marcar qué proveedores conocen la zona, corre supabase_ruteo_asignaciones.sql en Supabase (falta la columna `municipios` en operadores).");
+          return;
+        }
+        setOperadores(r.data || []);
+      });
+    cargarIndiceMunicipios().then(setIdxMun).catch(e => setMunMsg(e.message || String(e)));
+  }, []);
+
+  // Municipios conocidos por proveedor: { proveedor -> Map(municipio -> [nombres]) }
+  // Se arma una vez y no por celda: la matriz de asignación tiene proveedores ×
+  // tipos × rutas, y recorrer los operadores dentro de ese triple bucle se nota.
+  const zonasPorProveedor = useMemo(() => {
+    const m = new Map();
+    for (const o of operadores) {
+      if (o.activo === false) continue;
+      const prov = o.proveedor;
+      if (!prov) continue;
+      if (!m.has(prov)) m.set(prov, new Map());
+      const porMuni = m.get(prov);
+      for (const mun of (o.municipios || [])) {
+        if (!porMuni.has(mun)) porMuni.set(mun, []);
+        porMuni.get(mun).push(o.nombre);
+      }
+    }
+    return m;
+  }, [operadores]);
+
+  const conocenZona = (proveedor, municipio) => {
+    if (!municipio) return [];
+    return zonasPorProveedor.get(proveedor)?.get(municipio) || [];
+  };
 
   const eliminarSesion = (sid) => {
     const sel = historico.find(h => h.sesion === sid);
@@ -7447,8 +7675,33 @@ function ModuleAsignaciones() {
       unicos.forEach(r => {
         if (r.cluster === -1) { excluidos++; return; } // skip excluded points
         const rn = r.ruta || "Ruta " + (r.cluster + 1);
-        if (!rutaMap[rn]) rutaMap[rn] = { nombre: rn, cluster: r.cluster, paquetes: 0 };
+        if (!rutaMap[rn]) rutaMap[rn] = { nombre: rn, cluster: r.cluster, paquetes: 0, _pts: [] };
         rutaMap[rn].paquetes += 1;
+        rutaMap[rn]._pts.push(r);
+      });
+
+      // Municipio de cada ruta. El municipio de un punto sale de la columna del
+      // archivo si viene —es el dato del operador logístico, y en una dirección
+      // sobre el límite entre dos municipios su criterio pesa más que un
+      // polígono— y si no, de sus coordenadas contra la geometría de INEGI.
+      // El nombre se canoniza al catálogo para que empate con lo capturado en
+      // Operadores aunque en el Excel venga sin acentos o en mayúsculas.
+      const idx = idxMun || (await cargarIndiceMunicipios().then(v => { setIdxMun(v); return v; }).catch(() => null));
+      const cacheMuni = new Map();   // por coordenada redondeada: las rutas repiten direcciones
+      const municipioDePunto = (r) => {
+        const extra = r.datos_extra ? (typeof r.datos_extra === "string" ? (() => { try { return JSON.parse(r.datos_extra); } catch { return {}; } })() : r.datos_extra) : {};
+        const delArchivo = municipioDeFila(extra);
+        if (delArchivo) return (idx && canonizarMunicipio(delArchivo, idx)) || delArchivo;
+        if (!idx || r.latitud == null || r.longitud == null) return null;
+        const k = r.latitud.toFixed(4) + "," + r.longitud.toFixed(4);
+        if (cacheMuni.has(k)) return cacheMuni.get(k);
+        const v = municipioDeCoordenada(r.latitud, r.longitud, idx);
+        cacheMuni.set(k, v);
+        return v;
+      };
+      Object.values(rutaMap).forEach(rt => {
+        rt.muni = resumenMunicipios(rt._pts, municipioDePunto);
+        delete rt._pts;   // no se guarda: son miles de filas por sesión
       });
       console.log(`[Asignaciones] Excluidos: ${excluidos} · En rutas: ${unicos.length - excluidos}`);
       const rutaList = Object.values(rutaMap).sort((a, b) => a.cluster - b.cluster);
@@ -8064,6 +8317,7 @@ function ModuleAsignaciones() {
                           return [
                             plain(""),
                             plain("Ruta"),
+                            plain("Municipio"),
                             sortable("Paquetes", "paquetes"),
                             plain("Proveedor asignado"),
                             plain("Tipo"),
@@ -8110,6 +8364,21 @@ function ModuleAsignaciones() {
                             onMouseLeave={ev=>{ev.currentTarget.style.backgroundColor=noAsignar?C.panelAlt:sinOpcion?C.redBg:isExpanded?C.selBg:"transparent"}}>
                             <td style={{ padding:"10px 8px 10px 14px", fontSize:12, color:C.textMuted }}>{isExpanded ? "▼" : "▶"}</td>
                             <td style={{ padding:"10px 14px", fontSize:13, fontWeight:700 }}>{ruta.nombre}</td>
+                            <td style={{ padding:"10px 14px", maxWidth:230 }}>
+                              {ruta.muni?.dominante ? (
+                                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                  <span style={{ fontSize:12, fontWeight:600, color:C.text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{ruta.muni.dominante}</span>
+                                  {/* Una ruta repartida entre municipios cuesta más de operar: el % lo
+                                      hace visible sin tener que expandir la fila. */}
+                                  <span style={{ fontSize:10, fontWeight:700, color:ruta.muni.concentrada?C.green:C.yellow, whiteSpace:"nowrap" }}>
+                                    {Math.round(ruta.muni.pctDominante)}%
+                                  </span>
+                                  {ruta.muni.otros > 0 && (
+                                    <span style={{ fontSize:10, color:C.textMuted, whiteSpace:"nowrap" }}>+{ruta.muni.otros}</span>
+                                  )}
+                                </div>
+                              ) : <span style={{ fontSize:11, color:C.textMuted }}>—</span>}
+                            </td>
                             <td style={{ padding:"10px 14px" }}>
                               <span style={{ fontSize:16, fontWeight:800, color:sinOpcion?C.red:C.text }}>{ruta.paquetes}</span>
                             </td>
@@ -8140,8 +8409,31 @@ function ModuleAsignaciones() {
                           </tr>,
                           isExpanded && (
                             <tr key={idx+"_exp"} style={{ backgroundColor:C.bg }}>
-                              <td colSpan={9} style={{ padding:0 }}>
+                              <td colSpan={10} style={{ padding:0 }}>
                                 <div style={{ padding:"8px 14px 12px" }}>
+                                  {ruta.muni?.dominante && (
+                                    <div style={{ marginBottom:10, padding:"10px 14px", borderRadius:8, backgroundColor:C.white, border:"1px solid "+C.border }}>
+                                      <div style={{ fontSize:10, fontWeight:800, color:C.textMuted, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:6 }}>Municipios de la ruta</div>
+                                      <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
+                                        {ruta.muni.desglose.map(d => (
+                                          <span key={d.municipio} style={{ fontSize:11, fontWeight:600, padding:"3px 9px", borderRadius:12, backgroundColor:d.municipio===ruta.muni.dominante?C.accentLight:C.panelAlt, color:d.municipio===ruta.muni.dominante?C.accent:C.textMuted }}>
+                                            {d.municipio} <span style={{ opacity:0.75 }}>{d.n} ({Math.round(d.pct)}%)</span>
+                                          </span>
+                                        ))}
+                                        {ruta.muni.sinDato > 0 && (
+                                          <span style={{ fontSize:11, color:C.textMuted, fontStyle:"italic" }}>{ruta.muni.sinDato} sin ubicar</span>
+                                        )}
+                                      </div>
+                                      {!ruta.muni.concentrada && (
+                                        <div style={{ fontSize:11, color:C.yellow, marginTop:7 }}>
+                                          Ruta repartida: menos del 80% de las paradas cae en un solo municipio. Cuesta más de operar y ningún operador la conoce completa.
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                  {munMsg && (
+                                    <div style={{ marginBottom:10, fontSize:11, color:C.yellow }}>{munMsg}</div>
+                                  )}
                                   {(() => {
                                     const provsList = [...new Set(carriers.map(c => c.proveedor))].sort();
                                     const tipoOrder = ["Moto","Sedan","SmallVan","Van","1.5","3.5","Rabon","Torton","Tracto"];
@@ -8164,7 +8456,26 @@ function ModuleAsignaciones() {
                                           <tbody>
                                             {provsList.map((prov, pi) => (
                                               <tr key={prov} style={{ borderTop:pi>0?"1px solid "+C.border:"none" }}>
-                                                <td style={{ padding:"10px 14px", fontSize:12, fontWeight:700, whiteSpace:"nowrap", position:"sticky", left:0, backgroundColor:C.white, zIndex:1 }}>{prov}</td>
+                                                <td style={{ padding:"10px 14px", fontSize:12, fontWeight:700, whiteSpace:"nowrap", position:"sticky", left:0, backgroundColor:C.white, zIndex:1 }}>
+                                                  {(() => {
+                                                    // Operadores de este proveedor que conocen el municipio
+                                                    // dominante de la ruta. No cambia el costo ni decide por ti:
+                                                    // pone el dato al lado del precio para que la comparación
+                                                    // sea entre lo que cuesta y quién sabe llegar.
+                                                    const quienes = conocenZona(prov, ruta.muni?.dominante);
+                                                    return (
+                                                      <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+                                                        <span>{prov}</span>
+                                                        {quienes.length > 0 && (
+                                                          <span title={`Conocen ${ruta.muni.dominante}: ${quienes.join(", ")}`}
+                                                            style={{ fontSize:9, fontWeight:800, padding:"2px 7px", borderRadius:10, backgroundColor:C.greenBg, color:C.green, whiteSpace:"nowrap" }}>
+                                                            ✓ {quienes.length} conoce{quienes.length !== 1 ? "n" : ""} la zona
+                                                          </span>
+                                                        )}
+                                                      </div>
+                                                    );
+                                                  })()}
+                                                </td>
                                                 {tiposList.map(tipo => {
                                                   const cost = getCarrierCost(prov, tipo);
                                                   if (cost === null) return <td key={tipo} style={{ padding:"6px 8px", textAlign:"center", color:C.border, fontSize:11 }}>—</td>;
