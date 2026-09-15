@@ -12,14 +12,17 @@ export const ROLES_ENABLED = false;
 export const ROLE_MODULES = {
   admin: "*",
   operaciones: [
-    "dashboard", "kpis", "envios", "unidades", "operadores",
+    "dashboard", "envios", "unidades", "operadores",
     "t1envios", "warehouse", "halfmile", "sameday",
     "pronostico", "ruteo", "asignaciones", "manifiesto", "consultas",
   ],
-  costos: ["dashboard", "kpis", "costos", "carriers", "pronostico", "asignaciones", "consultas", "facturacion"],
+  costos: ["dashboard", "costos", "carriers", "pronostico", "asignaciones", "consultas", "facturacion"],
   facturacion: ["facturacion"],
-  lectura: ["kpis"],
-  kpis: ["kpis"],
+  // El módulo de KPIs se eliminó. Estos dos roles sólo lo tenían, así que se
+  // mueven al Dashboard OPS para que no entren a una aplicación vacía. OJO: eso
+  // les da visibilidad de costos por proveedor que antes no tenían.
+  lectura: ["dashboard"],
+  kpis: ["dashboard"],
 };
 
 export const ROLE_LABELS = {
