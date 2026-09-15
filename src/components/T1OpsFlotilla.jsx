@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
-import { TARIFAS_POR_RUTA, TIPOS_DEDICADOS } from "../lib/costEngine";
+import { TARIFAS_POR_RUTA, TIPOS_DEDICADOS, etiquetaDedicada } from "../lib/costEngine";
 import { rutear, metricas as calcMetricas, PARAMS_DEFAULT } from "../lib/ruteo";
 import * as PRONO from "../lib/pronostico";
 import { cargarIndiceMunicipios, municipioDeFila, municipioDeCoordenada, canonizarMunicipio, resumenMunicipios, etiquetaMunicipios } from "../lib/municipios";
@@ -1495,7 +1495,7 @@ function crearMotorCostos(carriers, asistencia) {
     const tarifaRuta = TARIFAS_POR_RUTA[r.tipoRuta];
     if (tarifaRuta != null) {
       return {
-        baseCost: tarifaRuta, proveedor: r.carrier, tipo_unidad: "Dedicada",
+        baseCost: tarifaRuta, proveedor: r.carrier, tipo_unidad: etiquetaDedicada(r.tipoRuta),
         missing: false, tipo_operacion: r.tipoRuta, tarifaPorRuta: true, tarifaPorRutaValor: tarifaRuta,
       };
     }
@@ -2288,6 +2288,21 @@ function ModuleEnvios() {
       let baseCost = parseFloat(info.baseCost) || 0;
       let tipo_unidad = info.tipo_unidad;
 
+      // UNIDAD DEDICADA: su precio lo fija el contrato de la plaza, no el
+      // catálogo de carriers. Los pasos 1 y 2 de abajo existen para corregir un
+      // tipo_unidad que vino mal de asistencia cruzándolo contra el catálogo, y
+      // aplicados aquí hacían justo lo contrario: como "Dedicada Veracruz" no
+      // existe como fila del catálogo, el paso 1 lo daba por inválido, ponía el
+      // costo en 0, y el paso 2 caía al tipo más barato del proveedor — la moto
+      // de $1,100. De ahí que la pantalla mostrara $1,500 y el PDF $1,100.
+      //
+      // Se salta la validación y se lleva el costo del contrato tal cual.
+      if (info.tarifaPorRuta) {
+        out.push({ fecha: f, tipo_unidad, opCanonica, costoUnitario: baseCost });
+        debug.push({ idRuta: r.id, fecha: f, operador: r.operador, info_baseCost: info.baseCost, info_tipo: info.tipo_unidad, baseCost_final: baseCost, tipo_unidad_final: tipo_unidad, costoNuevo: baseCost, dedicada: true });
+        return;
+      }
+
       // 1) Validar tipo_unidad contra catálogo del proveedor. Si la
       //    asistencia dice "Moto" pero Partrunner sólo tiene Sedan, el
       //    dato de asistencia está mal — forzar el fallback al catálogo.
@@ -2352,7 +2367,7 @@ function ModuleEnvios() {
         ignoradas.push({ id: r.id, operador: r.operador, fecha: f, tipoRuta: r.tipoRuta, razon: baseCost === 0 ? "sin asistencia y sin catálogo con costo" : `penalización lleva costoNuevo a ${costoNuevo}` });
         return;
       }
-      out.push({ fecha: f, tipo_unidad, opCanonica });
+      out.push({ fecha: f, tipo_unidad, opCanonica, costoUnitario: baseCost });
     });
     if (typeof window !== "undefined") {
       // Marcar cada fila del debug con la decisión final
@@ -2392,7 +2407,12 @@ function ModuleEnvios() {
     unidades.forEach(u => { if (u.tipo_unidad) tiposSet.add(u.tipo_unidad); });
     tiposSet.forEach(t => {
       const car = carriers.find(c => norm(c.proveedor) === provNorm && c.tipo_unidad === t);
-      costoPorTipo[t] = car ? (parseFloat(car.costo_unidad) || 0) : 0;
+      if (car) { costoPorTipo[t] = parseFloat(car.costo_unidad) || 0; return; }
+      // Sin fila en el catálogo el precio salía en 0 y la columna se facturaba
+      // gratis. Las unidades dedicadas nunca van a tener esa fila —su tarifa es
+      // del contrato de la plaza— así que se toma el costo que ya trae la unidad.
+      const u = unidades.find(x => x.tipo_unidad === t && x.costoUnitario > 0);
+      costoPorTipo[t] = u ? u.costoUnitario : 0;
     });
     const tipos = [...tiposSet].sort();
 
@@ -9229,7 +9249,7 @@ function ModuleConsultas() {
             // Puebla; se deja igual para no cambiar en silencio lo que exporta.
             costo_base = tarRuta;
             proveedor = r.carrier || r.tipo_ruta;
-            tipo_unidad = "Dedicada";
+            tipo_unidad = etiquetaDedicada(r.tipo_ruta);
           } else if (tarFija != null) {
             const isCross = /(half|cross)/i.test(r.tipo_ruta || "");
             const paqOp = (parseInt(r.entregados) || 0) + (isCross ? (parseInt(r.recolecciones) || 0) : 0);

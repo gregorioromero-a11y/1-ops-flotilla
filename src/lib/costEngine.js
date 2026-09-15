@@ -26,6 +26,17 @@ export const TARIFAS_POR_RUTA = {
 };
 export const TIPOS_DEDICADOS = new Set(Object.keys(TARIFAS_POR_RUTA));
 
+// Etiqueta con la que una unidad dedicada aparece como TIPO DE UNIDAD en la
+// prefactura: "Foráneo Veracruz" → "Dedicada Veracruz".
+//
+// Lleva la plaza en el nombre a propósito. La prefactura arma una matriz
+// fecha × tipo de unidad y cobra conteo × precio, así que si Veracruz y Xalapa
+// compartieran la etiqueta "Dedicada" caerían en la misma columna y el día que
+// sus tarifas dejen de ser iguales una de las dos se facturaría mal, en
+// silencio y sin que nada lo delate.
+export const etiquetaDedicada = (tipoRuta) =>
+  "Dedicada " + String(tipoRuta || "").replace(/^For[áa]neo\s+/i, "").trim();
+
 // Tipos donde un operador repetido el mismo día cobra una sola vez. Las
 // dedicadas entran por definición: se paga el día del vehículo, no el viaje.
 export const DEDUP_TIPOS = new Set(["PETCO", "Foráneo Puebla", ...TIPOS_DEDICADOS]);
