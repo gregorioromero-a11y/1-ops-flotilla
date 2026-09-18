@@ -51,6 +51,11 @@ const PALETTE_LIGHT = {
 const C = { ...PALETTE_DARK };
 const applyThemePalette = (name) => {
   Object.assign(C, name === "light" ? PALETTE_LIGHT : PALETTE_DARK);
+  // Los colores de serie tienen su propio juego por tema (ver VIZ más abajo):
+  // no son los de `C`, porque los de `C` no pasan la validación de daltonismo
+  // sobre la superficie oscura. Se cambian aquí para que un solo switch mueva
+  // UI y gráficas a la vez y no puedan quedar desfasados.
+  applyThemeViz(name);
   if (typeof document !== "undefined") document.documentElement.dataset.theme = name;
 };
 const getSavedTheme = () => {
@@ -191,7 +196,9 @@ function StatusBadge({ status }) {
   );
 }
 
-function StatCard({ label, value, subvalue, trend, trendUp, icon, color }) {
+// `spark` y `delta` son OPCIONALES: las llamadas que no los pasan (Unidades,
+// Carriers, Envíos…) se siguen viendo exactamente igual que antes.
+function StatCard({ label, value, subvalue, trend, trendUp, icon, color, spark, sparkColor, delta }) {
   return (
     <div style={{ background: C.panelGrad, borderRadius: 12, padding: "20px 22px", border: `1px solid ${C.border}`, flex: 1, minWidth: 0 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
@@ -200,8 +207,14 @@ function StatCard({ label, value, subvalue, trend, trendUp, icon, color }) {
           {icon}
         </div>
       </div>
-      <div className="font-grotesk" style={{ fontSize: 26, fontWeight: 800, color: C.text, letterSpacing: "-0.02em", lineHeight: 1 }}>{value}</div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 10 }}>
+        {/* Cifra protagonista: figuras proporcionales, no tabulares — a este
+            tamaño las cifras de ancho fijo se ven sueltas. */}
+        <div className="font-grotesk" style={{ fontSize: 26, fontWeight: 800, color: C.text, letterSpacing: "-0.02em", lineHeight: 1, minWidth: 0 }}>{value}</div>
+        {spark && spark.length > 1 && <Sparkline datos={spark} color={sparkColor || color} />}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+        {delta}
         {trend && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 12, fontWeight: 700, color: trendUp ? C.green : C.red }}>
             {trendUp ? <IC.ArrowUp /> : <IC.ArrowDown />} {trend}
@@ -294,6 +307,119 @@ function OpsBar({ data }) {
     </div>
   );
 }
+
+// ============ VISUALIZACIÓN DE DATOS ============
+// Colores de SERIE, separados de la paleta de UI (`C`) a propósito: una serie
+// identifica una MAGNITUD y debe conservar su tono aunque cambie el tema, el
+// filtro o el orden de las filas. Nunca se asignan por ranking.
+//
+// Ambos juegos están validados para daltonismo contra su propia superficie
+// (banda de luminosidad, piso de croma, separación CVD, contraste ≥3:1). Los
+// tonos de `C` NO pasaban en oscuro —C.yellow y C.green quedan fuera de la
+// banda sobre #111A2B—, así que el juego oscuro usa escalones más profundos de
+// los mismos tonos. Si cambias un hex, vuelve a correr el validador.
+const VIZ_DARK = { costo: "#4C8DFF", volumen: "#C98500", entrega: "#0F9E8E", grid: "#22304A", ref: "#8295B2" };
+const VIZ_LIGHT = { costo: "#2563EB", volumen: "#D97706", entrega: "#16A34A", grid: "#E2E6EE", ref: "#7C8495" };
+const VIZ = { ...VIZ_DARK };
+const applyThemeViz = (name) => Object.assign(VIZ, name === "light" ? VIZ_LIGHT : VIZ_DARK);
+
+// Sparkline: línea de 2px sin ejes ni etiquetas. Vive DENTRO de una tarjeta de
+// KPI, donde el número grande ya es la etiqueta — por eso no lleva leyenda ni
+// valores por punto. Sólo comunica la forma de la tendencia.
+function Sparkline({ datos, color, ancho = 108, alto = 30 }) {
+  const vals = (datos || []).filter(v => v != null && !isNaN(v));
+  if (vals.length < 2) return <div style={{ width: ancho, height: alto }} />;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const span = max - min || 1;
+  const px = i => (i / (vals.length - 1)) * (ancho - 2) + 1;
+  const py = v => alto - 2 - ((v - min) / span) * (alto - 5);
+  const d = vals.map((v, i) => `${i ? "L" : "M"} ${px(i).toFixed(1)} ${py(v).toFixed(1)}`).join(" ");
+  const ultX = px(vals.length - 1), ultY = py(vals[vals.length - 1]);
+  return (
+    <svg width={ancho} height={alto} viewBox={`0 0 ${ancho} ${alto}`} aria-hidden="true" style={{ display: "block", overflow: "visible" }}>
+      <path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" opacity={0.85} />
+      {/* Anillo de 2px del color de la superficie: separa el punto final de la
+          línea sin dibujarle un borde encima. */}
+      <circle cx={ultX} cy={ultY} r="3.5" fill={color} stroke={C.panel} strokeWidth="2" />
+    </svg>
+  );
+}
+
+// Delta contra el periodo anterior. `bueno` desacopla DIRECCIÓN de BONDAD:
+//   · "arriba"  — subir es bueno (entregados, % de entrega)
+//   · "abajo"   — subir es malo  (costo POR PAQUETE)
+//   · "neutro"  — subir no es ni bueno ni malo, y pintarlo de rojo mentiría.
+//
+// El costo operativo TOTAL es el caso "neutro" y es el que más se presta al
+// error: sube porque movimos más volumen. Sólo el costo unitario merece juicio.
+//
+// El color nunca va solo: siempre lleva flecha, y el valor previo va en el
+// title para que el número sea recuperable sin depender del tooltip.
+function DeltaBadge({ actual, previo, formato = "pct", bueno = "arriba" }) {
+  if (previo == null || actual == null || !isFinite(previo) || !isFinite(actual) || previo === 0) {
+    return <span style={{ fontSize: 11, color: C.textFaint, fontWeight: 600 }}>sin periodo previo</span>;
+  }
+  const dif = actual - previo;
+  const rel = (dif / Math.abs(previo)) * 100;
+  if (Math.abs(rel) < 0.05) return <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>= sin cambio</span>;
+  const sube = dif > 0;
+  const color = bueno === "neutro" ? C.textMuted : ((bueno === "arriba" ? sube : !sube) ? C.green : C.red);
+  const txt = formato === "pp" ? `${sube ? "+" : ""}${dif.toFixed(1)} pp` : `${sube ? "+" : ""}${rel.toFixed(1)}%`;
+  const prevTxt = formato === "pp" ? previo.toFixed(1) + "%" : previo.toLocaleString("es-MX", { maximumFractionDigits: 2 });
+  return (
+    <span title={`Periodo anterior: ${prevTxt}`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 700, color }}>
+      {sube ? "▲" : "▼"} {txt} <span style={{ color: C.textFaint, fontWeight: 500 }}>vs anterior</span>
+    </span>
+  );
+}
+
+// `tiempo_real` / `tiempo_estimado` vienen como texto libre ("10 hrs 27 min").
+// Devuelve minutos, o null si no hay dato utilizable — null y 0 NO son lo mismo:
+// una ruta sin captura no es una ruta de duración cero, y meterla como 0
+// arrastraría los percentiles hacia abajo.
+const parseDuracionMin = (txt) => {
+  if (!txt) return null;
+  const s = String(txt);
+  const h = s.match(/(\d+)\s*h/i);
+  const m = s.match(/(\d+)\s*m/i);
+  if (!h && !m) return null;
+  const min = (h ? parseInt(h[1], 10) * 60 : 0) + (m ? parseInt(m[1], 10) : 0);
+  return min > 0 ? min : null;
+};
+
+const fmtDuracion = (min) => {
+  if (min == null || !isFinite(min)) return "—";
+  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
+};
+
+// Ventana de comparación: mismo número de días, inmediatamente anterior al
+// periodo activo. Aritmética en UTC a propósito — con horario local, un cambio
+// de horario de verano recorre la ventana un día.
+const ventanaPrevia = (desde, hasta) => {
+  const d0 = new Date(desde + "T00:00:00Z");
+  const h0 = new Date(hasta + "T00:00:00Z");
+  if (isNaN(d0) || isNaN(h0)) return { desde, hasta, dias: 0 };
+  const dias = Math.max(1, Math.round((h0 - d0) / 86400000) + 1);
+  const pHasta = new Date(d0.getTime() - 86400000);
+  const pDesde = new Date(pHasta.getTime() - (dias - 1) * 86400000);
+  const iso = x => x.toISOString().substring(0, 10);
+  return { desde: iso(pDesde), hasta: iso(pHasta), dias };
+};
+
+// Percentil por interpolación lineal sobre un arreglo YA ORDENADO. Es el método
+// que usan R (tipo 7) y numpy por defecto; con muestras chicas el "toma el
+// elemento en la posición p·n" salta escalones y reporta percentiles que no
+// existen en los datos.
+const percentil = (ordenados, p) => {
+  if (!ordenados || ordenados.length === 0) return null;
+  if (ordenados.length === 1) return ordenados[0];
+  const pos = (p / 100) * (ordenados.length - 1);
+  const lo = Math.floor(pos), hi = Math.ceil(pos);
+  if (lo === hi) return ordenados[lo];
+  return ordenados[lo] + (ordenados[hi] - ordenados[lo]) * (pos - lo);
+};
 
 // ============ MODULES ============
 
@@ -485,6 +611,9 @@ function ModuleDashboard() {
   const [preset, setPreset] = useState("mes");
 
   const [rutas, setRutas] = useState([]);
+  // Mismo número de días, inmediatamente antes del periodo activo. Sólo alimenta
+  // los deltas de las tarjetas; nada de lo que se ve en pantalla sale de aquí.
+  const [rutasPrev, setRutasPrev] = useState([]);
   const [carriers, setCarriers] = useState([]);
   const [asistencia, setAsistencia] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -543,38 +672,56 @@ function ModuleDashboard() {
     return Array.from(byId.values());
   };
 
+  // Forma que espera el motor de costos (camelCase, igual que ModuleEnvios)
+  const mapRuta = (r) => ({
+    id: r.id, carrier: r.carrier || "—", operador: r.operador || "Sin nombre",
+    total: r.total || 0, entregados: r.entregados || 0, recolecciones: r.recolecciones || 0,
+    intentados: r.intentados || 0, noVisitados: r.no_visitados || 0,
+    pctEntrega: parseFloat(r.pct_entrega) || 0,
+    salida: r.fecha_salida || r.fecha_registro || "",
+    tipoRuta: r.tipo_ruta || "Última milla", penalizacion: r.penalizacion || "",
+    tipoUnidadOverride: r.tipo_unidad || null,
+    costoUnidadOverride: r.costo_unidad != null ? parseFloat(r.costo_unidad) : null,
+    // Duración real de la ruta en minutos. Viene como texto libre
+    // ("10 hrs 27 min"); se normaliza aquí, una sola vez, para que la
+    // distribución no tenga que re-parsear en cada render.
+    durMin: parseDuracionMin(r.tiempo_real),
+    durEstMin: parseDuracionMin(r.tiempo_estimado),
+  });
+
+  // Las rutas se filtran EN EL SERVIDOR por fecha_salida para no traer las
+  // 7k filas completas en cada cambio de periodo.
+  const traerRutas = async (d, h) => {
+    const byId = new Map();
+    let cursor = null;
+    while (true) {
+      let q = supabase.from("rutas").select("*")
+        .gte("fecha_salida", d)
+        .lte("fecha_salida", h + "T23:59:59")
+        .order("id", { ascending: false }).limit(1000);
+      if (cursor !== null) q = q.lt("id", cursor);
+      const { data: chunk, error: e } = await q;
+      if (e) throw e;
+      if (!chunk || chunk.length === 0) break;
+      for (const row of chunk) byId.set(row.id, row);
+      if (chunk.length < 1000) break;
+      cursor = chunk[chunk.length - 1].id;
+    }
+    return Array.from(byId.values()).map(mapRuta);
+  };
+
   const cargar = async () => {
     setLoading(true); setError("");
     try {
-      // Las rutas se filtran EN EL SERVIDOR por fecha_salida para no traer las
-      // 7k filas completas en cada cambio de periodo.
-      const byId = new Map();
-      let cursor = null;
-      while (true) {
-        let q = supabase.from("rutas").select("*")
-          .gte("fecha_salida", desde)
-          .lte("fecha_salida", hasta + "T23:59:59")
-          .order("id", { ascending: false }).limit(1000);
-        if (cursor !== null) q = q.lt("id", cursor);
-        const { data: chunk, error: e } = await q;
-        if (e) throw e;
-        if (!chunk || chunk.length === 0) break;
-        for (const row of chunk) byId.set(row.id, row);
-        if (chunk.length < 1000) break;
-        cursor = chunk[chunk.length - 1].id;
-      }
-      const rows = Array.from(byId.values());
-      // Forma que espera el motor de costos (camelCase, igual que ModuleEnvios)
-      setRutas(rows.map(r => ({
-        id: r.id, carrier: r.carrier || "—", operador: r.operador || "Sin nombre",
-        total: r.total || 0, entregados: r.entregados || 0, recolecciones: r.recolecciones || 0,
-        intentados: r.intentados || 0, noVisitados: r.no_visitados || 0,
-        pctEntrega: parseFloat(r.pct_entrega) || 0,
-        salida: r.fecha_salida || r.fecha_registro || "",
-        tipoRuta: r.tipo_ruta || "Última milla", penalizacion: r.penalizacion || "",
-        tipoUnidadOverride: r.tipo_unidad || null,
-        costoUnidadOverride: r.costo_unidad != null ? parseFloat(r.costo_unidad) : null,
-      })));
+      // Ventana de comparación: mismo número de días, inmediatamente anterior.
+      // Se trae en paralelo porque alimenta los deltas de las tarjetas de KPI.
+      const { desde: pDesde, hasta: pHasta } = ventanaPrevia(desde, hasta);
+      const [rows, rowsPrev] = await Promise.all([
+        traerRutas(desde, hasta),
+        traerRutas(pDesde, pHasta),
+      ]);
+      setRutas(rows);
+      setRutasPrev(rowsPrev);
       const [asis, cars] = await Promise.all([
         paginarPorId("asistencia"),
         supabase.from("carriers").select("*").then(r => r.data || []),
@@ -742,6 +889,61 @@ function ModuleDashboard() {
       proveedores: filasProveedor.length,
     };
   }, [filasProveedor, rutasScope]);
+
+  // ---------- Serie diaria ----------
+  // Un punto por día, cada uno pasado por el MISMO motor de costos que los KPIs
+  // de arriba. No hay una segunda fórmula de costo que pueda desviarse: si el
+  // motor cambia, la serie cambia con él.
+  //
+  // Cortar por día es SEGURO para el dedup. Sus llaves son
+  // `fecha|operador|tipoRuta`, así que un grupo de dedup nunca cruza la
+  // medianoche y ningún día hereda medio costo. Es la misma propiedad que hace
+  // seguro filtrar por cubeta; cortar por proveedor o por unidad sí lo rompería.
+  const serieDiaria = useMemo(() => {
+    const porDia = new Map();
+    for (const r of rutasScope) {
+      const d = (r.salida || "").substring(0, 10);
+      if (!d) continue;
+      if (!porDia.has(d)) porDia.set(d, []);
+      porDia.get(d).push(r);
+    }
+    return Array.from(porDia.keys()).sort().map(d => {
+      const dia = porDia.get(d);
+      const a = calcularCostos(dia, motor);
+      return {
+        fecha: d,
+        rutas: dia.length,
+        asignados: a.asignadosFinalTotal,
+        entregados: a.entregadosFinalTotal,
+        movidosHM: a.movidosHMTotal,
+        costoTotal: a.costoTotalDiaNuevo,
+        costoFinal: a.costoFinalTotal,
+        pct: a.asignadosFinalTotal > 0 ? (a.entregadosFinalTotal / a.asignadosFinalTotal) * 100 : null,
+        costoPaq: a.entregadosFinalTotal > 0 ? a.costoFinalTotal / a.entregadosFinalTotal : null,
+        costoPaqHM: a.movidosHMTotal > 0 ? a.carrierTotCostoHM / a.movidosHMTotal : null,
+      };
+    });
+  }, [rutasScope, motor]);
+
+  // ---------- Periodo anterior ----------
+  // Sólo alimenta los deltas. Pasa por el mismo motor y por el mismo filtro de
+  // cubeta que el periodo activo: comparar "todas" contra "sólo half mile"
+  // daría un delta sin significado.
+  const kpisPrev = useMemo(() => {
+    const scope = opSel === "todas" ? rutasPrev : rutasPrev.filter(r => bucketDeOperacion(r) === opSel);
+    if (scope.length === 0) return null;
+    const a = calcularCostos(scope, motor);
+    return {
+      entregados: a.entregadosFinalTotal,
+      asignados: a.asignadosFinalTotal,
+      movidosHM: a.movidosHMTotal,
+      costoTotal: a.costoTotalDiaNuevo,
+      rutasHM: scope.filter(r => bucketDeOperacion(r) === "Half mile").length,
+      pct: a.asignadosFinalTotal > 0 ? (a.entregadosFinalTotal / a.asignadosFinalTotal) * 100 : null,
+      costoPaq: a.entregadosFinalTotal > 0 ? a.costoFinalTotal / a.entregadosFinalTotal : null,
+      costoPaqHM: a.movidosHMTotal > 0 ? a.carrierTotCostoHM / a.movidosHMTotal : null,
+    };
+  }, [rutasPrev, opSel, motor]);
 
   // ================= ZONA / MAPA INEGI =================
   useEffect(() => {
@@ -987,37 +1189,53 @@ function ModuleDashboard() {
           <div style={{ display: "flex", gap: 14, marginBottom: 18, flexWrap: "wrap" }}>
             {soloHM ? (
               <StatCard label="Paquetes movidos" value={kpis.movidosHM.toLocaleString("es-MX")}
-                subvalue={`${kpis.rutasHM.toLocaleString("es-MX")} rutas de half mile`} icon={<IC.Package />} color={C.blue} />
+                subvalue={`${kpis.rutasHM.toLocaleString("es-MX")} rutas de half mile`} icon={<IC.Package />} color={C.blue}
+                spark={serieDiaria.map(d => d.movidosHM)} sparkColor={VIZ.volumen}
+                delta={<DeltaBadge actual={kpis.movidosHM} previo={kpisPrev?.movidosHM} bueno="arriba" />} />
             ) : (
               <StatCard label="Paquetes entregados" value={kpis.entregados.toLocaleString("es-MX")}
                 subvalue={`de ${kpis.asignados.toLocaleString("es-MX")} asignados${opSel === "todas" && kpis.movidosHM > 0 ? ` · + ${kpis.movidosHM.toLocaleString("es-MX")} movidos en half mile` : ""}`}
-                icon={<IC.Package />} color={C.blue} />
+                icon={<IC.Package />} color={C.blue}
+                spark={serieDiaria.map(d => d.entregados)} sparkColor={VIZ.volumen}
+                delta={<DeltaBadge actual={kpis.entregados} previo={kpisPrev?.entregados} bueno="arriba" />} />
             )}
 
             {soloHM ? (
               <StatCard label="Costo por paquete movido" value={kpis.costoPaqHM == null ? "—" : "$" + kpis.costoPaqHM.toFixed(2)}
-                subvalue="media milla · no comparable con entrega final" icon={<IC.BarChart />} color={C.blue} />
+                subvalue="media milla · no comparable con entrega final" icon={<IC.BarChart />} color={C.blue}
+                spark={serieDiaria.map(d => d.costoPaqHM)} sparkColor={VIZ.costo}
+                delta={<DeltaBadge actual={kpis.costoPaqHM} previo={kpisPrev?.costoPaqHM} bueno="abajo" />} />
             ) : (
               <StatCard label="% Entrega" value={kpis.pct == null ? "—" : kpis.pct.toFixed(1) + "%"}
                 subvalue={`${kpis.rutasFinal.toLocaleString("es-MX")} rutas de entrega final · ${kpis.dias} días`}
-                icon={<IC.BarChart />} color={kpis.pct == null ? C.textMuted : colorPct(kpis.pct)} />
+                icon={<IC.BarChart />} color={kpis.pct == null ? C.textMuted : colorPct(kpis.pct)}
+                spark={serieDiaria.map(d => d.pct)} sparkColor={VIZ.entrega}
+                delta={<DeltaBadge actual={kpis.pct} previo={kpisPrev?.pct} formato="pp" bueno="arriba" />} />
             )}
 
+            {/* Delta NEUTRO a propósito: el costo total sube porque se movió más
+                volumen. El que sí merece juicio es el costo unitario, abajo. */}
             <StatCard label="Costo operativo" value={money(kpis.costoTotal)}
               subvalue={opSel === "todas" && kpis.costoHM > 0
                 ? `entrega final ${money(kpis.costo)} · half mile ${money(kpis.costoHM)}`
                 : `${kpis.proveedores} proveedores · ${kpis.rutas.toLocaleString("es-MX")} rutas`}
-              icon={<IC.Dollar />} color={C.purple} />
+              icon={<IC.Dollar />} color={C.purple}
+              spark={serieDiaria.map(d => d.costoTotal)} sparkColor={VIZ.costo}
+              delta={<DeltaBadge actual={kpis.costoTotal} previo={kpisPrev?.costoTotal} bueno="neutro" />} />
 
             {soloHM ? (
               <StatCard label="Rutas de half mile" value={kpis.rutasHM.toLocaleString("es-MX")}
-                subvalue={`${kpis.proveedores} proveedores · ${kpis.dias} días`} icon={<IC.Truck />} color={C.accent} />
+                subvalue={`${kpis.proveedores} proveedores · ${kpis.dias} días`} icon={<IC.Truck />} color={C.accent}
+                spark={serieDiaria.map(d => d.rutas)} sparkColor={VIZ.volumen}
+                delta={<DeltaBadge actual={kpis.rutasHM} previo={kpisPrev?.rutasHM} bueno="neutro" />} />
             ) : (
               <StatCard label="Costo por paquete" value={kpis.costoPaq == null ? "—" : "$" + kpis.costoPaq.toFixed(2)}
                 subvalue={opSel === "todas" && kpis.costoHM > 0
                   ? `directo · $${(kpis.costoPaqAllIn || 0).toFixed(2)} all-in con half mile`
                   : `÷ ${kpis.entregados.toLocaleString("es-MX")} entregas`}
-                icon={<IC.Truck />} color={C.accent} />
+                icon={<IC.Truck />} color={C.accent}
+                spark={serieDiaria.map(d => d.costoPaq)} sparkColor={VIZ.costo}
+                delta={<DeltaBadge actual={kpis.costoPaq} previo={kpisPrev?.costoPaq} bueno="abajo" />} />
             )}
           </div>
 
