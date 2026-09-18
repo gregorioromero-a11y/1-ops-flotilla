@@ -374,6 +374,261 @@ function DeltaBadge({ actual, previo, formato = "pct", bueno = "arriba" }) {
   );
 }
 
+// ---------- Gráfica de líneas comparadas ----------
+// Tres medidas de escalas distintas (pesos, paquetes, porcentaje) en UN plano.
+//
+// La razón de indexar: dibujar pesos y porcentaje sobre el mismo eje obliga a
+// inventar una alineación entre escalas, y esa alineación arbitraria FABRICA
+// correlaciones que no están en los datos — el mismo par de series puede
+// parecer que se sigue o que se opone según dónde pongas cada eje. Indexar
+// resuelve el problema de raíz: todas las series se expresan como cambio
+// relativo contra su propia base, así que comparten un eje real y la forma que
+// ves es la única que existe.
+//
+// Base = PROMEDIO del periodo, no el primer día. Con 13 días donde un sábado
+// trae 2 rutas, anclar en el día 1 haría que un día atípico deformara todo lo
+// demás. Contra el promedio, 100 significa "tu día normal" y la lectura es
+// directa: arriba de la línea fue mejor que lo normal, abajo fue peor.
+//
+// Los valores en unidades nativas ($53.85, 8,216) no se pierden: viven en el
+// cursor y al final de cada línea. El índice es para comparar formas; los
+// números para leer magnitudes.
+function GraficaComparada({ datos, series, alto = 380, formatoX }) {
+  const contRef = useRef(null);
+  const [ancho, setAncho] = useState(900);
+  const [hover, setHover] = useState(null);
+  const [verTabla, setVerTabla] = useState(false);
+
+  // Mide el contenedor en píxeles reales en vez de escalar el SVG con viewBox:
+  // escalarlo estiraría también el texto, y las etiquetas saldrían enormes en
+  // una pantalla ancha y diminutas en uno angosta.
+  useEffect(() => {
+    if (!contRef.current || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect?.width;
+      if (w && w > 0) setAncho(w);
+    });
+    ro.observe(contRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // left generoso: las etiquetas del eje son "½× normal", "promedio", no cifras
+  const M = { top: 18, right: 132, bottom: 38, left: 78 };
+  const W = Math.max(320, ancho);
+  const pw = Math.max(80, W - M.left - M.right);
+  const ph = Math.max(80, alto - M.top - M.bottom);
+
+  // Índice por serie: 100 = promedio del periodo de ESA serie.
+  const idx = useMemo(() => {
+    return series.map(s => {
+      const crudos = datos.map(d => { const v = s.valor(d); return v == null || !isFinite(v) ? null : v; });
+      const validos = crudos.filter(v => v != null);
+      const base = validos.length ? validos.reduce((a, b) => a + b, 0) / validos.length : null;
+      return {
+        ...s,
+        crudos,
+        base,
+        // base 0 (o sin datos) no admite índice: se marca nulo y la línea no se dibuja
+        puntos: crudos.map(v => (v == null || !base ? null : (v / base) * 100)),
+      };
+    });
+  }, [datos, series]);
+
+  const todos = idx.flatMap(s => s.puntos).filter(v => v != null);
+  if (datos.length < 2 || todos.length === 0) {
+    return <div style={{ padding: 28, textAlign: "center", color: C.textMuted, fontSize: 13 }}>
+      Se necesitan al menos 2 días con datos para dibujar la tendencia.
+    </div>;
+  }
+  // Eje LINEAL con dominio de mínimo a máximo, no simétrico alrededor de 100.
+  //
+  // Se probó el logarítmico —que parecería lo natural para un índice, porque
+  // iguala ×2 con ÷2— y MIDIÓ PEOR con estos datos: los domingos caen a ~2% del
+  // volumen normal, log expande justamente la zona baja del eje, y esos dos días
+  // vacíos acaban quedándose con el espacio que necesita la serie de % de
+  // entrega. Medido sobre el periodo real, la banda legible de %entrega pasa de
+  // 12.8% del alto en lineal a 6.6% en log. Si algún día cambia la forma de la
+  // operación, vale la pena volver a medirlo antes de cambiar la escala.
+  //
+  // Piso en 0 porque un índice no puede ser negativo, y recortar ahí le devuelve
+  // al gráfico el espacio que un margen negativo desperdiciaría.
+  const lo = Math.min(...todos), hi = Math.max(...todos);
+  const pad = Math.max((hi - lo) * 0.1, 6);
+  const yMin = Math.max(0, lo - pad), yMax = hi + pad;
+
+  const px = i => M.left + (datos.length === 1 ? pw / 2 : (i / (datos.length - 1)) * pw);
+  const py = v => M.top + ph - ((v - yMin) / (yMax - yMin)) * ph;
+
+  const pathDe = (puntos) => {
+    // Corta el trazo en los huecos en vez de unir por encima: una línea recta
+    // sobre un día sin dato inventaría una transición que nunca ocurrió.
+    let d = "", abierto = false;
+    puntos.forEach((v, i) => {
+      if (v == null) { abierto = false; return; }
+      d += `${abierto ? "L" : "M"} ${px(i).toFixed(1)} ${py(v).toFixed(1)} `;
+      abierto = true;
+    });
+    return d.trim();
+  };
+
+  // Etiquetas al final de cada línea, separadas si se encimarían.
+  const finales = idx.map(s => {
+    let ult = -1;
+    for (let i = s.puntos.length - 1; i >= 0; i--) if (s.puntos[i] != null) { ult = i; break; }
+    return ult < 0 ? null : { s, i: ult, y: py(s.puntos[ult]) };
+  }).filter(Boolean).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < finales.length; i++) {
+    if (finales[i].y - finales[i - 1].y < 30) finales[i].y = finales[i - 1].y + 30;
+  }
+
+  // Rejilla en múltiplos del promedio, no en números redondos del índice:
+  // "la mitad de un día normal" se lee sin tener que traducir un 50.
+  const MULTIPLOS = [0.25, 0.5, 1, 1.5, 2, 3, 4];
+  const gridVals = MULTIPLOS.map(m => m * 100).filter(v => v >= yMin && v <= yMax);
+  const etiquetaMult = (v) => {
+    const m = v / 100;
+    if (m === 1) return "promedio";
+    return `${m === 0.5 ? "½" : m === 0.25 ? "¼" : m}×`;
+  };
+
+  const alMover = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - r.left - M.left;
+    const i = Math.round((x / pw) * (datos.length - 1));
+    setHover(i >= 0 && i < datos.length ? i : null);
+  };
+
+  return (
+    <div ref={contRef} style={{ position: "relative", width: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 6 }}>
+        {/* Leyenda: siempre presente con 2+ series, para que la identidad nunca
+            dependa sólo del color. */}
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          {idx.map(s => (
+            <span key={s.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: C.textMuted }}>
+              <span style={{ width: 14, height: 3, borderRadius: 2, backgroundColor: s.color, display: "inline-block" }} />
+              {s.label}
+              <strong style={{ color: C.text, fontWeight: 700 }}>
+                {s.base == null ? "—" : `prom. ${s.fmt(s.base)}`}
+              </strong>
+            </span>
+          ))}
+        </div>
+        <button onClick={() => setVerTabla(v => !v)}
+          style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+          {verTabla ? "Ver gráfica" : "Ver tabla"}
+        </button>
+      </div>
+
+      {verTabla ? (
+        <div style={{ overflowX: "auto", maxHeight: alto, overflowY: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr style={{ position: "sticky", top: 0, backgroundColor: C.panel }}>
+              <th style={{ textAlign: "left", padding: "7px 10px", color: C.textMuted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>DÍA</th>
+              {idx.map(s => <th key={s.id} style={{ textAlign: "right", padding: "7px 10px", color: C.textMuted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{s.label.toUpperCase()}</th>)}
+            </tr></thead>
+            <tbody>
+              {datos.map((d, i) => (
+                <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{formatoX ? formatoX(d, i) : i}</td>
+                  {idx.map(s => (
+                    <td key={s.id} style={{ padding: "6px 10px", textAlign: "right", color: C.text, fontVariantNumeric: "tabular-nums" }}>
+                      {s.crudos[i] == null ? "—" : s.fmt(s.crudos[i])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <svg width={W} height={alto} style={{ display: "block", cursor: "crosshair" }}
+          onMouseMove={alMover} onMouseLeave={() => setHover(null)}>
+          {/* Rejilla: hairlines sólidas, un tono sobre la superficie. Nunca
+              punteadas — el punteado se lee como "proyección" o "umbral". */}
+          {gridVals.map((v, i) => (
+            <g key={i}>
+              <line x1={M.left} x2={M.left + pw} y1={py(v)} y2={py(v)}
+                stroke={v === 100 ? VIZ.ref : VIZ.grid} strokeWidth={v === 100 ? 1.5 : 1} opacity={v === 100 ? 0.75 : 1} />
+              <text x={M.left - 8} y={py(v) + 4} textAnchor="end"
+                style={{ fontSize: 10, fill: v === 100 ? C.textMuted : C.textFaint, fontWeight: v === 100 ? 700 : 400 }}>
+                {etiquetaMult(v)}
+              </text>
+            </g>
+          ))}
+
+          {/* Crosshair bajo las líneas para no taparlas */}
+          {hover != null && (
+            <line x1={px(hover)} x2={px(hover)} y1={M.top} y2={M.top + ph} stroke={C.textFaint} strokeWidth="1" opacity="0.5" />
+          )}
+
+          {idx.map(s => (
+            <path key={s.id} d={pathDe(s.puntos)} fill="none" stroke={s.color}
+              strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+          ))}
+
+          {/* Marcadores del día bajo el cursor. Anillo de 2px del color de la
+              superficie para separarlos cuando las líneas se cruzan. */}
+          {hover != null && idx.map(s => s.puntos[hover] == null ? null : (
+            <circle key={s.id} cx={px(hover)} cy={py(s.puntos[hover])} r="5"
+              fill={s.color} stroke={C.panel} strokeWidth="2" />
+          ))}
+
+          {/* Etiqueta directa al final de cada línea, en unidades NATIVAS */}
+          {finales.map(({ s, i, y }) => (
+            <g key={s.id}>
+              <line x1={px(i) + 4} x2={M.left + pw + 10} y1={py(s.puntos[i])} y2={y}
+                stroke={s.color} strokeWidth="1" opacity="0.35" />
+              <text x={M.left + pw + 14} y={y + 3} style={{ fontSize: 11, fill: s.color, fontWeight: 700 }}>
+                {s.fmt(s.crudos[i])}
+              </text>
+              <text x={M.left + pw + 14} y={y + 15} style={{ fontSize: 9, fill: C.textFaint }}>{s.corto}</text>
+            </g>
+          ))}
+
+          {/* Eje X: se diluyen las etiquetas para que nunca se encimen */}
+          {datos.map((d, i) => {
+            const paso = Math.ceil(datos.length / Math.max(2, Math.floor(pw / 62)));
+            if (i % paso !== 0 && i !== datos.length - 1) return null;
+            return (
+              <text key={i} x={px(i)} y={M.top + ph + 20} textAnchor="middle"
+                style={{ fontSize: 10, fill: hover === i ? C.text : C.textFaint, fontWeight: hover === i ? 700 : 400 }}>
+                {formatoX ? formatoX(d, i) : i}
+              </text>
+            );
+          })}
+        </svg>
+      )}
+
+      {/* Tooltip: enriquece, nunca es la única vía al dato — los mismos valores
+          están en las etiquetas de la derecha y en la vista de tabla. */}
+      {!verTabla && hover != null && (
+        <div style={{
+          position: "absolute", left: Math.min(Math.max(px(hover) + 14, 8), Math.max(8, W - 210)), top: M.top + 6,
+          backgroundColor: C.panelAlt, border: `1px solid ${C.border}`, borderRadius: 8,
+          padding: "9px 12px", pointerEvents: "none", minWidth: 172, boxShadow: "0 6px 20px rgba(0,0,0,0.28)", zIndex: 5,
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: C.text, marginBottom: 6 }}>
+            {formatoX ? formatoX(datos[hover], hover, true) : hover}
+          </div>
+          {idx.map(s => (
+            <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 3 }}>
+              <span style={{ width: 9, height: 3, borderRadius: 2, backgroundColor: s.color }} />
+              <span style={{ fontSize: 11, color: C.textMuted, flex: 1 }}>{s.corto}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>
+                {s.crudos[hover] == null ? "—" : s.fmt(s.crudos[hover])}
+              </span>
+              <span style={{ fontSize: 10, color: s.puntos[hover] == null ? C.textFaint : (s.puntos[hover] >= 100 ? C.green : C.red), fontWeight: 700, width: 42, textAlign: "right" }}>
+                {s.puntos[hover] == null ? "" : `${s.puntos[hover] >= 100 ? "+" : ""}${(s.puntos[hover] - 100).toFixed(0)}%`}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // `tiempo_real` / `tiempo_estimado` vienen como texto libre ("10 hrs 27 min").
 // Devuelve minutos, o null si no hay dato utilizable — null y 0 NO son lo mismo:
 // una ruta sin captura no es una ruta de duración cero, y meterla como 0
@@ -1255,6 +1510,50 @@ function ModuleDashboard() {
               )}
             </div>
           )}
+
+          {/* ---------- Tendencia comparada ---------- */}
+          <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                  Costo · Volumen · Efectividad
+                </div>
+                <div style={{ fontSize: 11, color: C.textMuted, maxWidth: 700, lineHeight: 1.5 }}>
+                  Las tres comparten un solo eje porque cada una se mide contra <b>su propio promedio del periodo</b>:
+                  la línea marcada <b>promedio</b> es el día normal de cada serie, y lo demás son múltiplos de ese día.
+                  Así se ve si el costo por paquete se dispara los días de mucho volumen, o si la efectividad se cae
+                  cuando la carga sube. Pasa el cursor para leer los valores reales en pesos y paquetes.
+                </div>
+              </div>
+              <span style={{ fontSize: 11, color: C.textMuted }}>{serieDiaria.length} días con operación</span>
+            </div>
+            <GraficaComparada
+              datos={serieDiaria}
+              alto={400}
+              formatoX={(d, i, largo) => {
+                const [a, m, dd] = (d.fecha || "").split("-");
+                if (!dd) return d.fecha || "";
+                const DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+                const dia = DIAS[new Date(d.fecha + "T12:00:00Z").getUTCDay()] || "";
+                return largo ? `${dia} ${dd}/${m}/${a}` : `${dd}/${m}`;
+              }}
+              series={soloHM ? [
+                { id: "costoHM", label: "Costo por paquete movido", corto: "$ / movido", color: VIZ.costo,
+                  valor: d => d.costoPaqHM, fmt: v => "$" + v.toFixed(2) },
+                { id: "volHM", label: "Paquetes movidos", corto: "Movidos", color: VIZ.volumen,
+                  valor: d => d.movidosHM, fmt: v => Math.round(v).toLocaleString("es-MX") },
+                { id: "rutasHM", label: "Rutas", corto: "Rutas", color: VIZ.entrega,
+                  valor: d => d.rutas, fmt: v => Math.round(v).toLocaleString("es-MX") },
+              ] : [
+                { id: "costo", label: "Costo por paquete", corto: "$ / paq", color: VIZ.costo,
+                  valor: d => d.costoPaq, fmt: v => "$" + v.toFixed(2) },
+                { id: "vol", label: "Paquetes entregados", corto: "Entregados", color: VIZ.volumen,
+                  valor: d => d.entregados, fmt: v => Math.round(v).toLocaleString("es-MX") },
+                { id: "pct", label: "% Entrega", corto: "% Entrega", color: VIZ.entrega,
+                  valor: d => d.pct, fmt: v => v.toFixed(1) + "%" },
+              ]}
+            />
+          </div>
 
           {/* ---------- Composición del periodo (y control del filtro) ---------- */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
