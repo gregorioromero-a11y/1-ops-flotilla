@@ -649,6 +649,238 @@ function GraficaComparada({ datos, series, alto = 380, formatoX }) {
   );
 }
 
+// ---------- Dispersión con cuadrantes (frontera de eficiencia) ----------
+// Responde "¿a quién le pago caro y además me entrega mal?", que una tabla
+// ordenada por costo no puede contestar: ordenar por una columna esconde la
+// relación con la otra.
+//
+// TODOS los puntos van del MISMO color, a propósito. Con ~10 proveedores no
+// alcanzan los tonos: para dispersión sólo tres slots pasan la validación de
+// daltonismo contra todos los pares, y más allá de eso hay pares que se vuelven
+// indistinguibles. La identidad la cargan las etiquetas, que además se leen sin
+// ir y venir a una leyenda.
+//
+// El cuadrante tampoco se codifica en el color del punto: sería repetir en el
+// tono lo que la posición ya dice, y gastar el único canal libre en información
+// duplicada. Los cuadrantes viven en las líneas de referencia y el tinte.
+//
+// El ÁREA de la burbuja es proporcional al volumen —no el radio—, porque el ojo
+// compara áreas: escalar el radio exagera las diferencias al cuadrado.
+function GraficaDispersion({ puntos, ejeX, ejeY, refX, refY, alto = 420, etiquetaTam }) {
+  const contRef = useRef(null);
+  const [ancho, setAncho] = useState(900);
+  const [hover, setHover] = useState(null);
+  const [verTabla, setVerTabla] = useState(false);
+
+  useEffect(() => {
+    if (!contRef.current || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(e => { const w = e[0]?.contentRect?.width; if (w > 0) setAncho(w); });
+    ro.observe(contRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const M = { top: 24, right: 26, bottom: 48, left: 68 };
+  const W = Math.max(320, ancho);
+  const pw = Math.max(80, W - M.left - M.right);
+  const ph = Math.max(80, alto - M.top - M.bottom);
+
+  const vis = (puntos || []).filter(p => p.x != null && p.y != null && isFinite(p.x) && isFinite(p.y));
+  const escalas = useMemo(() => {
+    if (vis.length === 0) return null;
+    const xs = vis.map(p => p.x).concat(refX ?? []), ys = vis.map(p => p.y).concat(refY ?? []);
+    const padX = Math.max((Math.max(...xs) - Math.min(...xs)) * 0.14, 0.6);
+    const padY = Math.max((Math.max(...ys) - Math.min(...ys)) * 0.16, 0.6);
+    return {
+      x0: Math.min(...xs) - padX, x1: Math.max(...xs) + padX,
+      y0: Math.min(...ys) - padY, y1: Math.max(...ys) + padY,
+      tamMax: Math.max(...vis.map(p => p.tam || 0), 1),
+    };
+  }, [vis, refX, refY]);
+
+  if (!escalas || vis.length === 0) {
+    return <div style={{ padding: 28, textAlign: "center", color: C.textMuted, fontSize: 13 }}>
+      Sin datos suficientes para la dispersión en este periodo.
+    </div>;
+  }
+
+  const px = v => M.left + ((v - escalas.x0) / (escalas.x1 - escalas.x0)) * pw;
+  const py = v => M.top + ph - ((v - escalas.y0) / (escalas.y1 - escalas.y0)) * ph;
+  // Área ∝ volumen  ⇒  radio ∝ √volumen. Mínimo 7px para que el punto siga
+  // siendo clickeable aunque el proveedor sea diminuto.
+  const pr = t => 7 + Math.sqrt(Math.max(t, 0) / escalas.tamMax) * 22;
+
+  const rx = refX != null ? px(refX) : null;
+  const ry = refY != null ? py(refY) : null;
+
+  // Etiquetas: a la derecha del punto, empujadas en vertical si se encimarían.
+  const etiquetas = vis.map(p => ({ p, y: py(p.y), x: px(p.x) + pr(p.tam) + 5 }))
+    .sort((a, b) => a.y - b.y);
+  for (let i = 1; i < etiquetas.length; i++) {
+    if (etiquetas[i].y - etiquetas[i - 1].y < 13) etiquetas[i].y = etiquetas[i - 1].y + 13;
+  }
+
+  const alMover = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    let mejor = null, dMin = Infinity;
+    vis.forEach(p => {
+      const d = Math.hypot(px(p.x) - mx, py(p.y) - my);
+      // Umbral generoso: el área sensible pasa del tamaño del punto para que no
+      // haya que atinarle al centro de una burbuja de 8px.
+      if (d < dMin && d < Math.max(pr(p.tam) + 16, 26)) { dMin = d; mejor = p; }
+    });
+    setHover(mejor);
+  };
+
+  const enCuadranteBueno = p =>
+    (ejeX.buenoAlta ? p.x >= refX : p.x <= refX) && (ejeY.buenoAlta ? p.y >= refY : p.y <= refY);
+  const enCuadranteMalo = p =>
+    (ejeX.buenoAlta ? p.x < refX : p.x > refX) && (ejeY.buenoAlta ? p.y < refY : p.y > refY);
+
+  const malos = vis.filter(enCuadranteMalo);
+
+  return (
+    <div ref={contRef} style={{ position: "relative", width: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", fontSize: 11, color: C.textMuted }}>
+          {/* Leyenda de tamaño: el área codifica volumen y sin esto no se puede leer */}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <svg width="44" height="20" aria-hidden="true">
+              <circle cx="8" cy="12" r="4" fill={VIZ.costo} opacity="0.45" />
+              <circle cx="26" cy="11" r="8" fill={VIZ.costo} opacity="0.45" />
+            </svg>
+            {etiquetaTam || "tamaño = volumen"}
+          </span>
+          {malos.length > 0 && (
+            <span style={{ color: C.red, fontWeight: 700 }}>
+              {malos.length} proveedor{malos.length !== 1 ? "es" : ""} en el cuadrante crítico
+            </span>
+          )}
+        </div>
+        <button onClick={() => setVerTabla(v => !v)}
+          style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+          {verTabla ? "Ver gráfica" : "Ver tabla"}
+        </button>
+      </div>
+
+      {verTabla ? (
+        <div style={{ overflowX: "auto", maxHeight: alto, overflowY: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr style={{ position: "sticky", top: 0, backgroundColor: C.panel }}>
+              {["PROVEEDOR", ejeX.label.toUpperCase(), ejeY.label.toUpperCase(), (etiquetaTam || "VOLUMEN").toUpperCase(), "CUADRANTE"].map((h, i) => (
+                <th key={h} style={{ textAlign: i === 0 ? "left" : "right", padding: "7px 10px", color: C.textMuted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {[...vis].sort((a, b) => (b.tam || 0) - (a.tam || 0)).map(p => (
+                <tr key={p.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{p.label}</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", color: C.text, fontVariantNumeric: "tabular-nums" }}>{ejeX.fmt(p.x)}</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", color: C.text, fontVariantNumeric: "tabular-nums" }}>{ejeY.fmt(p.y)}</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", color: C.textMuted, fontVariantNumeric: "tabular-nums" }}>{(p.tam || 0).toLocaleString("es-MX")}</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700, color: enCuadranteMalo(p) ? C.red : enCuadranteBueno(p) ? C.green : C.textMuted }}>
+                    {enCuadranteMalo(p) ? "crítico" : enCuadranteBueno(p) ? "bueno" : "mixto"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <svg width={W} height={alto} style={{ display: "block" }} onMouseMove={alMover} onMouseLeave={() => setHover(null)}>
+          {/* Tinte suavísimo del cuadrante crítico. Es orientación, no dato:
+              por eso queda casi imperceptible y nunca compite con los puntos. */}
+          {rx != null && ry != null && (
+            <rect
+              x={ejeX.buenoAlta ? M.left : rx} y={ejeY.buenoAlta ? ry : M.top}
+              width={Math.max(0, ejeX.buenoAlta ? rx - M.left : M.left + pw - rx)}
+              height={Math.max(0, ejeY.buenoAlta ? M.top + ph - ry : ry - M.top)}
+              fill={C.red} opacity="0.045" />
+          )}
+
+          {/* Líneas de referencia = promedios ponderados de la operación */}
+          {rx != null && <line x1={rx} x2={rx} y1={M.top} y2={M.top + ph} stroke={VIZ.ref} strokeWidth="1.5" opacity="0.6" />}
+          {ry != null && <line x1={M.left} x2={M.left + pw} y1={ry} y2={ry} stroke={VIZ.ref} strokeWidth="1.5" opacity="0.6" />}
+          {rx != null && <text x={rx + 5} y={M.top + 11} style={{ fontSize: 9, fill: C.textFaint, fontWeight: 700 }}>media {ejeX.fmt(refX)}</text>}
+          {ry != null && <text x={M.left + 5} y={ry - 5} style={{ fontSize: 9, fill: C.textFaint, fontWeight: 700 }}>media {ejeY.fmt(refY)}</text>}
+
+          {/* Rótulos de cuadrante en las esquinas */}
+          {rx != null && ry != null && (
+            <>
+              <text x={ejeX.buenoAlta ? M.left + 6 : M.left + pw - 6} y={ejeY.buenoAlta ? M.top + ph - 8 : M.top + 14}
+                textAnchor={ejeX.buenoAlta ? "start" : "end"} style={{ fontSize: 10, fill: C.red, fontWeight: 800, opacity: 0.75 }}>
+                CARO Y CON BAJA ENTREGA
+              </text>
+              <text x={ejeX.buenoAlta ? M.left + pw - 6 : M.left + 6} y={ejeY.buenoAlta ? M.top + 14 : M.top + ph - 8}
+                textAnchor={ejeX.buenoAlta ? "end" : "start"} style={{ fontSize: 10, fill: C.green, fontWeight: 800, opacity: 0.75 }}>
+                BARATO Y CUMPLIENDO
+              </text>
+            </>
+          )}
+
+          {/* Burbujas. Anillo de 2px del color de la superficie para separarlas
+              donde se traslapan, en vez de dibujarles un borde. */}
+          {vis.map(p => {
+            const act = hover && hover.id === p.id;
+            return (
+              <circle key={p.id} cx={px(p.x)} cy={py(p.y)} r={pr(p.tam)}
+                fill={VIZ.costo} fillOpacity={act ? 0.5 : 0.28}
+                stroke={act ? VIZ.costo : C.panel} strokeWidth="2" />
+            );
+          })}
+
+          {etiquetas.map(({ p, x, y }) => (
+            <text key={p.id} x={x} y={y + 3} style={{
+              fontSize: 10, fill: hover && hover.id === p.id ? C.text : C.textMuted,
+              fontWeight: hover && hover.id === p.id ? 800 : 600, pointerEvents: "none",
+            }}>{p.label}</text>
+          ))}
+
+          {/* Ejes: hairlines sólidas, nunca punteadas */}
+          <line x1={M.left} x2={M.left + pw} y1={M.top + ph} y2={M.top + ph} stroke={VIZ.grid} strokeWidth="1" />
+          <line x1={M.left} x2={M.left} y1={M.top} y2={M.top + ph} stroke={VIZ.grid} strokeWidth="1" />
+          {[0, 0.5, 1].map(f => {
+            const vx = escalas.x0 + (escalas.x1 - escalas.x0) * f;
+            const vy = escalas.y0 + (escalas.y1 - escalas.y0) * f;
+            return (
+              <g key={f}>
+                <text x={M.left + pw * f} y={M.top + ph + 17} textAnchor="middle" style={{ fontSize: 10, fill: C.textFaint }}>{ejeX.fmt(vx)}</text>
+                <text x={M.left - 8} y={M.top + ph - ph * f + 4} textAnchor="end" style={{ fontSize: 10, fill: C.textFaint }}>{ejeY.fmt(vy)}</text>
+              </g>
+            );
+          })}
+          <text x={M.left + pw / 2} y={alto - 8} textAnchor="middle" style={{ fontSize: 11, fill: C.textMuted, fontWeight: 700 }}>
+            {ejeX.label} →  mejor
+          </text>
+          <text x={14} y={M.top + ph / 2} textAnchor="middle" transform={`rotate(-90 14 ${M.top + ph / 2})`} style={{ fontSize: 11, fill: C.textMuted, fontWeight: 700 }}>
+            ← mejor  {ejeY.label}
+          </text>
+        </svg>
+      )}
+
+      {!verTabla && hover && (
+        <div style={{
+          position: "absolute", left: Math.min(Math.max(px(hover.x) + 16, 8), Math.max(8, W - 220)),
+          top: Math.max(8, py(hover.y) - 46),
+          backgroundColor: C.panelAlt, border: `1px solid ${C.border}`, borderRadius: 8,
+          padding: "9px 12px", pointerEvents: "none", minWidth: 186, boxShadow: "0 6px 20px rgba(0,0,0,0.28)", zIndex: 5,
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: C.text, marginBottom: 5 }}>{hover.label}</div>
+          {[[ejeY.label, ejeY.fmt(hover.y)], [ejeX.label, ejeX.fmt(hover.x)], [etiquetaTam || "Volumen", (hover.tam || 0).toLocaleString("es-MX")], ...(hover.extra || [])].map(([k, v]) => (
+            <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 14, marginTop: 2 }}>
+              <span style={{ fontSize: 11, color: C.textMuted }}>{k}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>{v}</span>
+            </div>
+          ))}
+          <div style={{ marginTop: 6, fontSize: 10, fontWeight: 800, color: enCuadranteMalo(hover) ? C.red : enCuadranteBueno(hover) ? C.green : C.textMuted }}>
+            {enCuadranteMalo(hover) ? "▲ cuadrante crítico" : enCuadranteBueno(hover) ? "✓ barato y cumpliendo" : "· mixto"}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // `tiempo_real` / `tiempo_estimado` vienen como texto libre ("10 hrs 27 min").
 // Devuelve minutos, o null si no hay dato utilizable — null y 0 NO son lo mismo:
 // una ruta sin captura no es una ruta de duración cero, y meterla como 0
@@ -1628,6 +1860,47 @@ function ModuleDashboard() {
               )}
             </div>
           </div>
+
+          {/* ---------- Frontera de eficiencia ----------
+              Half mile queda fuera a propósito: no tiene % de entrega —es
+              movimiento intermedio, no entrega al cliente— así que uno de los
+              dos ejes no existe para esa cubeta. */}
+          {!soloHM && filasProveedor.length >= 2 && (
+            <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                    Frontera de eficiencia por proveedor
+                  </div>
+                  <div style={{ fontSize: 11, color: C.textMuted, maxWidth: 700, lineHeight: 1.5 }}>
+                    Cada burbuja es un proveedor; su tamaño, el volumen que te entrega. Las líneas son
+                    los <b>promedios ponderados</b> de toda la operación, los mismos de las tarjetas de arriba.
+                    Abajo a la derecha es donde quieres a todos: barato y cumpliendo. La esquina opuesta
+                    es la que cuesta dinero dos veces.
+                  </div>
+                </div>
+              </div>
+              <GraficaDispersion
+                alto={430}
+                etiquetaTam="paquetes entregados"
+                refX={kpis.pct}
+                refY={kpis.costoPaq}
+                ejeX={{ label: "% Entrega", fmt: v => v.toFixed(1) + "%", buenoAlta: true }}
+                ejeY={{ label: "Costo por paquete", fmt: v => "$" + v.toFixed(2), buenoAlta: false }}
+                puntos={filasProveedor
+                  .filter(f => f.pctEntrega != null && f.costoPaq != null && f.entregados > 0)
+                  .map(f => ({
+                    id: f.key, label: f.carrier,
+                    x: f.pctEntrega, y: f.costoPaq, tam: f.entregados,
+                    extra: [
+                      ["Rutas", f.rutasFinal.toLocaleString("es-MX")],
+                      ["Asignados", f.asignados.toLocaleString("es-MX")],
+                      ["Costo", money(f.costo)],
+                    ],
+                  }))}
+              />
+            </div>
+          )}
 
           {/* ---------- Proveedores ----------
               Dos GRUPOS de columnas que jamás se suman entre sí: "Entrega final"
