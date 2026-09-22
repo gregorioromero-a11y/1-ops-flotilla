@@ -345,6 +345,21 @@ function Sparkline({ datos, color, ancho = 108, alto = 30 }) {
   );
 }
 
+// REGLA ÚNICA de "¿este cambio es bueno?". Vive en un solo lugar a propósito:
+// esta lógica ya estuvo duplicada entre las tarjetas de KPI y el tooltip de la
+// gráfica, y las dos copias se contradijeron — el tooltip pintaba de ROJO una
+// BAJADA de costo por asumir que subir siempre es bueno. Cualquier cosa que
+// juzgue un cambio debe pasar por aquí.
+//
+//   "arriba" — subir es bueno (entregados, % de entrega)
+//   "abajo"  — subir es malo  (costo por paquete)
+//   "neutro" — no admite juicio (costo total: sube porque hubo más volumen)
+const colorDeCambio = (dif, bueno) => {
+  if (dif == null || !isFinite(dif) || Math.abs(dif) < 1e-9) return C.textMuted;
+  if (bueno === "neutro") return C.textMuted;
+  return (bueno === "abajo" ? dif < 0 : dif > 0) ? C.green : C.red;
+};
+
 // Delta contra el periodo anterior. `bueno` desacopla DIRECCIÓN de BONDAD:
 //   · "arriba"  — subir es bueno (entregados, % de entrega)
 //   · "abajo"   — subir es malo  (costo POR PAQUETE)
@@ -363,7 +378,7 @@ function DeltaBadge({ actual, previo, formato = "pct", bueno = "arriba" }) {
   const rel = (dif / Math.abs(previo)) * 100;
   if (Math.abs(rel) < 0.05) return <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>= sin cambio</span>;
   const sube = dif > 0;
-  const color = bueno === "neutro" ? C.textMuted : ((bueno === "arriba" ? sube : !sube) ? C.green : C.red);
+  const color = colorDeCambio(dif, bueno);
   const txt = formato === "pp" ? `${sube ? "+" : ""}${dif.toFixed(1)} pp` : `${sube ? "+" : ""}${rel.toFixed(1)}%`;
   const prevTxt = formato === "pp" ? previo.toFixed(1) + "%" : previo.toLocaleString("es-MX", { maximumFractionDigits: 2 });
   return (
@@ -618,7 +633,12 @@ function GraficaComparada({ datos, series, alto = 380, formatoX }) {
               <span style={{ fontSize: 11, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>
                 {s.crudos[hover] == null ? "—" : s.fmt(s.crudos[hover])}
               </span>
-              <span style={{ fontSize: 10, color: s.puntos[hover] == null ? C.textFaint : (s.puntos[hover] >= 100 ? C.green : C.red), fontWeight: 700, width: 42, textAlign: "right" }}>
+              {/* El color juzga el cambio según la métrica, no según el signo:
+                  bajar el costo por paquete es BUENO y va en verde. */}
+              <span style={{
+                fontSize: 10, fontWeight: 700, width: 42, textAlign: "right",
+                color: s.puntos[hover] == null ? C.textFaint : colorDeCambio(s.puntos[hover] - 100, s.bueno || "neutro"),
+              }}>
                 {s.puntos[hover] == null ? "" : `${s.puntos[hover] >= 100 ? "+" : ""}${(s.puntos[hover] - 100).toFixed(0)}%`}
               </span>
             </div>
@@ -1537,19 +1557,22 @@ function ModuleDashboard() {
                 const dia = DIAS[new Date(d.fecha + "T12:00:00Z").getUTCDay()] || "";
                 return largo ? `${dia} ${dd}/${m}/${a}` : `${dd}/${m}`;
               }}
+              // `bueno` define qué dirección merece verde en el tooltip. Bajar el
+              // costo por paquete es bueno; las rutas son sólo capacidad usada y
+              // no admiten juicio por sí solas.
               series={soloHM ? [
-                { id: "costoHM", label: "Costo por paquete movido", corto: "$ / movido", color: VIZ.costo,
+                { id: "costoHM", label: "Costo por paquete movido", corto: "$ / movido", color: VIZ.costo, bueno: "abajo",
                   valor: d => d.costoPaqHM, fmt: v => "$" + v.toFixed(2) },
-                { id: "volHM", label: "Paquetes movidos", corto: "Movidos", color: VIZ.volumen,
+                { id: "volHM", label: "Paquetes movidos", corto: "Movidos", color: VIZ.volumen, bueno: "arriba",
                   valor: d => d.movidosHM, fmt: v => Math.round(v).toLocaleString("es-MX") },
-                { id: "rutasHM", label: "Rutas", corto: "Rutas", color: VIZ.entrega,
+                { id: "rutasHM", label: "Rutas", corto: "Rutas", color: VIZ.entrega, bueno: "neutro",
                   valor: d => d.rutas, fmt: v => Math.round(v).toLocaleString("es-MX") },
               ] : [
-                { id: "costo", label: "Costo por paquete", corto: "$ / paq", color: VIZ.costo,
+                { id: "costo", label: "Costo por paquete", corto: "$ / paq", color: VIZ.costo, bueno: "abajo",
                   valor: d => d.costoPaq, fmt: v => "$" + v.toFixed(2) },
-                { id: "vol", label: "Paquetes entregados", corto: "Entregados", color: VIZ.volumen,
+                { id: "vol", label: "Paquetes entregados", corto: "Entregados", color: VIZ.volumen, bueno: "arriba",
                   valor: d => d.entregados, fmt: v => Math.round(v).toLocaleString("es-MX") },
-                { id: "pct", label: "% Entrega", corto: "% Entrega", color: VIZ.entrega,
+                { id: "pct", label: "% Entrega", corto: "% Entrega", color: VIZ.entrega, bueno: "arriba",
                   valor: d => d.pct, fmt: v => v.toFixed(1) + "%" },
               ]}
             />
