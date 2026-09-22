@@ -881,6 +881,124 @@ function GraficaDispersion({ puntos, ejeX, ejeY, refX, refY, alto = 420, etiquet
   );
 }
 
+// ---------- Histograma con percentiles ----------
+// Existe porque un promedio no tiene forma. "12 horas de duración media" puede
+// ser 400 rutas de 12h, o la mitad de 8h y la mitad de 20h: son operaciones
+// distintas y la misma media las describe igual. El P90 responde lo que el
+// promedio no puede — cuánto tarda el día MALO, que es el que rompe la promesa.
+function Histograma({ valores, fmt, refs = [], alto = 300, etiquetaX = "", etiquetaY = "rutas" }) {
+  const contRef = useRef(null);
+  const [ancho, setAncho] = useState(900);
+  const [hover, setHover] = useState(null);
+
+  useEffect(() => {
+    if (!contRef.current || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(e => { const w = e[0]?.contentRect?.width; if (w > 0) setAncho(w); });
+    ro.observe(contRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const M = { top: 26, right: 18, bottom: 46, left: 44 };
+  const W = Math.max(320, ancho);
+  const pw = Math.max(80, W - M.left - M.right);
+  const ph = Math.max(60, alto - M.top - M.bottom);
+
+  const bins = useMemo(() => {
+    const v = (valores || []).filter(x => x != null && isFinite(x)).sort((a, b) => a - b);
+    if (v.length < 3) return null;
+    const min = 0, max = v[v.length - 1];
+    // Ancho de barra "bonito": se elige de una escala fija para que los cortes
+    // caigan en múltiplos legibles (30 min, 1h, 2h…) en vez de en 47 minutos.
+    const objetivo = (max - min) / 26;
+    const ESCALA = [15, 30, 60, 90, 120, 180, 240, 360, 720];
+    const w = ESCALA.find(e => e >= objetivo) || ESCALA[ESCALA.length - 1];
+    const n = Math.max(1, Math.ceil((max - min) / w));
+    const cubos = Array.from({ length: n }, (_, i) => ({ i, desde: min + i * w, hasta: min + (i + 1) * w, n: 0 }));
+    v.forEach(x => {
+      const i = Math.min(n - 1, Math.floor((x - min) / w));
+      cubos[i].n++;
+    });
+    return { cubos, w, max, total: v.length };
+  }, [valores]);
+
+  if (!bins) return <div style={{ padding: 24, textAlign: "center", color: C.textMuted, fontSize: 13 }}>
+    Se necesitan al menos 3 rutas con duración capturada.
+  </div>;
+
+  const nMax = Math.max(...bins.cubos.map(c => c.n), 1);
+  const bw = pw / bins.cubos.length;
+  const px = v => M.left + (v / (bins.cubos.length * bins.w)) * pw;
+  const py = n => M.top + ph - (n / nMax) * ph;
+
+  return (
+    <div ref={contRef} style={{ position: "relative", width: "100%" }}>
+      <svg width={W} height={alto} style={{ display: "block" }} onMouseLeave={() => setHover(null)}>
+        {/* Rejilla horizontal recesiva */}
+        {[0.5, 1].map(f => (
+          <g key={f}>
+            <line x1={M.left} x2={M.left + pw} y1={py(nMax * f)} y2={py(nMax * f)} stroke={VIZ.grid} strokeWidth="1" />
+            <text x={M.left - 7} y={py(nMax * f) + 4} textAnchor="end" style={{ fontSize: 10, fill: C.textFaint }}>{Math.round(nMax * f)}</text>
+          </g>
+        ))}
+
+        {/* Barras: separación de 2px entre rellenos en lugar de bordes, y
+            esquinas superiores redondeadas ancladas a la línea base. */}
+        {bins.cubos.map(c => {
+          const h = Math.max(c.n > 0 ? 2 : 0, (c.n / nMax) * ph);
+          const act = hover === c.i;
+          return (
+            <g key={c.i} onMouseEnter={() => setHover(c.i)}>
+              {/* Área sensible de alto completo: no hay que atinarle a la barra */}
+              <rect x={M.left + c.i * bw} y={M.top} width={bw} height={ph} fill="transparent" />
+              <rect x={M.left + c.i * bw + 1} y={M.top + ph - h} width={Math.max(1, bw - 2)} height={h}
+                rx={Math.min(4, (bw - 2) / 2)} fill={VIZ.volumen} opacity={act ? 1 : 0.72} />
+            </g>
+          );
+        })}
+
+        {/* Percentiles: líneas verticales rotuladas. Sólidas, nunca punteadas. */}
+        {refs.map((r, i) => {
+          const x = px(r.v);
+          if (!isFinite(x)) return null;
+          return (
+            <g key={r.label}>
+              <line x1={x} x2={x} y1={M.top - 6} y2={M.top + ph} stroke={r.color || C.text} strokeWidth="1.5" opacity="0.8" />
+              <text x={x} y={M.top - 11} textAnchor={i === refs.length - 1 ? "end" : "middle"}
+                style={{ fontSize: 10, fill: r.color || C.text, fontWeight: 800 }}>
+                {r.label} {fmt(r.v)}
+              </text>
+            </g>
+          );
+        })}
+
+        <line x1={M.left} x2={M.left + pw} y1={M.top + ph} y2={M.top + ph} stroke={VIZ.grid} strokeWidth="1" />
+        {bins.cubos.map(c => {
+          const paso = Math.ceil(bins.cubos.length / Math.max(2, Math.floor(pw / 58)));
+          if (c.i % paso !== 0) return null;
+          return <text key={c.i} x={M.left + c.i * bw} y={M.top + ph + 16} textAnchor="middle" style={{ fontSize: 10, fill: C.textFaint }}>{fmt(c.desde)}</text>;
+        })}
+        <text x={M.left + pw / 2} y={alto - 6} textAnchor="middle" style={{ fontSize: 11, fill: C.textMuted, fontWeight: 700 }}>{etiquetaX}</text>
+      </svg>
+
+      {hover != null && bins.cubos[hover] && (
+        <div style={{
+          position: "absolute", left: Math.min(Math.max(M.left + hover * bw - 60, 4), Math.max(4, W - 180)), top: 4,
+          backgroundColor: C.panelAlt, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 11px",
+          pointerEvents: "none", boxShadow: "0 6px 20px rgba(0,0,0,0.28)", zIndex: 5,
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: C.text }}>
+            {fmt(bins.cubos[hover].desde)} – {fmt(bins.cubos[hover].hasta)}
+          </div>
+          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+            <strong style={{ color: C.text }}>{bins.cubos[hover].n}</strong> {etiquetaY}
+            {" · "}{((bins.cubos[hover].n / bins.total) * 100).toFixed(1)}% del total
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // `tiempo_real` / `tiempo_estimado` vienen como texto libre ("10 hrs 27 min").
 // Devuelve minutos, o null si no hay dato utilizable — null y 0 NO son lo mismo:
 // una ruta sin captura no es una ruta de duración cero, y meterla como 0
@@ -1121,6 +1239,21 @@ function ModuleDashboard() {
   // Mismo número de días, inmediatamente antes del periodo activo. Sólo alimenta
   // los deltas de las tarjetas; nada de lo que se ve en pantalla sale de aquí.
   const [rutasPrev, setRutasPrev] = useState([]);
+
+  // La tabla de proveedores arranca colapsada: con tres gráficas arriba, 10
+  // filas × 12 columnas empujan todo lo demás fuera de la pantalla. La
+  // preferencia se recuerda para no pelear con quien sí la quiere siempre
+  // abierta. Se lee en efecto y no en el inicializador para no romper la
+  // hidratación (el servidor no tiene localStorage).
+  const [tablaAbierta, setTablaAbierta] = useState(false);
+  useEffect(() => {
+    try { if (localStorage.getItem("t1_dash_tabla") === "1") setTablaAbierta(true); } catch {}
+  }, []);
+  const toggleTabla = () => setTablaAbierta(v => {
+    const n = !v;
+    try { localStorage.setItem("t1_dash_tabla", n ? "1" : "0"); } catch {}
+    return n;
+  });
   const [carriers, setCarriers] = useState([]);
   const [asistencia, setAsistencia] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1431,6 +1564,48 @@ function ModuleDashboard() {
       };
     });
   }, [rutasScope, motor]);
+
+  // ---------- Distribución de duración de ruta ----------
+  // El promedio no tiene forma: "12 horas de media" puede ser todas las rutas en
+  // 12h, o la mitad en 8h y la mitad en 20h. El P90 es el que responde cuánto
+  // dura el día malo — el que rompe la promesa al cliente.
+  //
+  // Las rutas sin `tiempo_real` capturado se EXCLUYEN, no se cuentan como cero:
+  // una ruta sin captura no es una ruta instantánea, y meterla como 0 jalaría
+  // todos los percentiles hacia abajo. La cobertura se reporta a la vista para
+  // que el dato nunca se lea sin saber sobre cuántas rutas se calculó.
+  const distribucion = useMemo(() => {
+    const conDato = rutasScope.filter(r => r.durMin != null && isFinite(r.durMin) && r.durMin > 0);
+    const durs = conDato.map(r => r.durMin).sort((a, b) => a - b);
+    if (durs.length < 3) return null;
+    const p50 = percentil(durs, 50), p75 = percentil(durs, 75), p90 = percentil(durs, 90), p95 = percentil(durs, 95);
+    const media = durs.reduce((a, b) => a + b, 0) / durs.length;
+
+    // La cola: rutas por arriba del P90, agrupadas por proveedor.
+    const cola = conDato.filter(r => r.durMin > p90);
+    const porProv = {};
+    cola.forEach(r => {
+      const k = norm(r.carrier) || "sin carrier";
+      if (!porProv[k]) porProv[k] = { carrier: r.carrier || "—", n: 0, peor: 0 };
+      porProv[k].n++;
+      porProv[k].peor = Math.max(porProv[k].peor, r.durMin);
+    });
+    // Denominador por proveedor: qué proporción de SUS rutas cae en la cola.
+    // Sin esto, el proveedor más grande siempre encabeza la lista por tamaño.
+    const totalProv = {};
+    conDato.forEach(r => { const k = norm(r.carrier) || "sin carrier"; totalProv[k] = (totalProv[k] || 0) + 1; });
+
+    return {
+      durs, p50, p75, p90, p95, media,
+      max: durs[durs.length - 1],
+      conDato: durs.length,
+      sinDato: rutasScope.length - conDato.length,
+      cola: Object.entries(porProv)
+        .map(([k, v]) => ({ ...v, total: totalProv[k] || 0, share: totalProv[k] ? (v.n / totalProv[k]) * 100 : 0 }))
+        .sort((a, b) => b.n - a.n || b.share - a.share),
+      colaN: cola.length,
+    };
+  }, [rutasScope]);
 
   // ---------- Periodo anterior ----------
   // Sólo alimenta los deltas. Pasa por el mismo motor y por el mismo filtro de
@@ -1902,6 +2077,95 @@ function ModuleDashboard() {
             </div>
           )}
 
+          {/* ---------- Distribución de duración + cola ---------- */}
+          {distribucion && (
+            <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                  Cuánto tardan las rutas · P50 y P90
+                </div>
+                <div style={{ fontSize: 11, color: C.textMuted, maxWidth: 720, lineHeight: 1.5 }}>
+                  El promedio no tiene forma: 12 horas de media pueden ser todas las rutas en 12 horas,
+                  o la mitad en 8 y la mitad en 20. El <b>P90</b> responde lo que el promedio no puede —
+                  cuánto dura el día malo, que es el que rompe la promesa al cliente.
+                </div>
+              </div>
+
+              {/* Los percentiles como cifras, antes de la gráfica: el número es
+                  el dato y la gráfica es su forma, no al revés. */}
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+                {[
+                  { l: "Mitad de las rutas cierra en", v: distribucion.p50, c: C.text, sub: "P50 — mediana" },
+                  { l: "3 de cada 4 cierran en", v: distribucion.p75, c: C.text, sub: "P75" },
+                  { l: "9 de cada 10 cierran en", v: distribucion.p90, c: C.yellow, sub: "P90 — el día malo" },
+                  { l: "La peor del periodo", v: distribucion.max, c: C.red, sub: "máximo" },
+                ].map(k => (
+                  <div key={k.sub} style={{ flex: "1 1 170px", padding: "12px 14px", borderRadius: 8, backgroundColor: C.panelAlt, border: `1px solid ${C.border}` }}>
+                    <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, marginBottom: 5, lineHeight: 1.3 }}>{k.l}</div>
+                    <div className="font-grotesk" style={{ fontSize: 22, fontWeight: 800, color: k.c, letterSpacing: "-0.02em", lineHeight: 1 }}>{fmtDuracion(k.v)}</div>
+                    <div style={{ fontSize: 10, color: C.textFaint, marginTop: 4 }}>{k.sub}</div>
+                  </div>
+                ))}
+              </div>
+
+              <Histograma
+                valores={distribucion.durs}
+                fmt={fmtDuracion}
+                alto={290}
+                etiquetaX="Duración real de la ruta"
+                refs={[
+                  { v: distribucion.p50, label: "P50", color: C.textMuted },
+                  { v: distribucion.p90, label: "P90", color: C.yellow },
+                ]}
+              />
+
+              {/* Cobertura: el percentil nunca debe leerse sin saber sobre
+                  cuántas rutas se calculó. */}
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>
+                Calculado sobre <b style={{ color: C.text }}>{distribucion.conDato.toLocaleString("es-MX")}</b> rutas con duración capturada
+                {distribucion.sinDato > 0 && (
+                  <> · <span style={{ color: C.yellow, fontWeight: 600 }}>{distribucion.sinDato} sin `tiempo_real`, excluidas</span> —
+                  no se cuentan como cero porque una ruta sin captura no es una ruta instantánea</>
+                )}
+              </div>
+
+              {/* La cola */}
+              {distribucion.cola.length > 0 && (
+                <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 3 }}>
+                    Quién vive arriba del P90 · {distribucion.colaN} ruta{distribucion.colaN !== 1 ? "s" : ""} por encima de {fmtDuracion(distribucion.p90)}
+                  </div>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>
+                    Ordenado por número de rutas en la cola. El <b>% de sus rutas</b> es el dato que importa:
+                    el proveedor más grande siempre aporta más rutas lentas en términos absolutos.
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                    {distribucion.cola.slice(0, 8).map(c => (
+                      <div key={c.carrier} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 11, color: C.text, fontWeight: 600, width: 168, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.carrier}</span>
+                        <div style={{ flex: 1, height: 16, backgroundColor: C.panelAlt, borderRadius: 4, overflow: "hidden", minWidth: 60 }}>
+                          <div style={{ width: `${Math.max(2, c.share)}%`, height: "100%", backgroundColor: c.share >= 15 ? C.red : C.yellow, borderRadius: 4 }} />
+                        </div>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: C.text, width: 92, textAlign: "right", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+                          {c.n} de {c.total} ({c.share.toFixed(0)}%)
+                        </span>
+                        <span style={{ fontSize: 10, color: C.textMuted, width: 76, textAlign: "right", flexShrink: 0 }}>
+                          peor {fmtDuracion(c.peor)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {distribucion.max > 24 * 60 && (
+                    <div style={{ marginTop: 12, padding: "9px 12px", borderRadius: 8, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11, fontWeight: 600 }}>
+                      ⚠ Hay rutas de más de 24 horas ({fmtDuracion(distribucion.max)} la peor). Vale la pena revisar si son
+                      reales o captura sucia — una ruta que cruza la medianoche sin cerrarse infla el P90 sin que nadie haya trabajado de más.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ---------- Proveedores ----------
               Dos GRUPOS de columnas que jamás se suman entre sí: "Entrega final"
               (última milla + foráneo + PETCO) y "Half mile" (movimiento
@@ -1914,10 +2178,21 @@ function ModuleDashboard() {
                   Costos y desempeño por proveedor
                   {opSel !== "todas" && <span style={{ fontSize: 12, fontWeight: 600, color: C.accent, marginLeft: 8 }}>· sólo {opSel}</span>}
                 </div>
-                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Clic en una fila para ver el detalle por operador · clic en encabezado para ordenar</div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                  {tablaAbierta
+                    ? "Clic en una fila para ver el detalle por operador · clic en encabezado para ordenar"
+                    : "El detalle completo, fila por fila y con desglose por operador."}
+                </div>
               </div>
-              <div style={{ fontSize: 11, color: C.textMuted }}>{filasProveedor.length} proveedores · {desde} → {hasta}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: C.textMuted }}>{filasProveedor.length} proveedores · {desde} → {hasta}</span>
+                <button onClick={toggleTabla}
+                  style={{ padding: "7px 16px", borderRadius: 8, border: `1px solid ${tablaAbierta ? C.border : C.accent}`, backgroundColor: tablaAbierta ? C.panelAlt : C.accentLight, color: tablaAbierta ? C.textMuted : C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {tablaAbierta ? "Ocultar tabla" : `Ver tabla completa (${filasProveedor.length})`}
+                </button>
+              </div>
             </div>
+            {tablaAbierta && (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead style={{ backgroundColor: C.bg }}>
@@ -2067,6 +2342,7 @@ function ModuleDashboard() {
                 </tfoot>
               </table>
             </div>
+            )}
           </div>
 
           {/* ---------- Mapa por zona (INEGI) ---------- */}
