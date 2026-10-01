@@ -1,0 +1,176 @@
+{
+  "default-k50": {
+    "n": 2263,
+    "assigns": "c5c52a075d4d12ef",
+    "seqOrder": "e78d3e1a541cae2b",
+    "assigns0_12": "19,18,9,44,42,25,18,27,6,9,4,26",
+    "seq0_12": "27,17,13,3,1,27,22,34,50,39,7,31",
+    "metricas": {
+      "D": 2071.193562,
+      "CV": 0.140769,
+      "SLA": 100,
+      "durMax": 7.911084,
+      "fueraRango": 0,
+      "minN": 32,
+      "maxN": 60,
+      "rutas": 50,
+      "durSum": 250.502838
+    },
+    "diagnostico": {
+      "iteracionesPD": 167,
+      "fueraRango": 0,
+      "k": 50,
+      "tamaños": "dec00ce255fcfc6e"
+    },
+    "ms": 348
+  },
+  "default-k12": {
+    "n": 600,
+    "assigns": "d05fc2b12e85d18b",
+    "seqOrder": "77d0685287106a9e",
+    "assigns0_12": "5,8,7,2,10,11,8,4,3,7,0,3",
+    "seq0_12": "29,15,29,6,29,11,16,3,22,14,18,41",
+    "metricas": {
+      "D": 812.656802,
+      "CV": 0.135647,
+      "SLA": 91.666667,
+      "durMax": 9.319516,
+      "fueraRango": 0,
+      "minN": 39,
+      "maxN": 59,
+      "rutas": 12,
+      "durSum": 81.6003
+    },
+    "diagnostico": {
+      "iteracionesPD": 11,
+      "fueraRango": 0,
+      "k": 12,
+      "tamaños": "b8a8e43ab4d7da54"
+    },
+    "ms": 50
+  },
+  "k1-una-ruta": {
+    "n": 120,
+    "assigns": "7a519be233680301",
+    "seqOrder": "fb1c42c7375c4af6",
+    "assigns0_12": "0,0,0,0,0,0,0,0,0,0,0,0",
+    "seq0_12": "25,32,58,114,92,39,31,8,88,54,67,105",
+    "metricas": {
+      "D": 307.747547,
+      "CV": 0,
+      "SLA": 0,
+      "durMax": 21.149024,
+      "fueraRango": 1,
+      "minN": 120,
+      "maxN": 120,
+      "rutas": 1,
+      "durSum": 21.149024
+    },
+    "diagnostico": {
+      "iteracionesPD": 301,
+      "fueraRango": 1,
+      "k": 1,
+      "tamaños": "2abaca4911e68fa9"
+    },
+    "ms": 4
+  },
+  "k-mayor-que-n": {
+    "n": 8,
+    "assigns": "c635b20dc2bb55a6",
+    "seqOrder": "705c7f7f6bcd1c82",
+    "assigns0_12": "5,1,4,2,6,0,7,3",
+    "seq0_12": "0,0,0,0,0,0,0,0",
+    "metricas": {
+      "D": 209.406203,
+      "CV": 0,
+      "SLA": 100,
+      "durMax": 3.250316,
+      "fueraRango": 8,
+      "minN": 1,
+      "maxN": 1,
+      "rutas": 8,
+      "durSum": 17.263622
+    },
+    "diagnostico": {
+      "iteracionesPD": 301,
+      "fueraRango": 8,
+      "k": 8,
+      "tamaños": "607d3a5098ee027c"
+    },
+    "ms": 1
+  },
+  "vacio": {
+    "n": 0,
+    "assigns": "e3b0c44298fc1c14",
+    "seqOrder": "e3b0c44298fc1c14",
+    "assigns0_12": "",
+    "seq0_12": "",
+    "metricas": null,
+    "diagnostico": null,
+    "ms": 0
+  },
+  "pronostico-si0": {
+    "n": 800,
+    "assigns": "b6ee4c2df1b95d35",
+    "seqOrder": "8f80a9c8b0c5d7e5",
+    "assigns0_12": "12,3,7,15,5,10,3,11,0,7,1,14",
+    "seq0_12": "34,7,19,20,40,46,8,3,22,9,25,31",
+    "metricas": {
+      "D": 955.845129,
+      "CV": 0.170734,
+      "SLA": 100,
+      "durMax": 6.409205,
+      "fueraRango": 0,
+      "minN": 35,
+      "maxN": 67,
+      "rutas": 16,
+      "durSum": 65.04487
+    },
+    "diagnostico": {
+      "iteracionesPD": 12,
+      "fueraRango": 0,
+      "k": 16,
+      "tamaños": "c30eba4f57aea08c"
+    },
+    "ms": 12
+  },
+  "pronostico-calibrado": {
+    "n": 800,
+    "assigns": "b6ee4c2df1b95d35",
+    "seqOrder": "fbfc98b7e57d9982",
+    "assigns0_12": "12,3,7,15,5,10,3,11,0,7,1,14",
+    "seq0_12": "34,7,30,20,40,46,8,41,22,9,25,31",
+    "metricas": {
+      "D": 956.043481,
+      "CV": 0.170734,
+      "SLA": 31.25,
+      "durMax": 13.78259,
+      "fueraRango": 0,
+      "minN": 35,
+      "maxN": 67,
+      "rutas": 16,
+      "durSum": 159.948461
+    },
+    "diagnostico": {
+      "iteracionesPD": 12,
+      "fueraRango": 0,
+      "k": 16,
+      "tamaños": "c30eba4f57aea08c"
+    },
+    "ms": 210
+  },
+  "_unidades": {
+    "haversine": 4.123112,
+    "tiempoViaje_cruza": 4.147368,
+    "tiempoViaje_dentro": 0.119048,
+    "tiempoViaje_cero": 0,
+    "distanciaRuta": 641.309532,
+    "duracionRuta": 32.70422,
+    "ordenarSector": "7da4baa9a89f3e65",
+    "pd_tamaños": {
+      "tam": "b32c48ec33a665af",
+      "it": 15,
+      "fuera": 0
+    }
+  }
+}

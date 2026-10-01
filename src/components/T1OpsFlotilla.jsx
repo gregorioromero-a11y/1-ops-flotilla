@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
 import { TARIFAS_POR_RUTA, TIPOS_DEDICADOS, etiquetaDedicada } from "../lib/costEngine";
-import { rutear, metricas as calcMetricas, PARAMS_DEFAULT } from "../lib/ruteo";
+import { rutear, metricas as calcMetricas, resumenRuta, etaRuta, PARAMS_DEFAULT } from "../lib/ruteo";
 import * as PRONO from "../lib/pronostico";
 import { cargarIndiceMunicipios, municipioDeFila, municipioDeCoordenada, canonizarMunicipio, resumenMunicipios, etiquetaMunicipios } from "../lib/municipios";
 
@@ -6658,11 +6658,28 @@ function ModuleRuteo() {
   // --- Parámetros del modelo (§6.1 de la tesis) ---
   const [pB0, setPB0] = useState(String(PARAMS_DEFAULT.b0));       // b_0 hora de salida
   const [pTmax, setPTmax] = useState(String(PARAMS_DEFAULT.Tmax)); // T_max jornada (h)
-  const [pSi, setPSi] = useState("3");                             // s_i servicio (min)
+  const [pSi, setPSi] = useState("3");                             // s_0 servicio (min)
   const [pM, setPM] = useState(String(PARAMS_DEFAULT.m));          // m paradas mín
   const [pMM, setPMM] = useState(String(PARAMS_DEFAULT.M));        // M paradas máx
+  // --- Extensión v2: balanceo por horas de jornada ---
+  const [pS1, setPS1] = useState("0");                             // s_1 guía adicional (min)
+  const [pGamma, setPGamma] = useState(String(PARAMS_DEFAULT.gamma));   // γ circuidad
+  const [pRho, setPRho] = useState(String(PARAMS_DEFAULT.rho));         // ρ retorno
+  const [pKmax, setPKmax] = useState("");                          // K_max km/ruta ("" = sin tope)
+  const [pAlpha, setPAlpha] = useState(String(PARAMS_DEFAULT.alpha));   // α rebalanceo
+  const [pEps, setPEps] = useState(String(PARAMS_DEFAULT.eps));         // ε tolerancia (h)
+  const [pRmax, setPRmax] = useState(String(PARAMS_DEFAULT.Rmax));      // R_max rondas
+  const [pDelta, setPDelta] = useState(String(PARAMS_DEFAULT.delta));   // δ ventana de paradas
+  const [pInicios, setPInicios] = useState(String(PARAMS_DEFAULT.inicios)); // arranques del TSP
+  const [pVconst, setPVconst] = useState("");                      // velocidad constante ("" = perfil CDMX)
+  const [pOrOpt, setPOrOpt] = useState(PARAMS_DEFAULT.orOpt);
+  const [pAgrupar, setPAgrupar] = useState(PARAMS_DEFAULT.agrupar);
   const [showParams, setShowParams] = useState(false);
-  const [metricas, setMetricas] = useState(null);                  // D, CV, SLA (§6.7)
+  const [metricas, setMetricas] = useState(null);                  // D, CV, CV_T, SLA (§6.7)
+  const [rutasResumen, setRutasResumen] = useState([]);            // resumen operativo por ruta
+  const [etaPorFila, setEtaPorFila] = useState(null);              // hora de llegada por renglón
+  const [posPorFila, setPosPorFila] = useState(null);              // posición 1..n en la ruta
+  const [showResumen, setShowResumen] = useState(false);
   const [diagRuteo, setDiagRuteo] = useState(null);
   // true cuando el plan se editó a mano después de generarse: las métricas son
   // las del plan vigente, pero la secuencia ya no está re-optimizada.
@@ -7053,13 +7070,37 @@ function ModuleRuteo() {
   // Worker; divergían con cada cambio. Ahora ambos caminos llaman a `rutear`.
   // ================================================================
   const seqOrderRef = useRef(null);   // orden de visita del último ruteo
-  const paramsRuteo = useMemo(() => ({
-    b0: parseFloat(pB0) || PARAMS_DEFAULT.b0,
-    Tmax: parseFloat(pTmax) || PARAMS_DEFAULT.Tmax,
-    si: (parseFloat(pSi) || 3) / 60,
-    m: parseInt(pM) || PARAMS_DEFAULT.m,
-    M: parseInt(pMM) || PARAMS_DEFAULT.M,
-  }), [pB0, pTmax, pSi, pM, pMM]);
+  // Se pasa `s0` y NUNCA `si`: el alias viejo tiene prioridad en el ruteador
+  // —hace falta para la calibración de la simulación de flota— y mandarlo aquí
+  // dejaría a s0 sin efecto.
+  const paramsRuteo = useMemo(() => {
+    const vConst = parseFloat(pVconst);
+    const kmaxTxt = String(pKmax).trim();
+    const kmax = kmaxTxt === "" ? Infinity : parseFloat(kmaxTxt);
+    const num = (txt, def) => { const v = parseFloat(txt); return Number.isFinite(v) ? v : def; };
+    return {
+      b0: num(pB0, PARAMS_DEFAULT.b0),
+      Tmax: num(pTmax, PARAMS_DEFAULT.Tmax),
+      s0: num(pSi, 3) / 60,
+      s1: num(pS1, 0) / 60,
+      m: parseInt(pM) || PARAMS_DEFAULT.m,
+      M: parseInt(pMM) || PARAMS_DEFAULT.M,
+      gamma: num(pGamma, PARAMS_DEFAULT.gamma),
+      rho: num(pRho, PARAMS_DEFAULT.rho),
+      Kmax: Number.isFinite(kmax) && kmax > 0 ? kmax : Infinity,
+      alpha: num(pAlpha, PARAMS_DEFAULT.alpha),
+      eps: num(pEps, PARAMS_DEFAULT.eps),
+      Rmax: Math.max(1, parseInt(pRmax) || PARAMS_DEFAULT.Rmax),
+      delta: num(pDelta, PARAMS_DEFAULT.delta),
+      inicios: Math.max(1, parseInt(pInicios) || 1),
+      orOpt: !!pOrOpt,
+      agrupar: !!pAgrupar,
+      // V se conserva: un solo valor en el campo "velocidad constante" arma los
+      // 24 iguales que reproducen el modelo sin dependencia horaria; vacío deja
+      // el perfil de la CDMX (§5.2).
+      ...(Number.isFinite(vConst) && vConst > 0 ? { V: new Array(24).fill(vConst) } : {}),
+    };
+  }, [pB0, pTmax, pSi, pS1, pM, pMM, pGamma, pRho, pKmax, pAlpha, pEps, pRmax, pDelta, pInicios, pVconst, pOrOpt, pAgrupar]);
 
   const DEPOT = { lat: DEPOSITO_LAT, lng: DEPOSITO_LNG };
 
@@ -7098,6 +7139,21 @@ function ModuleRuteo() {
     if (r.metricas) setMetricas(r.metricas);
     if (r.diagnostico) setDiagRuteo(r.diagnostico);
     setEditadoManual(false);
+    // Reporte del rebalanceo a consola. Las métricas de pantalla son las del
+    // plan final; esto es lo que hace falta para juzgar si el lazo de horas
+    // sirvió: qué tan desparejas estaban las jornadas en la primera pasada
+    // (= el modelo sin rebalanceo) y cómo quedaron en la ronda que se eligió.
+    const d = r.diagnostico, m = r.metricas;
+    if (d && m && d.historial && d.historial.length) {
+      const h0 = d.historial[0], hf = d.historial[d.rondaElegida - 1] || h0;
+      console.log(
+        `[Ruteo] ${d.guias} guías → ${d.paradas} paradas en ${d.k} rutas · ${d.rondas} ronda(s), se usó la ${d.rondaElegida} · ${d.msComputo} ms\n` +
+        `  antes   (ronda 1): jornadas ${h0.minT.toFixed(2)}–${h0.maxT.toFixed(2)} h (dispersión ${(h0.maxT - h0.minT).toFixed(2)} h) · maxKm ${h0.maxKm.toFixed(1)}\n` +
+        `  después (ronda ${d.rondaElegida}): jornadas ${hf.minT.toFixed(2)}–${hf.maxT.toFixed(2)} h (dispersión ${(hf.maxT - hf.minT).toFixed(2)} h) · maxKm ${hf.maxKm.toFixed(1)}\n` +
+        `  CV de paradas ${m.CV.toFixed(4)} · CV_T de jornadas ${m.CV_T.toFixed(4)} · D ${m.D.toFixed(0)} km · SLA ${m.SLA.toFixed(1)} %`,
+        "\n  historial:", d.historial
+      );
+    }
     return r;
   };
 
@@ -7113,7 +7169,8 @@ function ModuleRuteo() {
   // secuencia, así que las cifras son las del plan tal como está, no las de un
   // plan re-optimizado. Por eso se marca como editado y se ofrece re-optimizar.
   useEffect(() => {
-    if (!puntos.length || !asignaciones.length) { setMetricas(null); return; }
+    const limpiar = () => { setMetricas(null); setRutasResumen([]); setEtaPorFila(null); setPosPorFila(null); };
+    if (!puntos.length || !asignaciones.length) { limpiar(); return; }
     const seq = seqOrderRef.current;
     const porCluster = new Map();
     asignaciones.forEach((cl, i) => {
@@ -7121,12 +7178,49 @@ function ModuleRuteo() {
       if (!porCluster.has(cl)) porCluster.set(cl, []);
       porCluster.get(cl).push(i);
     });
-    if (!porCluster.size) { setMetricas(null); return; }
-    const rutas = [...porCluster.values()].map(idxs => {
+    if (!porCluster.size) { limpiar(); return; }
+    const clusters = [...porCluster.keys()].sort((a, b) => a - b);
+    // Paradas de cada ruta, en orden de visita. Con agrupación las guías que
+    // comparten coordenada se colapsan en UNA parada con q guías — igual que en
+    // el ruteador. Sin esto las métricas del plan editado a mano contarían cinco
+    // paradas donde el repartidor hace una bajada, y no coincidirían con las que
+    // reportó la generación.
+    const rutas = [], filasPorParada = [];
+    for (const cl of clusters) {
+      const idxs = porCluster.get(cl);
       const orden = seq ? idxs.slice().sort((a, b) => (seq[a] ?? 0) - (seq[b] ?? 0)) : idxs;
-      return orden.map(i => puntos[i]);
-    });
+      if (paramsRuteo.agrupar) {
+        const porLlave = new Map();
+        for (const i of orden) {
+          const llave = puntos[i].lat + "|" + puntos[i].lng;
+          if (!porLlave.has(llave)) porLlave.set(llave, { lat: puntos[i].lat, lng: puntos[i].lng, q: 0, filas: [] });
+          const gr = porLlave.get(llave);
+          gr.q++; gr.filas.push(i);
+        }
+        const paradas = [...porLlave.values()];
+        rutas.push(paradas);
+        filasPorParada.push(paradas.map(p => p.filas));
+      } else {
+        rutas.push(orden.map(i => puntos[i]));
+        filasPorParada.push(orden.map(i => [i]));
+      }
+    }
     setMetricas(calcMetricas(rutas, DEPOT, paramsRuteo));
+    setRutasResumen(rutas.map((s, ix) => ({
+      ruta: clusters[ix] + 1, cluster: clusters[ix], ...resumenRuta(s, DEPOT, paramsRuteo),
+    })));
+    // ETA y posición por RENGLÓN del archivo, calculados con las mismas
+    // funciones del ruteador para que lo que se exporta y lo que se midió sean
+    // el mismo número.
+    const eta = new Array(puntos.length).fill(null);
+    const pos = new Array(puntos.length).fill(null);
+    rutas.forEach((s, ix) => {
+      etaRuta(s, DEPOT, paramsRuteo).forEach((h, p) => {
+        for (const fila of filasPorParada[ix][p]) { eta[fila] = h; pos[fila] = p + 1; }
+      });
+    });
+    setEtaPorFila(eta);
+    setPosPorFila(pos);
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [asignaciones, puntos, paramsRuteo]);
 
@@ -7605,16 +7699,43 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
     setHistorico(prev => prev.filter(h => h.sesion !== sid));
   };
 
+  // Hora decimal \u2192 HH:MM. El CSV lo lee un coordinador, no un parser: 13.72 no
+  // le dice nada y 13:43 s\u00ED.
+  const hhmm = (h) => {
+    if (h == null || !isFinite(h)) return "";
+    const total = Math.round(h * 60);
+    return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  };
+
   const exportCSV = () => {
     if (!puntos.length) return;
     const extraK = Object.keys(puntos[0]).filter(k => !["lat", "lng", "_i"].includes(k) && k !== guiaKey);
-    const hdr = ["Tracking Number", "Cluster", "Latitud", "Longitud", ...extraK];
+    // Ruta / Parada / ETA son lo que el repartidor necesita en la mano: en qu\u00E9
+    // unidad va, en qu\u00E9 orden y a qu\u00E9 hora llega. `Cluster` se conserva con su
+    // significado de siempre porque otros m\u00F3dulos lo consumen.
+    const hdr = ["Tracking Number", "Ruta", "Parada", "ETA", "Cluster", "Latitud", "Longitud", ...extraK];
     const body = puntos.map((p, i) => {
       const cl = asignaciones[i] ?? 0;
       const tracking = guiaKey ? `"${(p[guiaKey] || "").toString().replace(/"/g, '""')}"` : "";
-      return [tracking, cl + 1, p.lat, p.lng, ...extraK.map(k => `"${(p[k] || "").toString().replace(/"/g, '""')}"`)].join(",");
+      const ruta = cl === -1 ? "Excluido" : "Ruta " + (cl + 1);
+      const parada = posPorFila ? (posPorFila[i] ?? "") : "";
+      const eta = etaPorFila ? hhmm(etaPorFila[i]) : "";
+      return [tracking, `"${ruta}"`, parada, eta, cl + 1, p.lat, p.lng,
+        ...extraK.map(k => `"${(p[k] || "").toString().replace(/"/g, '""')}"`)].join(",");
     });
-    const csv = [hdr.join(","), ...body].join("\n");
+    // Segundo bloque: una fila por ruta. Va en el MISMO archivo, separado por
+    // una l\u00EDnea en blanco, porque se imprime y se reparte junto con el detalle.
+    const resumen = rutasResumen.length ? [
+      "",
+      "RESUMEN POR RUTA",
+      ["Ruta", "Paradas", "Guias", "Km zona", "Km traslado", "Km total", "Horas", "Ultima entrega", "Cumple"].join(","),
+      ...rutasResumen.map(r => [
+        `"Ruta ${r.ruta}"`, r.paradas, r.guias,
+        r.kmZona.toFixed(2), r.kmTraslado.toFixed(2), r.kmTotal.toFixed(2),
+        r.horas.toFixed(2), hhmm(r.ultimaEntrega), r.cumple ? "si" : "NO",
+      ].join(",")),
+    ] : [];
+    const csv = [hdr.join(","), ...body, ...resumen].join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }));
     a.download = "ruteo_clusters.csv";
@@ -7627,24 +7748,72 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
       const cl = asignaciones[i] ?? 0;
       const color = RCOLORS[cl % RCOLORS.length];
       const label = guiaKey && p[guiaKey] ? String(p[guiaKey]) : "";
-      return `L.circleMarker([${p.lat},${p.lng}],{radius:7,fillColor:"${color}",color:"white",weight:2,fillOpacity:0.9}).addTo(map).bindPopup("<b>Ruta ${cl+1}</b>${label ? "<br/>"+label : ""}<br/>${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}");`;
+      const parada = posPorFila && posPorFila[i] != null ? `<br/>Parada ${posPorFila[i]}` : "";
+      const eta = etaPorFila && etaPorFila[i] != null ? ` · llega ${hhmm(etaPorFila[i])}` : "";
+      return `L.circleMarker([${p.lat},${p.lng}],{radius:7,fillColor:"${color}",color:"white",weight:2,fillOpacity:0.9}).addTo(map).bindPopup("<b>Ruta ${cl+1}</b>${label ? "<br/>"+label : ""}${parada}${eta}<br/>${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}");`;
     }).join("\n");
+    // POLILÍNEA POR RUTA, en orden de visita y arrancando en el depósito. Los
+    // marcadores sueltos dicen qué paquetes lleva cada unidad pero no en qué
+    // orden; con el trazo se ve de un golpe si una ruta cruza media ciudad para
+    // volver sobre sus pasos, que es el error que hay que detectar a ojo. El
+    // tramo de regreso se dibuja sólo si ρ = 1: con ρ = 0 la jornada termina en
+    // la última entrega y pintar el retorno sería mentir sobre el plan.
+    const trazos = rutasResumen.map(r => {
+      const cl = r.cluster;
+      const filas = puntos
+        .map((p, i) => ({ p, i }))
+        .filter(({ i }) => (asignaciones[i] ?? 0) === cl && posPorFila && posPorFila[i] != null);
+      if (!filas.length) return "";
+      // Una coordenada por PARADA, no por guía: varias guías del mismo domicilio
+      // comparten posición y duplicarían el vértice.
+      const porPos = new Map();
+      for (const { p, i } of filas) if (!porPos.has(posPorFila[i])) porPos.set(posPorFila[i], p);
+      const orden = [...porPos.entries()].sort((a, b) => a[0] - b[0]).map(([, p]) => p);
+      const coords = [[DEPOSITO_LAT, DEPOSITO_LNG], ...orden.map(p => [p.lat, p.lng])];
+      if (paramsRuteo.rho === 1) coords.push([DEPOSITO_LAT, DEPOSITO_LNG]);
+      const color = RCOLORS[cl % RCOLORS.length];
+      const popup = [
+        `<b>Ruta ${r.ruta}</b>`,
+        `${r.paradas} paradas · ${r.guias} guías`,
+        `${r.kmTotal.toFixed(1)} km (${r.kmZona.toFixed(1)} en zona + ${r.kmTraslado.toFixed(1)} de traslado)`,
+        `${r.horas.toFixed(1)} h de jornada · última entrega ${hhmm(r.ultimaEntrega)}`,
+        r.cumple ? "" : "<b style='color:#DC2626'>fuera de jornada o de tope de km</b>",
+      ].filter(Boolean).join("<br/>");
+      return `L.polyline(${JSON.stringify(coords)},{color:"${color}",weight:3,opacity:0.75}).addTo(map).bindPopup("${popup.replace(/"/g, '\\"')}");`;
+    }).filter(Boolean).join("\n");
+    const porCl = new Map(rutasResumen.map(r => [r.cluster, r]));
     const legend = Object.entries(clusterCount).sort((a,b)=>+a[0]-+b[0]).map(([cl,cnt])=>{
       const color = RCOLORS[+cl % RCOLORS.length];
-      return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0"><div style="width:12px;height:12px;border-radius:50%;background:${color}"></div><span>Ruta ${+cl+1} — ${cnt} pts</span></div>`;
+      const r = porCl.get(+cl);
+      const detalle = r
+        ? `<span style="color:#666">${r.paradas} par · ${r.kmTotal.toFixed(0)} km · ${r.horas.toFixed(1)} h${r.cumple ? "" : " ⚠"}</span>`
+        : `<span style="color:#666">${cnt} pts</span>`;
+      return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0"><div style="width:12px;height:12px;border-radius:50%;background:${color}"></div><span>Ruta ${+cl+1} — </span>${detalle}</div>`;
     }).join("");
+    // Tabla de resumen por ruta, en el propio archivo: el HTML se manda por
+    // correo a los proveedores y tiene que poder leerse solo.
+    const tablaResumen = rutasResumen.length ? `
+<div class="resumen"><h4>Resumen por ruta</h4>
+<table><thead><tr><th>Ruta</th><th>Par.</th><th>Guías</th><th>Km zona</th><th>Km tras.</th><th>Km tot.</th><th>Horas</th><th>Últ. entrega</th></tr></thead><tbody>
+${rutasResumen.map(r => `<tr${r.cumple ? "" : ' class="malo"'}><td>${r.ruta}</td><td>${r.paradas}</td><td>${r.guias}</td><td>${r.kmZona.toFixed(1)}</td><td>${r.kmTraslado.toFixed(1)}</td><td>${r.kmTotal.toFixed(1)}</td><td>${r.horas.toFixed(2)}</td><td>${hhmm(r.ultimaEntrega)}</td></tr>`).join("")}
+</tbody></table></div>` : "";
     const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"/><title>Mapa Ruteo — T1 Envíos</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
-<style>body{margin:0;font-family:Arial,sans-serif}#map{height:100vh;width:100%}.legend{position:absolute;bottom:20px;left:20px;background:white;padding:14px 18px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:1000;font-size:13px;max-height:60vh;overflow-y:auto}.legend h4{margin:0 0 8px;font-size:14px}</style>
+<style>body{margin:0;font-family:Arial,sans-serif}#map{height:100vh;width:100%}.legend{position:absolute;bottom:20px;left:20px;background:white;padding:14px 18px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:1000;font-size:13px;max-height:60vh;overflow-y:auto}.legend h4{margin:0 0 8px;font-size:14px}
+.resumen{position:absolute;top:20px;right:20px;background:white;padding:12px 14px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:1000;font-size:11px;max-height:70vh;overflow:auto}
+.resumen h4{margin:0 0 8px;font-size:13px}.resumen table{border-collapse:collapse}.resumen th,.resumen td{padding:2px 7px;text-align:right;border-bottom:1px solid #eee;white-space:nowrap}
+.resumen th{color:#666;font-weight:700;text-transform:uppercase;font-size:9px}.resumen td:first-child,.resumen th:first-child{text-align:left;font-weight:700}
+.resumen tr.malo td{background:#FEF2F2;color:#B91C1C}</style>
 </head><body>
 <div id="map"></div>
-<div class="legend"><h4>T1 Envíos — Ruteo</h4><div style="font-size:11px;color:#666;margin-bottom:8px">${puntos.length} puntos · ${Object.keys(clusterCount).length} rutas</div>${legend}</div>
+<div class="legend"><h4>T1 Envíos — Ruteo</h4><div style="font-size:11px;color:#666;margin-bottom:8px">${puntos.length} guías · ${rutasResumen.reduce((s,r)=>s+r.paradas,0) || puntos.length} paradas · ${Object.keys(clusterCount).length} rutas</div>${legend}</div>${tablaResumen}
 <script>
 var map=L.map("map").setView([${DEPOSITO_LAT},${DEPOSITO_LNG}],12);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
 L.marker([${DEPOSITO_LAT},${DEPOSITO_LNG}]).addTo(map).bindPopup("<b>Almacén T1</b>");
+${trazos}
 ${markers}
 map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]});
 <\/script>
@@ -7754,8 +7923,11 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                   )}
                 </div>
                 <div style={{ fontSize: 11, color: C.textMuted }}>
-                  salida {pB0}:00 · jornada {pTmax} h · servicio {pSi} min/entrega
-                  {diagRuteo ? ` · ${diagRuteo.iteracionesPD} iter. de balanceo · ${diagRuteo.msComputo} ms` : ""}
+                  salida {pB0}:00 · jornada {pTmax} h · servicio {pSi}
+                  {parseFloat(pS1) > 0 ? `+${pS1}` : ""} min/entrega
+                  {parseFloat(pGamma) !== 1 ? ` · circuidad ${pGamma}` : ""}
+                  {paramsRuteo.rho === 0 ? " · sin retorno al CEDIS" : ""}
+                  {diagRuteo ? ` · ${diagRuteo.rondas > 1 ? `${diagRuteo.rondas} rondas (se usó la ${diagRuteo.rondaElegida}) · ` : ""}${diagRuteo.iteracionesPD} iter. de balanceo · ${diagRuteo.msComputo} ms` : ""}
                 </div>
               </div>
               <div style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
@@ -7769,10 +7941,32 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                   <div style={{ fontSize: 20, fontWeight: 800, color: metricas.CV <= 0.15 ? C.green : metricas.CV <= 0.30 ? C.yellow : C.red }}>{metricas.CV.toFixed(3)}</div>
                   <div style={{ fontSize: 10, color: C.textFaint }}>{metricas.minN}–{metricas.maxN} paradas por ruta</div>
                 </div>
+                {/* CV_T (25) — el que importa cuando se balancea por horas. Un CV
+                    de carga bajo con CV_T alto significa que todos llevan los
+                    mismos paquetes y unos terminan tres horas antes que otros. */}
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>CV de jornada</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: metricas.CV_T <= 0.05 ? C.green : metricas.CV_T <= 0.15 ? C.yellow : C.red }}>{metricas.CV_T.toFixed(3)}</div>
+                  <div style={{ fontSize: 10, color: C.textFaint }}>
+                    {metricas.duraciones && metricas.duraciones.length
+                      ? `${Math.min(...metricas.duraciones).toFixed(1)}–${Math.max(...metricas.duraciones).toFixed(1)} h por ruta`
+                      : "—"}
+                  </div>
+                </div>
                 <div>
                   <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>SLA en jornada</div>
                   <div style={{ fontSize: 20, fontWeight: 800, color: metricas.SLA >= 95 ? C.green : metricas.SLA >= 80 ? C.yellow : C.red }}>{metricas.SLA.toFixed(1)}%</div>
-                  <div style={{ fontSize: 10, color: C.textFaint }}>la más larga: {metricas.durMax.toFixed(1)} h</div>
+                  <div style={{ fontSize: 10, color: C.textFaint }}>
+                    la más larga: {metricas.durMax.toFixed(1)} h
+                    {isFinite(paramsRuteo.Kmax) ? ` · tope ${paramsRuteo.Kmax} km` : ""}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Km de la más larga</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: metricas.kmMax <= paramsRuteo.Kmax ? C.green : C.red }}>{metricas.kmMax.toFixed(0)} <span style={{ fontSize: 12, fontWeight: 600 }}>km</span></div>
+                  <div style={{ fontSize: 10, color: C.textFaint }}>
+                    {isFinite(paramsRuteo.Kmax) ? `K_max = ${paramsRuteo.Kmax} km` : "sin tope de km"}
+                  </div>
                 </div>
                 <div>
                   <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Balance</div>
@@ -7810,23 +8004,72 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                     definen qué secuencias son <b>temporalmente realizables</b>, y el rango de paradas fuerza el balance
                     entre sectores. Cambiarlos exige volver a generar las rutas.
                   </div>
-                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                    {[
-                      ["Salida del depósito (h)", pB0, setPB0, "0", "23", "b₀"],
-                      ["Jornada máxima (h)", pTmax, setPTmax, "1", "24", "T_max"],
-                      ["Servicio por entrega (min)", pSi, setPSi, "0", "60", "s_i"],
-                      ["Paradas mínimas", pM, setPM, "1", "500", "m"],
-                      ["Paradas máximas", pMM, setPMM, "1", "500", "M"],
-                    ].map(([lab, val, set, min, max, sym]) => (
-                      <div key={lab}>
-                        <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.textMuted, marginBottom: 4 }}>
-                          {lab} <span style={{ color: C.textFaint, fontStyle: "italic" }}>{sym}</span>
-                        </label>
-                        <input type="number" min={min} max={max} step="0.5" value={val} onChange={e => set(e.target.value)}
-                          style={{ width: 110, padding: "7px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, fontWeight: 700, textAlign: "center", backgroundColor: C.white, color: C.text }} />
-                      </div>
-                    ))}
-                  </div>
+                  {(() => {
+                    const grupos = [
+                      ["Jornada y servicio", [
+                        ["Salida del depósito (h)", pB0, setPB0, "0", "23", "0.5", "b₀"],
+                        ["Jornada máxima (h)", pTmax, setPTmax, "1", "24", "0.5", "T_max"],
+                        ["Servicio, 1ª guía (min)", pSi, setPSi, "0", "60", "0.5", "s₀"],
+                        ["Guía adicional (min)", pS1, setPS1, "0", "60", "0.5", "s₁"],
+                      ]],
+                      ["Geometría de la ruta", [
+                        ["Circuidad", pGamma, setPGamma, "1", "3", "0.05", "γ"],
+                        ["Retorno al CEDIS (1/0)", pRho, setPRho, "0", "1", "1", "ρ"],
+                        ["Tope km por ruta", pKmax, setPKmax, "0", "999", "5", "K_max"],
+                        ["Velocidad constante (km/h)", pVconst, setPVconst, "0", "120", "1", "v"],
+                      ]],
+                      ["Balanceo por horas", [
+                        ["Exponente de rebalanceo", pAlpha, setPAlpha, "0", "2", "0.1", "α"],
+                        ["Tolerancia de jornadas (h)", pEps, setPEps, "0", "5", "0.1", "ε"],
+                        ["Rondas máximas", pRmax, setPRmax, "1", "50", "1", "R_max"],
+                        ["Ventana de paradas", pDelta, setPDelta, "0", "0.5", "0.01", "δ"],
+                      ]],
+                      ["Secuenciación y entrada", [
+                        ["Arranques del TSP", pInicios, setPInicios, "1", "11", "1", "—"],
+                        ["Paradas mínimas", pM, setPM, "1", "500", "1", "m"],
+                        ["Paradas máximas", pMM, setPMM, "1", "500", "1", "M"],
+                      ]],
+                    ];
+                    return (
+                      <>
+                        {grupos.map(([titulo, campos]) => (
+                          <div key={titulo} style={{ marginBottom: 12 }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>{titulo}</div>
+                            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                              {campos.map(([lab, val, set, min, max, step, sym]) => (
+                                <div key={lab}>
+                                  <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.textMuted, marginBottom: 4 }}>
+                                    {lab} <span style={{ color: C.textFaint, fontStyle: "italic" }}>{sym}</span>
+                                  </label>
+                                  <input type="number" min={min} max={max} step={step} value={val} onChange={e => set(e.target.value)}
+                                    placeholder={lab.startsWith("Tope") ? "sin tope" : lab.startsWith("Velocidad") ? "perfil CDMX" : ""}
+                                    style={{ width: 128, padding: "7px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, fontWeight: 700, textAlign: "center", backgroundColor: C.white, color: C.text }} />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center" }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 600, color: C.text, cursor: "pointer" }}>
+                            <input type="checkbox" checked={pAgrupar} onChange={e => setPAgrupar(e.target.checked)} style={{ cursor: "pointer" }} />
+                            Agrupar guías por dirección
+                            <span style={{ fontSize: 11, color: C.textMuted }}>(una bajada por domicilio, no una por guía)</span>
+                          </label>
+                          <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 600, color: C.text, cursor: "pointer" }}>
+                            <input type="checkbox" checked={pOrOpt} onChange={e => setPOrOpt(e.target.checked)} style={{ cursor: "pointer" }} />
+                            Or-opt en la secuenciación
+                            <span style={{ fontSize: 11, color: C.textMuted }}>(más lento, rutas más cortas)</span>
+                          </label>
+                        </div>
+                        {parseFloat(pAlpha) > 0 && parseInt(pRmax) <= 1 && (
+                          <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
+                            ⚠ Con α = {pAlpha} pero R_max = 1 el rebalanceo por horas no se ejecuta: hace falta más de una
+                            ronda para que la duración medida regrese a la sectorización. Sube R_max a 10.
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                   {puntos.length > 0 && Math.ceil(puntos.length / Math.max(numClusters, 1)) > (parseInt(pMM) || 60) && (
                     <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
                       ⚠ Con {puntos.length.toLocaleString()} puntos y {numClusters} rutas tocan ~{Math.ceil(puntos.length / numClusters)} paradas por sector,
@@ -7963,6 +8206,68 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {/* Resumen por ruta: lo que se le entrega al proveedor. Separa el km de
+              ZONA del de TRASLADO porque son dos conversaciones distintas — el de
+              zona lo baja un mejor ruteo, el de traslado sólo lo baja mover el
+              CEDIS o cambiar la zona asignada. */}
+          {rutasResumen.length > 0 && (
+            <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, marginBottom: 14, overflow: "hidden" }}>
+              <div style={{ padding: "12px 18px", borderBottom: showResumen ? "1px solid " + C.border : "none", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Resumen por ruta</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                    {rutasResumen.reduce((s, r) => s + r.paradas, 0).toLocaleString()} paradas ·{" "}
+                    {rutasResumen.reduce((s, r) => s + r.guias, 0).toLocaleString()} guías ·{" "}
+                    {rutasResumen.reduce((s, r) => s + r.kmTotal, 0).toFixed(0)} km ·{" "}
+                    {rutasResumen.filter(r => !r.cumple).length === 0
+                      ? "todas dentro de jornada y tope de km"
+                      : `${rutasResumen.filter(r => !r.cumple).length} ruta(s) fuera de jornada o de tope`}
+                  </div>
+                </div>
+                <button onClick={() => setShowResumen(s => !s)}
+                  style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid " + C.border, backgroundColor: showResumen ? C.accentLight : "transparent", color: showResumen ? C.accent : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  {showResumen ? "▴ Ocultar" : "▾ Ver detalle por ruta"}
+                </button>
+              </div>
+              {showResumen && (
+                <div style={{ overflowX: "auto", maxHeight: 360 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead style={{ position: "sticky", top: 0, backgroundColor: C.bg, zIndex: 1 }}>
+                      <tr>
+                        {["Ruta", "Paradas", "Guías", "Km zona", "Km traslado", "Km total", "Jornada", "Última entrega", ""].map((h, ix) => (
+                          <th key={h + ix} style={{ padding: "8px 14px", textAlign: ix === 0 ? "left" : ix === 8 ? "center" : "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rutasResumen.map(r => (
+                        <tr key={r.cluster} style={{ borderBottom: "1px solid " + C.border, backgroundColor: r.cumple ? "transparent" : C.redBg }}>
+                          <td style={{ padding: "7px 14px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <div style={{ width: 10, height: 10, borderRadius: "50%", backgroundColor: RCOLORS[r.cluster % RCOLORS.length] }} />
+                              <span style={{ fontWeight: 700, color: RCOLORS[r.cluster % RCOLORS.length] }}>Ruta {r.ruta}</span>
+                            </div>
+                          </td>
+                          <td style={{ padding: "7px 14px", textAlign: "right", fontWeight: 600 }}>{r.paradas}</td>
+                          <td style={{ padding: "7px 14px", textAlign: "right", color: C.textMuted }}>{r.guias}</td>
+                          <td style={{ padding: "7px 14px", textAlign: "right" }}>{r.kmZona.toFixed(1)}</td>
+                          <td style={{ padding: "7px 14px", textAlign: "right", color: C.textMuted }}>{r.kmTraslado.toFixed(1)}</td>
+                          <td style={{ padding: "7px 14px", textAlign: "right", fontWeight: 700 }}>{r.kmTotal.toFixed(1)}</td>
+                          <td style={{ padding: "7px 14px", textAlign: "right", fontWeight: 700, color: r.horas <= paramsRuteo.Tmax ? C.text : C.red }}>{r.horas.toFixed(2)} h</td>
+                          <td style={{ padding: "7px 14px", textAlign: "right", fontFamily: "monospace" }}>{hhmm(r.ultimaEntrega)}</td>
+                          <td style={{ padding: "7px 14px", textAlign: "center" }}>
+                            {r.cumple ? <span style={{ color: C.green, fontWeight: 700 }}>✓</span>
+                              : <span style={{ color: C.red, fontWeight: 700, fontSize: 10 }}>FUERA</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
 
@@ -11768,10 +12073,13 @@ function ModulePronostico() {
       const Tmax = capacidad?.global?.horasRuta || PARAMS_DEFAULT.Tmax;
       setSimEstado("Calibrando tiempo de servicio contra lo observado…");
       const k0 = Math.max(1, Math.ceil(pts.length / M));
-      const cero = await correrRuteo(pts, k0, { ...PARAMS_DEFAULT, si: 0, Tmax: 24, m, M });
+      // s0: 0 (y no si: 0) — `si` es el alias viejo del tiempo de servicio y en
+      // el ruteador tiene prioridad sobre s0, así que mezclar los dos nombres
+      // dejaría el otro sin efecto. Aquí se aísla el traslado puro.
+      const cero = await correrRuteo(pts, k0, { ...PARAMS_DEFAULT, s0: 0, Tmax: 24, m, M });
       const trasladoH = (cero.metricas?.duraciones || []).reduce((s, d) => s + d, 0);
       const cal = PRONO.calibrarServicio(capacidad?.global?.minPorEntrega, trasladoH, pts.length);
-      const params = { ...PARAMS_DEFAULT, si: cal.valido ? cal.si : PARAMS_DEFAULT.si, Tmax, m, M };
+      const params = { ...PARAMS_DEFAULT, s0: cal.valido ? cal.si : PARAMS_DEFAULT.s0, Tmax, m, M };
 
       let pasos = 0;
       const res = await PRONO.buscarKFactible(pts.length, {
@@ -12493,7 +12801,7 @@ function ModulePronostico() {
                   <>
                     {!cal.valido && (
                       <ProAviso tipo="warn">
-                        No se pudo calibrar el tiempo de servicio: {cal.motivo} Se corrió con el valor por defecto de {nf(PARAMS_DEFAULT.si * 60, 1)} min, así que la simulación es optimista respecto al campo.
+                        No se pudo calibrar el tiempo de servicio: {cal.motivo} Se corrió con el valor por defecto de {nf(PARAMS_DEFAULT.s0 * 60, 1)} min, así que la simulación es optimista respecto al campo.
                       </ProAviso>
                     )}
                     {res?.sinSolucion && (
