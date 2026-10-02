@@ -7931,6 +7931,65 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
 
       {/* Controls panel */}
       <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
+        {/* Interruptor v1/v2.
+            Va ARRIBA del Paso 1 y fuera de cualquier condición: elegir el modelo
+            no depende de haber cargado un archivo. Estaba dentro del Paso 2, que
+            sólo se dibuja con `fileInfo`, así que en una pantalla recién abierta
+            el botón no existía y no había forma de saber con qué modelo se iba a
+            rutear.
+
+            Escribe los mismos campos del panel de parámetros, así que lo que se
+            elija aquí se puede seguir ajustando a mano abajo — y si se ajusta, el
+            estado pasa a "personalizado" en vez de dejar un botón encendido que
+            miente sobre lo que corre. */}
+        <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 10, backgroundColor: C.panelAlt, border: "1px solid " + C.border }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 1 }}>Modelo de ruteo</span>
+            <div style={{ display: "flex", gap: 0, borderRadius: 8, overflow: "hidden", border: "1px solid " + C.border }}>
+              {["v1", "v2"].map((clave, ix) => {
+                const activo = modoActivo === clave;
+                return (
+                  <button key={clave} onClick={() => aplicarModo(clave)}
+                    title={MODOS[clave].resumen}
+                    style={{
+                      padding: "9px 20px", border: "none", cursor: "pointer",
+                      borderLeft: ix === 1 ? "1px solid " + C.border : "none",
+                      backgroundColor: activo ? C.accent : C.white,
+                      color: activo ? "white" : C.textMuted,
+                      fontSize: 13, fontWeight: 700, whiteSpace: "nowrap",
+                    }}>
+                    {MODOS[clave].nombre}
+                  </button>
+                );
+              })}
+            </div>
+            {modoActivo === "personalizado" && (
+              <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 10, backgroundColor: C.yellowBg, color: C.yellow }}>
+                personalizado — no coincide con v1 ni v2
+              </span>
+            )}
+            <span style={{ fontSize: 11, color: C.textMuted, flex: "1 1 260px", minWidth: 200 }}>
+              {modoActivo === "personalizado"
+                ? "Ajustaste parámetros a mano. Los botones los sobreescriben."
+                : MODOS[modoActivo].resumen}
+            </span>
+          </div>
+          {/* Es el MISMO algoritmo: sin esta aclaración la gente supone que hay
+              dos implementaciones y que una puede estar menos probada que la otra. */}
+          <div style={{ fontSize: 10.5, color: C.textFaint, marginTop: 8, lineHeight: 1.5 }}>
+            Es el mismo ruteador en los dos casos — el interruptor sólo escribe los parámetros del modelo.
+            v1 reproduce el modelo de la tesis punto por punto; v2 enciende agrupación por domicilio,
+            circuidad, fin de ruta sin retorno al CEDIS y el lazo que iguala jornadas.
+          </div>
+          {puntos.length > 0 && modoGenerado && modoGenerado !== modoActivo && (
+            <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
+              ⚠ El plan en pantalla se generó con <b>{MODOS[modoGenerado]?.nombre || modoGenerado}</b>.
+              Cambiar el modelo no re-rutea: las métricas se recalculan con los parámetros nuevos, pero
+              los sectores y el orden siguen siendo los anteriores. Usa <b>Re-clusterizar</b> para aplicarlo.
+            </div>
+          )}
+        </div>
+
         {/* Step 1: Upload */}
         <div style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 1 — Cargar archivo</div>
@@ -7956,60 +8015,6 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
         {fileInfo && (
           <div style={{ borderTop: "1px solid " + C.border, paddingTop: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 2 — Configurar y generar rutas</div>
-
-            {/* Interruptor v1/v2. Escribe los mismos campos del panel de
-                parámetros, así que lo que elijas aquí se puede seguir ajustando
-                a mano abajo — y si lo haces, el estado pasa a "personalizado"
-                en vez de dejar un botón encendido que miente. */}
-            <div style={{ marginBottom: 14, padding: "12px 14px", borderRadius: 10, backgroundColor: C.panelAlt, border: "1px solid " + C.border }}>
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: C.text }}>Modelo de ruteo</span>
-                <div style={{ display: "flex", gap: 0, borderRadius: 8, overflow: "hidden", border: "1px solid " + C.border }}>
-                  {["v1", "v2"].map((clave, ix) => {
-                    const activo = modoActivo === clave;
-                    return (
-                      <button key={clave} onClick={() => aplicarModo(clave)}
-                        title={MODOS[clave].resumen}
-                        style={{
-                          padding: "8px 18px", border: "none", cursor: "pointer",
-                          borderLeft: ix === 1 ? "1px solid " + C.border : "none",
-                          backgroundColor: activo ? C.accent : C.white,
-                          color: activo ? "white" : C.textMuted,
-                          fontSize: 13, fontWeight: 700, whiteSpace: "nowrap",
-                        }}>
-                        {MODOS[clave].nombre}
-                      </button>
-                    );
-                  })}
-                </div>
-                {modoActivo === "personalizado" && (
-                  <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 10, backgroundColor: C.yellowBg, color: C.yellow }}>
-                    personalizado — no coincide con v1 ni v2
-                  </span>
-                )}
-                <span style={{ fontSize: 11, color: C.textMuted, flex: "1 1 260px", minWidth: 200 }}>
-                  {modoActivo === "personalizado"
-                    ? "Ajustaste parámetros a mano. Los botones los sobreescriben."
-                    : MODOS[modoActivo].resumen}
-                </span>
-              </div>
-              {/* Es el MISMO algoritmo: sin esta aclaración la gente supone que
-                  hay dos implementaciones y que una puede estar más probada que
-                  la otra. */}
-              <div style={{ fontSize: 10.5, color: C.textFaint, marginTop: 8, lineHeight: 1.5 }}>
-                Es el mismo ruteador en los dos casos — el interruptor sólo escribe los parámetros de abajo.
-                v1 reproduce el modelo de la tesis punto por punto; v2 enciende agrupación por domicilio,
-                circuidad, fin de ruta sin retorno al CEDIS y el lazo que iguala jornadas.
-              </div>
-              {puntos.length > 0 && modoGenerado && modoGenerado !== modoActivo && (
-                <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
-                  ⚠ El plan en pantalla se generó con <b>{MODOS[modoGenerado]?.nombre || modoGenerado}</b>.
-                  Cambiar el modelo no re-rutea: las métricas se recalculan con los parámetros nuevos, pero
-                  los sectores y el orden siguen siendo los anteriores. Usa <b>Re-clusterizar</b> para aplicarlo.
-                </div>
-              )}
-            </div>
-
             <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
               <div>
                 <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Número de rutas (k)</label>
