@@ -7069,6 +7069,85 @@ function ModuleRuteo() {
   // Antes había una copia inline completa del algoritmo aquí y otra en el
   // Worker; divergían con cada cambio. Ahora ambos caminos llaman a `rutear`.
   // ================================================================
+  // ================================================================
+  // MODOS v1 / v2
+  //
+  // Son los MISMOS parámetros del panel, en dos juegos. No hay dos ruteadores:
+  // el algoritmo es uno y todo lo que agrega la v2 está detrás de estos valores,
+  // así que el interruptor no cambia de código, cambia de configuración.
+  //
+  //   v1 — el modelo de la tesis tal cual: reparte por número de paradas.
+  //   v2 — balanceo por horas de jornada, con la calibración de operación.
+  //
+  // Los valores son strings porque son los de los inputs del panel; así el
+  // interruptor y la captura manual escriben en el mismo lugar y no pueden
+  // desincronizarse.
+  // ================================================================
+  const MODOS = useMemo(() => ({
+    v1: {
+      nombre: "v1 · modelo de la tesis",
+      resumen: "Reparte por número de paradas. Una sola pasada.",
+      vals: {
+        pB0: "8", pTmax: "9", pSi: "3", pS1: "0", pM: "25", pMM: "60",
+        pGamma: "1", pRho: "1", pKmax: "", pVconst: "",
+        pAlpha: "0", pEps: "0.6", pRmax: "1", pDelta: "0.05",
+        pInicios: "1", pOrOpt: false, pAgrupar: false,
+      },
+    },
+    v2: {
+      nombre: "v2 · balanceo por horas",
+      resumen: "Iguala jornadas, no paquetes. Agrupa por domicilio y realimenta hasta 10 rondas.",
+      vals: {
+        pB0: "8", pTmax: "11", pSi: "6", pS1: "1", pM: "25", pMM: "60",
+        pGamma: "1.3", pRho: "0", pKmax: "120", pVconst: "",
+        pAlpha: "0.7", pEps: "0.6", pRmax: "10", pDelta: "0.05",
+        pInicios: "11", pOrOpt: true, pAgrupar: true,
+      },
+    },
+  }), []);
+
+  const setters = {
+    pB0: setPB0, pTmax: setPTmax, pSi: setPSi, pS1: setPS1, pM: setPM, pMM: setPMM,
+    pGamma: setPGamma, pRho: setPRho, pKmax: setPKmax, pVconst: setPVconst,
+    pAlpha: setPAlpha, pEps: setPEps, pRmax: setPRmax, pDelta: setPDelta,
+    pInicios: setPInicios, pOrOpt: setPOrOpt, pAgrupar: setPAgrupar,
+  };
+  const valsActuales = {
+    pB0, pTmax, pSi, pS1, pM, pMM, pGamma, pRho, pKmax, pVconst,
+    pAlpha, pEps, pRmax, pDelta, pInicios, pOrOpt, pAgrupar,
+  };
+
+  const aplicarModo = (modo) => {
+    const vals = MODOS[modo].vals;
+    for (const [campo, valor] of Object.entries(vals)) setters[campo](valor);
+  };
+
+  // Qué modo está activo AHORA, comparando los valores vigentes contra cada
+  // juego. Se compara en número y no como string para que "1.0" y "1" sean el
+  // mismo modo; `pKmax` vacío significa sin tope y vale lo mismo que "".
+  //
+  // Devuelve "personalizado" cuando no coincide con ninguno. Hace falta ese
+  // tercer estado: si el botón se quedara iluminado después de que alguien
+  // cambia un campo a mano, estaría diciendo que corre un modo que no corre.
+  const modoActivo = useMemo(() => {
+    const igual = (a, b) => {
+      if (typeof a === "boolean" || typeof b === "boolean") return !!a === !!b;
+      const sa = String(a ?? "").trim(), sb = String(b ?? "").trim();
+      if (sa === "" || sb === "") return sa === sb;
+      return Math.abs(parseFloat(sa) - parseFloat(sb)) < 1e-9;
+    };
+    for (const clave of Object.keys(MODOS)) {
+      if (Object.entries(MODOS[clave].vals).every(([c, v]) => igual(valsActuales[c], v))) return clave;
+    }
+    return "personalizado";
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [pB0, pTmax, pSi, pS1, pM, pMM, pGamma, pRho, pKmax, pVconst, pAlpha, pEps, pRmax, pDelta, pInicios, pOrOpt, pAgrupar, MODOS]);
+
+  // Modo con el que se generó el plan que está en pantalla. Si alguien mueve el
+  // interruptor y no vuelve a generar, el mapa sigue siendo del modo anterior y
+  // hay que decirlo.
+  const [modoGenerado, setModoGenerado] = useState(null);
+
   const seqOrderRef = useRef(null);   // orden de visita del último ruteo
   // Se pasa `s0` y NUNCA `si`: el alias viejo tiene prioridad en el ruteador
   // —hace falta para la calibración de la simulación de flota— y mandarlo aquí
@@ -7139,6 +7218,7 @@ function ModuleRuteo() {
     if (r.metricas) setMetricas(r.metricas);
     if (r.diagnostico) setDiagRuteo(r.diagnostico);
     setEditadoManual(false);
+    setModoGenerado(modoActivo);   // con qué modelo se calculó lo que está en pantalla
     // Reporte del rebalanceo a consola. Las métricas de pantalla son las del
     // plan final; esto es lo que hace falta para juzgar si el lazo de horas
     // sirvió: qué tan desparejas estaban las jornadas en la primera pasada
@@ -7876,6 +7956,60 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
         {fileInfo && (
           <div style={{ borderTop: "1px solid " + C.border, paddingTop: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 2 — Configurar y generar rutas</div>
+
+            {/* Interruptor v1/v2. Escribe los mismos campos del panel de
+                parámetros, así que lo que elijas aquí se puede seguir ajustando
+                a mano abajo — y si lo haces, el estado pasa a "personalizado"
+                en vez de dejar un botón encendido que miente. */}
+            <div style={{ marginBottom: 14, padding: "12px 14px", borderRadius: 10, backgroundColor: C.panelAlt, border: "1px solid " + C.border }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: C.text }}>Modelo de ruteo</span>
+                <div style={{ display: "flex", gap: 0, borderRadius: 8, overflow: "hidden", border: "1px solid " + C.border }}>
+                  {["v1", "v2"].map((clave, ix) => {
+                    const activo = modoActivo === clave;
+                    return (
+                      <button key={clave} onClick={() => aplicarModo(clave)}
+                        title={MODOS[clave].resumen}
+                        style={{
+                          padding: "8px 18px", border: "none", cursor: "pointer",
+                          borderLeft: ix === 1 ? "1px solid " + C.border : "none",
+                          backgroundColor: activo ? C.accent : C.white,
+                          color: activo ? "white" : C.textMuted,
+                          fontSize: 13, fontWeight: 700, whiteSpace: "nowrap",
+                        }}>
+                        {MODOS[clave].nombre}
+                      </button>
+                    );
+                  })}
+                </div>
+                {modoActivo === "personalizado" && (
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 10, backgroundColor: C.yellowBg, color: C.yellow }}>
+                    personalizado — no coincide con v1 ni v2
+                  </span>
+                )}
+                <span style={{ fontSize: 11, color: C.textMuted, flex: "1 1 260px", minWidth: 200 }}>
+                  {modoActivo === "personalizado"
+                    ? "Ajustaste parámetros a mano. Los botones los sobreescriben."
+                    : MODOS[modoActivo].resumen}
+                </span>
+              </div>
+              {/* Es el MISMO algoritmo: sin esta aclaración la gente supone que
+                  hay dos implementaciones y que una puede estar más probada que
+                  la otra. */}
+              <div style={{ fontSize: 10.5, color: C.textFaint, marginTop: 8, lineHeight: 1.5 }}>
+                Es el mismo ruteador en los dos casos — el interruptor sólo escribe los parámetros de abajo.
+                v1 reproduce el modelo de la tesis punto por punto; v2 enciende agrupación por domicilio,
+                circuidad, fin de ruta sin retorno al CEDIS y el lazo que iguala jornadas.
+              </div>
+              {puntos.length > 0 && modoGenerado && modoGenerado !== modoActivo && (
+                <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
+                  ⚠ El plan en pantalla se generó con <b>{MODOS[modoGenerado]?.nombre || modoGenerado}</b>.
+                  Cambiar el modelo no re-rutea: las métricas se recalculan con los parámetros nuevos, pero
+                  los sectores y el orden siguen siendo los anteriores. Usa <b>Re-clusterizar</b> para aplicarlo.
+                </div>
+              )}
+            </div>
+
             <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
               <div>
                 <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Número de rutas (k)</label>
@@ -7916,6 +8050,11 @@ map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,4
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 8 }}>
                   Métricas del plan
+                  {modoGenerado && (
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, backgroundColor: C.accentLight, color: C.accent }}>
+                      {modoGenerado === "personalizado" ? "personalizado" : modoGenerado}
+                    </span>
+                  )}
                   {editadoManual && (
                     <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, backgroundColor: C.yellowBg, color: C.yellow }}>
                       editado a mano
