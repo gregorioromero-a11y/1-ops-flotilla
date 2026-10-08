@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
 import { TARIFAS_POR_RUTA, TIPOS_DEDICADOS, etiquetaDedicada } from "../lib/costEngine";
 import { rutear, metricas as calcMetricas, resumenRuta, etaRuta, PARAMS_DEFAULT } from "../lib/ruteo";
+import { mapaRuteoHTML } from "../lib/mapaHtml";
 import * as PRONO from "../lib/pronostico";
 import { cargarIndiceMunicipios, municipioDeFila, municipioDeCoordenada, canonizarMunicipio, resumenMunicipios, etiquetaMunicipios } from "../lib/municipios";
 
@@ -7822,82 +7823,36 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
     a.click();
   };
 
-  const exportMapHTML = () => {
+  // El HTML del mapa lo arma src/lib/mapaHtml.js. Estaba inline aquí y no había
+  // forma de probarlo sin montar React: un número de guía con una comilla
+  // dejaba un bindPopup("…") sin cerrar, tronaba TODO el script y el archivo
+  // abría en blanco, sin mapa y sin error. Ahora scripts/mapaHtmlTest.mjs lo
+  // somete a datos hostiles en cada corrida.
+  const exportMapHTML = async () => {
     if (!puntos.length) return;
-    const markers = puntos.map((p, i) => {
-      const cl = asignaciones[i] ?? 0;
-      const color = RCOLORS[cl % RCOLORS.length];
-      const label = guiaKey && p[guiaKey] ? String(p[guiaKey]) : "";
-      const parada = posPorFila && posPorFila[i] != null ? `<br/>Parada ${posPorFila[i]}` : "";
-      const eta = etaPorFila && etaPorFila[i] != null ? ` · llega ${hhmm(etaPorFila[i])}` : "";
-      return `L.circleMarker([${p.lat},${p.lng}],{radius:7,fillColor:"${color}",color:"white",weight:2,fillOpacity:0.9}).addTo(map).bindPopup("<b>Ruta ${cl+1}</b>${label ? "<br/>"+label : ""}${parada}${eta}<br/>${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}");`;
-    }).join("\n");
-    // POLILÍNEA POR RUTA, en orden de visita y arrancando en el depósito. Los
-    // marcadores sueltos dicen qué paquetes lleva cada unidad pero no en qué
-    // orden; con el trazo se ve de un golpe si una ruta cruza media ciudad para
-    // volver sobre sus pasos, que es el error que hay que detectar a ojo. El
-    // tramo de regreso se dibuja sólo si ρ = 1: con ρ = 0 la jornada termina en
-    // la última entrega y pintar el retorno sería mentir sobre el plan.
-    const trazos = rutasResumen.map(r => {
-      const cl = r.cluster;
-      const filas = puntos
-        .map((p, i) => ({ p, i }))
-        .filter(({ i }) => (asignaciones[i] ?? 0) === cl && posPorFila && posPorFila[i] != null);
-      if (!filas.length) return "";
-      // Una coordenada por PARADA, no por guía: varias guías del mismo domicilio
-      // comparten posición y duplicarían el vértice.
-      const porPos = new Map();
-      for (const { p, i } of filas) if (!porPos.has(posPorFila[i])) porPos.set(posPorFila[i], p);
-      const orden = [...porPos.entries()].sort((a, b) => a[0] - b[0]).map(([, p]) => p);
-      const coords = [[DEPOSITO_LAT, DEPOSITO_LNG], ...orden.map(p => [p.lat, p.lng])];
-      if (paramsRuteo.rho === 1) coords.push([DEPOSITO_LAT, DEPOSITO_LNG]);
-      const color = RCOLORS[cl % RCOLORS.length];
-      const popup = [
-        `<b>Ruta ${r.ruta}</b>`,
-        `${r.paradas} paradas · ${r.guias} guías`,
-        `${r.kmTotal.toFixed(1)} km (${r.kmZona.toFixed(1)} en zona + ${r.kmTraslado.toFixed(1)} de traslado)`,
-        `${r.horas.toFixed(1)} h de jornada · última entrega ${hhmm(r.ultimaEntrega)}`,
-        r.cumple ? "" : "<b style='color:#DC2626'>fuera de jornada o de tope de km</b>",
-      ].filter(Boolean).join("<br/>");
-      return `L.polyline(${JSON.stringify(coords)},{color:"${color}",weight:3,opacity:0.75}).addTo(map).bindPopup("${popup.replace(/"/g, '\\"')}");`;
-    }).filter(Boolean).join("\n");
-    const porCl = new Map(rutasResumen.map(r => [r.cluster, r]));
-    const legend = Object.entries(clusterCount).sort((a,b)=>+a[0]-+b[0]).map(([cl,cnt])=>{
-      const color = RCOLORS[+cl % RCOLORS.length];
-      const r = porCl.get(+cl);
-      const detalle = r
-        ? `<span style="color:#666">${r.paradas} par · ${r.kmTotal.toFixed(0)} km · ${r.horas.toFixed(1)} h${r.cumple ? "" : " ⚠"}</span>`
-        : `<span style="color:#666">${cnt} pts</span>`;
-      return `<div style="display:flex;align-items:center;gap:6px;margin:3px 0"><div style="width:12px;height:12px;border-radius:50%;background:${color}"></div><span>Ruta ${+cl+1} — </span>${detalle}</div>`;
-    }).join("");
-    // Tabla de resumen por ruta, en el propio archivo: el HTML se manda por
-    // correo a los proveedores y tiene que poder leerse solo.
-    const tablaResumen = rutasResumen.length ? `
-<div class="resumen"><h4>Resumen por ruta</h4>
-<table><thead><tr><th>Ruta</th><th>Par.</th><th>Guías</th><th>Km zona</th><th>Km tras.</th><th>Km tot.</th><th>Horas</th><th>Últ. entrega</th></tr></thead><tbody>
-${rutasResumen.map(r => `<tr${r.cumple ? "" : ' class="malo"'}><td>${r.ruta}</td><td>${r.paradas}</td><td>${r.guias}</td><td>${r.kmZona.toFixed(1)}</td><td>${r.kmTraslado.toFixed(1)}</td><td>${r.kmTotal.toFixed(1)}</td><td>${r.horas.toFixed(2)}</td><td>${hhmm(r.ultimaEntrega)}</td></tr>`).join("")}
-</tbody></table></div>` : "";
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><title>Mapa Ruteo — T1 Envíos</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
-<style>body{margin:0;font-family:Arial,sans-serif}#map{height:100vh;width:100%}.legend{position:absolute;bottom:20px;left:20px;background:white;padding:14px 18px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:1000;font-size:13px;max-height:60vh;overflow-y:auto}.legend h4{margin:0 0 8px;font-size:14px}
-.resumen{position:absolute;top:20px;right:20px;background:white;padding:12px 14px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:1000;font-size:11px;max-height:70vh;overflow:auto}
-.resumen h4{margin:0 0 8px;font-size:13px}.resumen table{border-collapse:collapse}.resumen th,.resumen td{padding:2px 7px;text-align:right;border-bottom:1px solid #eee;white-space:nowrap}
-.resumen th{color:#666;font-weight:700;text-transform:uppercase;font-size:9px}.resumen td:first-child,.resumen th:first-child{text-align:left;font-weight:700}
-.resumen tr.malo td{background:#FEF2F2;color:#B91C1C}</style>
-</head><body>
-<div id="map"></div>
-<div class="legend"><h4>T1 Envíos — Ruteo</h4><div style="font-size:11px;color:#666;margin-bottom:8px">${puntos.length} guías · ${rutasResumen.reduce((s,r)=>s+r.paradas,0) || puntos.length} paradas · ${Object.keys(clusterCount).length} rutas</div>${legend}</div>${tablaResumen}
-<script>
-var map=L.map("map").setView([${DEPOSITO_LAT},${DEPOSITO_LNG}],12);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
-L.marker([${DEPOSITO_LAT},${DEPOSITO_LNG}]).addTo(map).bindPopup("<b>Almacén T1</b>");
-${trazos}
-${markers}
-map.fitBounds([${puntos.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]});
-<\/script>
-</body></html>`;
+    // Leaflet se empotra en el archivo para que abra SIN INTERNET. Se importa
+    // aquí y no arriba para que esos ~160 KB sólo los baje quien descarga un
+    // mapa, no todo el que entra al módulo.
+    let leafletCss = null, leafletJs = null, zonas = null;
+    try {
+      const [inline, geo] = await Promise.all([
+        import("../lib/leafletInline"),
+        import("../lib/geoZmvm"),
+      ]);
+      leafletCss = inline.LEAFLET_CSS; leafletJs = inline.LEAFLET_JS;
+      zonas = geo.ZMVM;
+    } catch (err) {
+      // Si falla, el generador cae al CDN y el archivo avisa si no carga.
+      console.warn("[Ruteo] No se pudo empotrar Leaflet, se usará el CDN:", err);
+    }
+    const html = mapaRuteoHTML({
+      puntos, asignaciones,
+      depot: { lat: DEPOSITO_LAT, lng: DEPOSITO_LNG },
+      colores: RCOLORS,
+      rutasResumen, posPorFila, etaPorFila, guiaKey,
+      rho: paramsRuteo.rho,
+      leafletCss, leafletJs, zonas,
+    });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
     a.download = "mapa_ruteo.html";

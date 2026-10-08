@@ -1,0 +1,584 @@
+================================================================================
+RUTEADOR v2 — DOCUMENTACIÓN PARA TRABAJO ESCRITO
+Qué cambió respecto al modelo de la tesis, en qué literatura se sustenta
+y cómo se justifica la comparación entre ambos ruteadores
+================================================================================
+
+Proyecto : t1-ops-flotilla · módulo Ruteo / Clusters
+Código   : src/lib/ruteo.js (954 líneas, fuente única del algoritmo)
+Base     : Romero Romero (UNAM, ago 2026), "Ruteador dinámico para la logística
+           de última milla en la CDMX mediante clusterización dinámica y
+           optimización de rutas dependiente del tiempo"
+
+Convención de ecuaciones: (1)–(21) y §n.n remiten a la tesis. Las ecuaciones
+(22)–(26) numeran la extensión v2 siguiendo la misma convención; NO están en el
+documento original.
+
+
+--------------------------------------------------------------------------------
+  NOTA SOBRE LA NOTACIÓN
+--------------------------------------------------------------------------------
+
+Este archivo es texto plano y evita a propósito los símbolos que muchas fuentes
+monoespaciadas no dibujan —se ven como cuadros negros—. Al pasarlo al documento
+final, sustituye:
+
+    nbar        ->  n con barra encima        objetivo de paradas por sector
+    Tbar        ->  T con barra encima        duración promedio de las rutas
+    Fi          ->  Phi mayúscula  (Φ)        el mapa de una ronda completa
+    alpha       ->  α        epsilon  ->  ε        delta   ->  δ
+    <-          ->  flecha de asignación hacia la izquierda
+    <=  y  >=   ->  menor o igual / mayor o igual
+
+Las letras griegas que SÍ se dejaron tal cual (α, γ, ρ, δ, ε, η, σ, μ, Δ) son
+las que se dibujan en prácticamente cualquier fuente. Si alguna se te ve como
+cuadro, es tu fuente y no el archivo: cámbiala a DejaVu Sans Mono, Consolas o
+Menlo.
+
+
+--------------------------------------------------------------------------------
+  ADVERTENCIA SOBRE LAS REFERENCIAS
+--------------------------------------------------------------------------------
+
+Las referencias de la PARTE 5 se dan con autor, título y venue porque son
+trabajos conocidos del área, pero PUEDEN TENER ERRORES DE AÑO, VOLUMEN O
+PÁGINAS. Verifica cada una en Scopus, Web of Science o el sitio del editor
+antes de citarla. Una cita mal puesta en una tesis se paga caro.
+
+Igual de importante: todas las cifras de este documento provienen de corridas
+sobre un ARCHIVO DE PRUEBA SINTÉTICO, no de datos de operación. Ver PARTE 4.
+
+
+================================================================================
+  PARTE 1 — QUÉ CAMBIÓ
+================================================================================
+
+La pregunta "¿es un cambio de metodología o sólo de parámetros?" tiene
+respuesta: hay cambio metodológico, y es lo principal. Los parámetros son el
+vehículo del cambio, no el cambio. Conviene exponerlo en cuatro niveles.
+
+
+--------------------------------------------------------------------------------
+NIVEL A — CAMBIO EN LA ESTRUCTURA DEL PROBLEMA  (lo metodológico)
+--------------------------------------------------------------------------------
+
+El modelo de la tesis es una DESCOMPOSICIÓN SECUENCIAL EN DOS ETAPAS:
+sectorizar y después rutear. La etapa 1 usa como objetivo el balance de
+cardinalidad, ec. (9):
+
+        m <= n_j <= M
+
+Ahí hay un supuesto implícito que nunca se enuncia:
+
+        QUE EL NÚMERO DE PARADAS ES UN PROXY SUFICIENTE DE LA CARGA DE TRABAJO.
+
+Ese supuesto es falso en la ZMVM y es falsable. Con sectores de ~40 paradas
+parejas, las jornadas medidas salen entre 3.76 y 10.84 h. El proxy falla porque
+ni el traslado hasta el polígono ni la densidad interna están correlacionados
+con la cardinalidad: una parada de Santa Fe no cuesta lo que una del Centro.
+
+La v2 sustituye la descomposición por una ITERACIÓN DE PUNTO FIJO entre las dos
+etapas:
+
+    v1:   S = Rutear( Sectorizar(P, nbar) ),   con nbar = n/k constante
+
+    v2:   nbar^(r+1) = Fi( nbar^(r) )
+          donde  Fi(nbar) = medir( Rutear( Sectorizar(P, nbar) ) )
+          hasta  max(T) − min(T) < epsilon    o    r = R_max
+
+con la actualización del objetivo por sector:
+
+        nbar_j  <-  n_j · ( Tbar / T_j )^alpha                            (22)
+
+        nbar_j  <-  0.85 · nbar_j
+                    si  T_j > T_max  o bien  km_j > K_max                 (23)
+
+La solución deja de ser la salida de un pipeline para ser el punto fijo
+aproximado de un mapa acoplado. Eso no es un parámetro: es otra formulación.
+α = 0 y R_max = 1 no "apagan una opción": colapsan la iteración a una sola
+evaluación, que es exactamente el modelo original.
+
+CAMBIO DE CRITERIO DE DECISIÓN
+    v1 minimiza la dispersión de n_j (cardinalidad).
+    v2 minimiza la dispersión de T^k (duración de jornada).
+
+Métrica nueva:
+
+        CV_T = σ(T) / μ(T)                                                (25)
+
+Interpretación del exponente α:
+    α = 0    apaga el lazo.
+    α = 1    corrige de golpe suponiendo que la duración es proporcional al
+             número de paradas; exagera, porque hay un costo fijo de traslado
+             que no se reparte, y hace oscilar los tamaños.
+    α = 0.7  (valor usado) corrige la mayor parte sin pasarse.
+
+
+--------------------------------------------------------------------------------
+NIVEL B — CAMBIOS EN EL MODELO DE COSTOS  (reformulación)
+--------------------------------------------------------------------------------
+
+Cambia la FORMA FUNCIONAL, no sólo el valor numérico. Va en el capítulo de
+modelado.
+
+  Elemento             Tesis                      v2
+  -------------------- -------------------------- ----------------------------
+  Servicio por parada  s_i constante, ec. (10)    s_i = s0 + (q_i − 1)·s1
+  Arco de regreso      tour cerrado simétrico (7) ρ · γ · d(i, depósito)
+  Distancia            haversine                  γ · haversine
+  Factibilidad         T^k <= T_max               T^k <= T_max  y  km^k <= K_max
+
+Dos de estos son estructurales y hay que argumentarlos:
+
+1. LA ASIMETRÍA POR ρ.
+   Con ρ = 0 el problema por sector deja de ser un TSP cerrado y pasa a ser
+   ABIERTO: la ec. (7) asume ida y vuelta. Al romperse la simetría cambia por
+   qué extremo del polígono conviene empezar. En la implementación, la matriz
+   de distancias sigue siendo simétrica entre paradas, pero la fila del
+   depósito guarda la ida y la columna el regreso.
+   Medido: 2 071 → 1 576 km.
+
+2. EL TIEMPO DE SERVICIO CON MULTIPLICIDAD.
+   Sólo tiene sentido junto con la consolidación de nodos (Nivel C). La primera
+   entrega de un domicilio paga estacionamiento y caminata; las demás del mismo
+   domicilio sólo el intercambio.
+   Verificación: con velocidad constante, el incremento total de jornada al
+   pasar de s1 = 0 a s1 = 5 min es exactamente (2263 − 2010) · 5 min = 21.0833 h.
+   Con el perfil horario NO es aditivo (20.00 h medidos), porque atrasar las
+   llegadas las mueve a franjas con otra velocidad — eso es la dependencia
+   temporal de §6.4 operando.
+
+γ ES SÓLO PARAMETRIZACIÓN, y conviene decirlo explícitamente para que nadie
+crea que "mejora" las rutas: es un escalar positivo que multiplica todos los
+arcos, así que NO CAMBIA QUÉ SECUENCIA ES ÓPTIMA — el argmin de (3) es
+invariante — sólo las magnitudes reportadas. Verificado: con T_max holgado,
+γ = 1.3 produce secuencias idénticas y D exactamente 1.3×.
+
+
+--------------------------------------------------------------------------------
+NIVEL C — CAMBIOS EN LOS ALGORITMOS DE SOLUCIÓN  (metaheurística)
+--------------------------------------------------------------------------------
+
+Van en el capítulo de implementación.
+
+PRE-PROCESO QUE NO EXISTÍA — CONSOLIDACIÓN DE NODOS
+    Las guías con coordenada idéntica se colapsan en una parada con
+    multiplicidad q. Cambia la INSTANCIA: 2 263 nodos → 2 010. No es cosmético:
+    el 11 % de las paradas eran fantasma y pagaban maniobra completa cada una.
+    La llave es la coordenada exacta, sin tolerancias: "misma dirección"
+    significa misma geocodificación, que es lo que garantiza una sola bajada.
+
+MÓDULO 1 — POWER DIAGRAM CAPACITADO
+    La formulación (14)–(16) queda INTACTA. Cambian:
+      · actualización de pesos:  η·(nbar − n_j)  →  η·(nbar_j − n_j)
+        (objetivo por sector en vez de objetivo único)
+      · m y M por sector, derivados de nbar_j·(1 ± δ)
+      · arranque en caliente entre rondas: centros y pesos heredados
+
+MÓDULO 2 — SECUENCIACIÓN
+    El objetivo SIGUE SIENDO distancia pura (3) y la justificación de §6.2 se
+    sostiene sin cambios. Lo que cambia es la ESTRUCTURA DE VECINDAD de la
+    búsqueda local:
+      · 2-opt explora sólo INVERSIONES de segmento.
+      · or-opt agrega REUBICACIONES de segmentos de 1 a 3 paradas, en ambos
+        sentidos. Son vecindades distintas, así que el conjunto de óptimos
+        locales alcanzables cambia.
+      · multi-arranque tipo GRASP: hasta 11 semillas (vecino más cercano desde
+        el depósito, más las 10 paradas más lejanas), cada una optimizada
+        completa.
+
+    Ablación de secuenciación, sobre la MISMA sectorización (T_max holgado):
+
+        sólo 2-opt (modelo original) ........ 2 071.2 km
+        + multi-arranque .................... 2 032.5 km
+        + or-opt ............................ 2 033.3 km
+        + ambos ............................. 2 010.0 km   (48/50 sectores
+                                                            mejores, 0 peores)
+
+    RESULTADO NEGATIVO QUE VALE LA PENA REPORTAR: elegir el arranque por costo
+    de la SEMILLA —y optimizar sólo a la ganadora, que es lo que parece
+    natural— EMPEORA el resultado: 2 075.4 km, peor que no hacer nada. La
+    semilla más corta no es la que cae en el mejor óptimo local. Hay que
+    comparar tours YA OPTIMIZADOS.
+
+
+--------------------------------------------------------------------------------
+NIVEL D — SÓLO PARAMETRIZACIÓN
+--------------------------------------------------------------------------------
+
+b0, T_max, m, M y los valores concretos (γ = 1.3, s0 = 6 min, k). El perfil
+V_CDMX puede sustituirse por 24 valores iguales para reproducir un modelo de
+velocidad constante, pero la función de tiempo de viaje no se tocó.
+
+Inventario completo: 17 parámetros en PARAMS_DEFAULT.
+
+
+================================================================================
+  PARTE 2 — LO QUE NO CAMBIÓ
+================================================================================
+
+Sección necesaria en el escrito, porque delimita la contribución.
+
+  · La función de tiempo de viaje dependiente de la hora y la propiedad FIFO
+    (13). Consume la distancia franja por franja; no usa d/v(hora_de_salida).
+  · El perfil de velocidad V_CDMX.
+  · El objetivo en distancia de la secuenciación (3) y su justificación (§6.2):
+    la distancia es invariante ante errores de estimación de velocidad, el
+    tiempo no.
+  · La formulación del power diagram (14)–(16).
+  · k-means++ con semilla fija, paso de Lloyd, re-siembra de sectores vacíos.
+  · Depósito único y fijo.
+  · La firma del Web Worker, la persistencia en Supabase y la edición manual.
+
+GARANTÍA DE COMPATIBILIDAD: con los parámetros por defecto, la salida de la v2
+es idéntica punto por punto a la del modelo de la tesis. Está fijado por un
+test de regresión (7 llamadas completas más las funciones unitarias) que se
+ejecuta con  node scripts/regresionRuteo.mjs.
+
+Matiz honesto que conviene declarar: dos cambios de lógica NO están detrás de
+ningún parámetro y tocan el camino v1 — el desempate por desviación al elegir
+la mejor asignación del balanceo, y que el criterio de paro se evalúa antes del
+paso de Lloyd en vez de después. Ambos son neutros en la salida de todo lo
+probado, pero "neutro en lo probado" no es "neutro por construcción".
+
+
+================================================================================
+  PARTE 3 — HALLAZGOS DE IMPLEMENTACIÓN
+================================================================================
+
+No son detalles de código: son propiedades del método acoplado, y probablemente
+lo más publicable del trabajo.
+
+1. LA VENTANA DE TOLERANCIA δ BLOQUEA EL LAZO.
+   Si el criterio de paro de la sectorización es m_j <= n_j <= M_j, el ajuste
+   de pesos termina ANTES de ejecutarse cuando todos los sectores caen dentro
+   de la ventana. Un sector con objetivo 38 y 40 paradas se queda en 40; la ec.
+   (22) recalcula 38 desde las 40 medidas; y el sistema se clava. Es un punto
+   fijo ESPURIO, inducido por la tolerancia, no por la geometría. Se observó
+   clavado en 5.36–6.90 h ronda tras ronda, con la ronda 5 resolviéndose en 4
+   iteraciones porque no había nada que ajustar.
+   Solución: en las rondas calientes el criterio de paro es la desviación total
+   al objetivo, no la ventana.
+
+2. EL ESTADO HEREDADO DEBE SER EL QUE PRODUJO LA SOLUCIÓN.
+   Al continuar en caliente hay que heredar los centros y pesos de la iteración
+   que generó la asignación devuelta, no los de la última iteración ejecutada.
+   Heredar el estado final movía un tercio de las paradas de sector sin que
+   cambiara ningún dato de entrada.
+
+3. COMPROMISO EXPLORACIÓN / EXPLOTACIÓN ENTRE RONDAS.
+   Reiniciar cada ronda desde la mejor solución conocida converge más rápido
+   pero se estanca antes. Encadenar ronda con ronda explora más —la dispersión
+   puede subir en una ronda y bajar más en la siguiente— con el riesgo de
+   terminar peor. Se resuelve encadenando pero devolviendo la MEJOR ronda
+   observada, no la última: así una ronda mala no cuesta nada.
+
+4. LA ITERACIÓN 1 DE UNA RONDA CALIENTE REPRODUCE LA RONDA ANTERIOR.
+   Es lo que garantiza el arranque en caliente. Si se le permite fijar el
+   récord, la ronda devuelve lo que recibió y el bucle es un no-op
+   determinista. Hay que excluirla explícitamente.
+
+
+================================================================================
+  PARTE 4 — LIMITACIONES A DECLARAR
+================================================================================
+
+  · EL ARCHIVO DE PRUEBA ES SINTÉTICO. 2 263 guías sobre 2 010 domicilios
+    distribuidos en 15 zonas de la ZMVM, generado de forma determinista. NO son
+    datos de operación. Todas las cifras de este documento salen de él.
+
+  · EL LAZO CONVERGE A UN ÓPTIMO LOCAL. El sistema sectorizar↔secuenciar tiene
+    un piso de dispersión que no se baja moviendo cuentas de paradas, porque
+    las celdas del diagrama de potencia son convexas y la geografía es fija.
+    Con k = 50 se estanca en CV_T cercano a 0.06; con k = 47 llega a 0.0301.
+
+  · LA BANDA DE DURACIONES DEPENDE DE k CONTRA EL TRABAJO TOTAL, no del
+    balanceo. Si el promedio de jornada sale en 5.9 h, ninguna cantidad de
+    rebalanceo pone las jornadas en 6.0–6.8 h.
+
+  · γ PROMEDIA LA CIRCUIDAD. No modela que un par de puntos separados por el
+    Periférico tenga más desvío que uno con calle directa. Sigue sin haber red
+    vial.
+
+  · V_CDMX ES UN SUPUESTO, NO UNA MEDICIÓN. El propio código lo marca como
+    "SUPUESTO A CALIBRAR con datos de tráfico del operador; es el parámetro con
+    mayor incertidumbre del modelo". Ver PARTE 6, punto 7.
+
+  · NO HAY VENTANAS DE TIEMPO POR CLIENTE. El ETA por parada es informativo;
+    no entra como restricción.
+
+  · LA CONSOLIDACIÓN EXIGE COORDENADA IDÉNTICA. Dos geocodificaciones del mismo
+    domicilio que difieran en el quinto decimal cuentan como dos paradas.
+
+
+================================================================================
+  PARTE 5 — SUSTENTO EN LITERATURA
+================================================================================
+
+  (Verificar cada referencia antes de citarla. Ver advertencia inicial.)
+
+A. EQUILIBRAR DURACIÓN EN VEZ DE CARDINALIDAD  — referencia central
+
+   · Matl, Hartl & Vidal (2018). "Workload Equity in Vehicle Routing Problems:
+     A Survey and Analysis". Transportation Science.
+     Revisión sistemática de las medidas de equidad en VRP y de sus patologías.
+
+   · Matl, Hartl & Vidal (2019). "Workload equity in vehicle routing: The
+     impact of alternative workload resources". Computers & Operations Research.
+     Estudia qué ocurre según QUÉ RECURSO se iguala —número de clientes,
+     distancia o duración— y muestra que NO son intercambiables. El hallazgo de
+     que CV de cardinalidad sube mientras CV_T baja es exactamente el fenómeno
+     que documentan.
+
+   · Jozefowiez, Semet & Talbi (2008). "Multi-objective vehicle routing
+     problems". European Journal of Operational Research.
+     Para encuadrar el VRP con balance de rutas (VRPRB) como multiobjetivo.
+
+B. CLUSTER-FIRST CON REALIMENTACIÓN
+
+   · Fisher & Jaikumar (1981). "A generalized assignment heuristic for vehicle
+     routing". Networks.  — Origen de cluster-first, route-second.
+   · Ríos-Mercado & Fernández (2009). "A reactive GRASP for a commercial
+     territory design problem with multiple balancing requirements".
+     Computers & Operations Research.
+   · Ríos-Mercado, ed. (2020). Optimal Districting and Territory Design.
+     Springer.
+   · Kalcsics, Nickel & Schröder (2005). "Towards a unified territorial design
+     approach". TOP.
+
+   Para el power diagram capacitado en sí (Módulo 1, no modificado):
+   · Aurenhammer (1987). "Power diagrams: properties, algorithms and
+     applications". SIAM Journal on Computing.
+   · Aurenhammer, Hoffmann & Aronov (1998). "Minkowski-type theorems and
+     least-squares clustering". Algorithmica.
+     Resultado fundacional del clustering con capacidades vía diagramas de
+     potencia.
+
+C. OR-OPT Y MULTI-ARRANQUE
+
+   · Or (1976). Tesis doctoral. Origen de or-opt; se suele citar vía fuente
+     secundaria.
+   · Croes (1958) y Lin & Kernighan (1973), para el linaje 2-opt / 3-opt.
+   · Feo & Resende (1995). "Greedy randomized adaptive search procedures".
+     Journal of Global Optimization.
+   · Martí, Resende & Ribeiro (2013). "Multi-start methods for combinatorial
+     optimization". European Journal of Operational Research.
+   · Vidal, Crainic, Gendreau & Prins (2014). "A unified solution framework for
+     multi-attribute vehicle routing problems". EJOR. Estructuras de vecindad.
+
+D. TIEMPO DEPENDIENTE DE LA HORA  (lo que NO se cambió, pero hay que citarlo)
+
+   · Ichoua, Gendreau & Potvin (2003). "Vehicle dispatching with time-dependent
+     travel times". European Journal of Operational Research.
+     La función de tiempo de viaje del proyecto ES este modelo: velocidades
+     constantes por tramo con preservación de FIFO. Si no está citado en la
+     tesis, debería estarlo.
+   · Gendreau, Ghiani & Guerriero (2015). "Time-dependent routing problems:
+     A review". Computers & Operations Research.
+
+E. FACTOR DE CIRCUIDAD γ
+
+   · Ballou, Rahardja & Sakai (2002). "Selected country circuity factors for
+     road travel distance estimation". Transportation Research Part A.
+     Factores por país; sustenta un γ del orden de 1.3.
+   · Boscoe, Henry & Zdeb (2012). The Professional Geographer. Razón distancia
+     vial / línea recta.
+
+F. RUTA ABIERTA (ρ = 0)
+
+   No es un ajuste: es una VARIANTE RECONOCIDA, el Open Vehicle Routing Problem.
+   · Sariklis & Powell (2000). "A heuristic method for the open vehicle routing
+     problem". Journal of the Operational Research Society.
+   · Li, Golden & Wasil (2007), sobre OVRP.
+   Corresponde al caso de 3PL subcontratado donde la unidad no regresa al CEDIS.
+
+G. TIEMPO DE SERVICIO CON MULTIPLICIDAD
+
+   · Daganzo. Logistics Systems Analysis. Springer.
+     Aproximaciones continuas donde el tiempo por parada se modela como
+     componente fija más componente por pieza. Sustenta s0 + (q−1)·s1.
+
+H. PRECIO DE LA EQUIDAD  (para la PARTE 6)
+
+   · Bertsimas, Farias & Trichakis (2011). "The price of fairness".
+     Operations Research.
+
+
+================================================================================
+  PARTE 6 — CÓMO JUSTIFICAR QUE ES "MÁS EFICIENTE"
+================================================================================
+
+AQUÍ ESTÁ EL PROBLEMA SERIO, Y UN SÍNODO LO VA A DETECTAR:
+
+        v2 gana en CV_T porque CV_T es lo que v2 optimiza. Eso es circular.
+
+No se puede afirmar "es más eficiente" a secas. Lo que sí se sostiene:
+
+
+1. REENCUADRARLO COMO COMPROMISO, NO COMO DOMINANCIA
+
+   v1 y v2 no optimizan lo mismo, así que no hay dominancia: hay una frontera.
+   Lo que se reporta es el PRECIO DE LA EQUIDAD.
+
+   Condiciones: ρ = 1, γ = 1, perfil V_CDMX, k = 50, consolidación activada,
+   s0 = 6 min, s1 = 1 min, T_max = 11 h. Se mueven ÚNICAMENTE α y R_max.
+
+                            v1 (α=0, R=1)    v2 (α=0.7, R=10)    Δ
+       CV_T                     0.2320            0.0760        −67 %
+       Jornadas            3.76 – 10.84 h     5.59 – 8.41 h
+       CV de cardinalidad       0.1736            0.1978        +14 %
+       D total                  2 011 km          2 084 km      +3.6 %
+       Cómputo                  0.2 s             2.2 s
+
+   LECTURA: se compra una reducción de 67 % en desigualdad de jornada por
+   3.6 % más de kilómetros. Ese cociente ES el resultado. Que el CV de
+   cardinalidad suba es evidencia a favor, no en contra: son objetivos en
+   conflicto y el modelo cambió deliberadamente de objetivo.
+
+
+2. LAS CONDICIONES DEL EXPERIMENTO SON LA MITAD DEL ARGUMENTO
+
+   Esa tabla sólo vale porque se mantuvieron FIJOS s0, s1, T_max, γ y ρ, y se
+   movieron SÓLO α y R_max. Comparar las configuraciones completas de operación
+   mezclaría supuestos distintos (la de operación supone 6 min de servicio en
+   vez de 3, jornada de 11 h en vez de 9 y circuidad 1.3) y la comparación no
+   diría nada sobre el método. En el escrito tiene que quedar EXPLÍCITO qué se
+   mantuvo constante.
+
+   Nota: con las configuraciones completas, las jornadas de v2 salen MÁS LARGAS
+   (5.58–8.79 h contra 3.47–7.91 h) porque modela el trabajo más caro, no
+   porque rutee peor. Es el error de lectura más fácil de cometer.
+
+
+3. DECLARAR LA MÉTRICA ANTES DE MEDIR, Y USAR VARIAS
+
+   Definir CV_T en el capítulo de metodología, ANTES de presentar resultados, y
+   justificar por qué no se usa el rango max−min: usa dos observaciones de 50 y
+   es sensible a un único atípico — Matl et al. (2018) discuten precisamente
+   estas patologías.
+
+   Luego mostrar que TODAS las medidas coinciden: CV_T, rango, índice de Gini,
+   desviación estándar, jornada máxima, porcentaje de rutas fuera de T_max. Si
+   v2 gana en todas, el resultado no es artefacto de la medida elegida.
+
+
+4. UNA INSTANCIA NO ES UN RESULTADO
+
+   Una corrida sobre un archivo no sostiene nada. Hacen falta VARIAS INSTANCIAS
+   —variando k, semilla y realización de demanda—, reportar distribuciones y
+   aplicar una prueba pareada no paramétrica (Wilcoxon signed-rank). Es el
+   estándar en la literatura de heurísticas.
+
+
+5. ABLACIÓN: ¿DE DÓNDE VIENE LA GANANCIA?
+
+   La v2 cambia cuatro cosas a la vez. Hay que descomponerlo o no se sabe qué
+   causó qué.
+
+       Configuración                        Qué aísla
+       ------------------------------------ ------------------------------
+       v1 puro                              línea base
+       + consolidación por domicilio        efecto del pre-proceso
+       + or-opt y multi-arranque            efecto de la secuenciación
+       + lazo (α, R_max)                    EFECTO DEL MÉTODO PROPUESTO
+
+
+6. LA MÉTRICA QUE DE VERDAD CONVENCE A UN OPERADOR
+
+   CV_T es académicamente correcto pero frío. El argumento fuerte es operativo:
+
+       ¿CUÁNTAS UNIDADES SE NECESITAN PARA QUE NINGUNA RUTA SE PASE DE JORNADA?
+
+   Con v1, una ruta de 10.84 h obliga a sumar vehículos aunque el promedio sea
+   5.9 h: la cola larga manda. Con v2 el máximo baja a 8.41 h. Si eso permite
+   servir la misma demanda con MENOS UNIDADES, ese número —en vehículos y en
+   pesos— es incontestable, y NO es circular, porque no es lo que el algoritmo
+   optimiza.
+
+   El repositorio ya tiene una rutina de búsqueda de k factible por bisección
+   en el módulo de pronóstico, utilizable para calcular el k mínimo de cada
+   modelo.
+
+
+7. EL FLANCO DÉBIL: V_CDMX
+
+   Todas las duraciones dependen de un perfil de velocidad que el propio código
+   marca como supuesto a calibrar. Si preguntan "¿y si las velocidades están
+   mal?", la respuesta honesta es un ANÁLISIS DE SENSIBILIDAD: correr con V
+   escalado ±20 % y mostrar que la CONCLUSIÓN —v2 reduce la dispersión— se
+   sostiene aunque las magnitudes cambien. Eso convierte una debilidad en una
+   sección.
+
+
+================================================================================
+  PARTE 7 — EXPERIMENTOS PENDIENTES PARA SOSTENER LA TESIS
+================================================================================
+
+Ordenados por peso que aportan al argumento:
+
+  1. k MÍNIMO FACTIBLE por modelo. El número en vehículos. (PARTE 6, punto 6)
+  2. MULTI-INSTANCIA: 20–30 instancias variando semilla y k, con Wilcoxon
+     pareado. (PARTE 6, punto 4)
+  3. ABLACIÓN completa con las 4 configuraciones. (PARTE 6, punto 5)
+  4. VARIAS MEDIDAS DE EQUIDAD: CV_T, Gini, rango, jornada máxima. (punto 3)
+  5. SENSIBILIDAD a V_CDMX ±20 %. (punto 7)
+
+Ninguno está hecho todavía.
+
+
+================================================================================
+  ANEXO — CIFRAS MEDIDAS Y CÓMO REPRODUCIRLAS
+================================================================================
+
+TODAS las cifras de este documento provienen de las corridas siguientes, sobre
+el archivo de prueba sintético de 2 263 guías / 2 010 domicilios.
+
+  node scripts/regresionRuteo.mjs    Verifica que con parámetros por defecto la
+                                     salida sea idéntica a la del modelo de la
+                                     tesis. 7 casos más funciones unitarias.
+
+  node scripts/benchRuteo.mjs [k]    Corrida de aceptación y comparación
+                                     antes/después del rebalanceo con supuestos
+                                     fijos. ES LA QUE PRODUCE LA TABLA DE LA
+                                     PARTE 6, PUNTO 1.
+
+  node scripts/modosRuteo.mjs [k]    Verifica que la configuración v1 de la
+                                     interfaz sea idéntica a los parámetros por
+                                     defecto, y corre ambos modos lado a lado.
+
+  node scripts/fixtureRuteo.mjs      Regenera el archivo de prueba
+                                     (determinista, semilla fija).
+
+  node scripts/docRuteador.mjs       Regenera el volcado del código fuente.
+
+RESUMEN DE RESULTADOS
+
+  Consolidación de nodos .................. 2 263 guías → 2 010 paradas (−11 %)
+
+  Secuenciación, misma sectorización:
+     sólo 2-opt ........................... 2 071.2 km
+     + multi-arranque + or-opt ............ 2 010.0 km  (48/50 mejores, 0 peores)
+     elegir por semilla (resultado negativo) 2 075.4 km
+
+  Ruta abierta (ρ = 0) .................... 2 071 → 1 576 km
+
+  Lazo de rebalanceo, supuestos fijos:
+     CV_T ................................. 0.2320 → 0.0760
+     jornadas ............................. 3.76–10.84 h → 5.59–8.41 h
+     D total .............................. 2 011 → 2 084 km
+
+  Configuración de operación, k = 50:
+     2 010 paradas · CV_T 0.0621 · jornadas 5.36–6.90 h · ruta más larga 79 km
+     SLA 100 % · converge en 3 rondas · 1.6 s de cómputo
+
+  Configuración de operación, k = 47:
+     CV_T 0.0301 · jornadas 5.67–6.67 h · ruta más larga 79 km · 3.5 s
+
+OTROS DOCUMENTOS DEL REPOSITORIO
+
+  RUTEADOR.md .......... Documentación técnica completa del módulo.
+  RUTEADOR-CODIGO.md ... Volcado del código fuente comentado.
+
+================================================================================
+Fin del documento.
+================================================================================
