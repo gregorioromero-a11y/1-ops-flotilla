@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
-import { TARIFAS_POR_RUTA, TIPOS_DEDICADOS, etiquetaDedicada } from "../lib/costEngine";
+import { TARIFAS_POR_RUTA, TIPOS_DEDICADOS, TARIFAS_POR_PAQUETE, etiquetaDedicada } from "../lib/costEngine";
 import { rutear, metricas as calcMetricas, resumenRuta, etaRuta, PARAMS_DEFAULT } from "../lib/ruteo";
 import { mapaRuteoHTML } from "../lib/mapaHtml";
 import * as PRONO from "../lib/pronostico";
@@ -2515,6 +2515,10 @@ const normalizeOperacion = (raw) => {
   if (n.includes("crossdock") || n.includes("cross dock") || n.includes("logistica inversa") || n.includes("halfmile") || n.includes("half mile") || n.includes("logistica") || n.includes("inversa")) return "Crossdock";
   if (n.includes("petco") && n.includes("monterrey")) return "PETCO Monterrey";
   if (n.includes("petco")) return "PETCO";
+  // TIL: se captura desde el menú como "Operación TIL", pero en la BD hay filas
+  // escritas a mano. Sin esta regla, "TIL" y "Operacion TIL" sin acento caerían
+  // cada una en su propio grupo del dashboard.
+  if (n === "til" || n.includes("operacion til") || n.includes("til ")) return "Operación TIL";
   if (n.includes("foraneo")) {
     if (n.includes("monterrey") || n.includes("mty")) return "Foráneo Monterrey";
     if (n.includes("gdl") || n.includes("guadalajara")) return "Foráneo GDL";
@@ -2658,15 +2662,17 @@ function crearMotorCostos(carriers, asistencia) {
     return { value: costoNuevo / divisor, divisor };
   };
 
-  // Tipos de ruta donde es permisible no tener registro automático de operador
-  const TIPOS_PERMISIBLES = new Set(["Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "PETCO", "PETCO Monterrey", "HalfMile", ...TIPOS_DEDICADOS]);
+  // Tipos de ruta donde es permisible no tener registro automático de operador.
+  // Los de tarifa por paquete entran por definición: su costo no depende de qué
+  // unidad trajo el operador, así que exigir asistencia sólo generaría ruido.
+  const TIPOS_PERMISIBLES = new Set([
+    "Foráneo Puebla", "PETCO", "HalfMile",
+    ...Object.keys(TARIFAS_POR_PAQUETE), ...TIPOS_DEDICADOS,
+  ]);
   const esPermisible = r => TIPOS_PERMISIBLES.has(r.tipoRuta);
-  // Tipos de tarifa fija: { tipo: $ por paquete operado }
-  const TARIFAS_FIJAS = {
-    "PETCO Monterrey": 50,
-    "Foráneo Monterrey": 55,
-    "Foráneo GDL": 55,
-  };
+  // Tarifa por paquete entregado. Vive en lib/costEngine.js porque Consultas
+  // tenía su propia copia y podían separarse sin que nada lo delatara.
+  const TARIFAS_FIJAS = TARIFAS_POR_PAQUETE;
 
   return { evalFormula, norm, getCostoInfo, isCrossdock, getCostoReal, getCostoPorPaquete, esPermisible, TIPOS_PERMISIBLES, TARIFAS_FIJAS };
 }
@@ -3313,6 +3319,7 @@ function ModuleEnvios() {
     "Foráneo GDL",
     "Foráneo Veracruz",
     "Foráneo Xalapa",
+    "Operación TIL",
   ];
 
   // Mapea variantes de nombres (capitalización, acentos, alias) al canónico.
@@ -4483,6 +4490,7 @@ function ModuleEnvios() {
                         <option value="Foráneo GDL">Foráneo GDL</option>
                         <option value="Foráneo Veracruz">Foráneo Veracruz</option>
                         <option value="Foráneo Xalapa">Foráneo Xalapa</option>
+                        <option value="Operación TIL">Operación TIL</option>
                       </select>
                     );
                   })()}
@@ -4675,7 +4683,7 @@ function ModuleEnvios() {
           : [];
         const totalCalc = (parseInt(manualForm.entregados) || 0) + (parseInt(manualForm.intentados) || 0) + (parseInt(manualForm.noVisitados) || 0);
         const isHalfMile = (manualForm.tipoRuta || "").toLowerCase().includes("half") || (manualForm.tipoRuta || "").toLowerCase().includes("cross");
-        const tiposRuta = ["Última milla", "HalfMile", "PETCO", "PETCO Monterrey", "Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "Foráneo Veracruz", "Foráneo Xalapa"];
+        const tiposRuta = ["Última milla", "HalfMile", "PETCO", "PETCO Monterrey", "Foráneo Puebla", "Foráneo Monterrey", "Foráneo GDL", "Foráneo Veracruz", "Foráneo Xalapa", "Operación TIL"];
         return (
           <div style={{ position:"fixed", inset:0, backgroundColor:"rgba(12,20,37,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:10000, padding:16 }}
             onClick={() => !manualSaving && setManualOpen(false)}>
@@ -10717,8 +10725,11 @@ function ModuleConsultas() {
         cars.forEach(c => {
           idxCars.set(carrierKey(c.proveedor, c.tipo_unidad), parseFloat(c.costo_unidad) || 0);
         });
-        // Tarifas fijas (mismo que Registrar Envíos)
-        const TARIFAS_FIJAS_LOCAL = { "PETCO Monterrey": 50, "Foráneo Monterrey": 55, "Foráneo GDL": 55 };
+        // Tarifa por paquete — la MISMA tabla que usa Registrar Envíos, no una
+        // copia. Antes era un objeto literal aquí y otro allá: agregar un tipo
+        // en uno y olvidar el otro hacía que esta consulta exportara un costo
+        // distinto al que factura Envíos, sin que nada lo delatara.
+        const TARIFAS_FIJAS_LOCAL = TARIFAS_POR_PAQUETE;
         const evalLocal = (expr, costo) => {
           if (!expr || !String(expr).trim()) return NaN;
           let s = String(expr).replace(/costo/gi, "(" + (parseFloat(costo) || 0) + ")");

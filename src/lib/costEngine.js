@@ -40,3 +40,24 @@ export const etiquetaDedicada = (tipoRuta) =>
 // Tipos donde un operador repetido el mismo día cobra una sola vez. Las
 // dedicadas entran por definición: se paga el día del vehículo, no el viaje.
 export const DEDUP_TIPOS = new Set(["PETCO", "Foráneo Puebla", ...TIPOS_DEDICADOS]);
+
+// TARIFA POR PAQUETE ENTREGADO — { tipo de ruta: $ por paquete }.
+//
+// Lo contrario de las dedicadas de arriba: aquí NO se contrata el vehículo por
+// el día, se paga por paquete operado, así que el costo escala con el volumen
+// de la ruta.
+//
+// Estaba copiada en dos motores —el de Registrar Envíos y el de Consultas— y el
+// comentario de este archivo ya avisaba del riesgo: "pueden separarse". Al
+// agregar Operación TIL habría que acordarse de tocar las dos, y la que se
+// olvidara exportaría otro costo en silencio. Ahora es una sola.
+//
+// El multiplicador es `entregados` (más `recolecciones` si el tipo es
+// crossdock): el conteo de paquetes que el archivo de ruta reporta como
+// ENTREGADOS, no los asignados. Una ruta que sale con 50 y entrega 38 cobra 38.
+export const TARIFAS_POR_PAQUETE = {
+  "PETCO Monterrey": 50,
+  "Foráneo Monterrey": 55,
+  "Foráneo GDL": 55,
+  "Operación TIL": 40,
+};
