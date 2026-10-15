@@ -1070,6 +1070,144 @@ function parseFechaFlex(v) {
   return isNaN(d) ? null : d;
 }
 
+// Barras HORIZONTALES — comparar magnitud entre categorías con nombre largo.
+//
+// Horizontal y no vertical porque las categorías son nombres de proveedor
+// ("DATATRAFFIC INTERNACIONAL"): en columnas habría que rotar las etiquetas o
+// recortarlas, y una etiqueta recortada es peor que ninguna.
+//
+// Admite una serie (un color, sin leyenda — el título ya dice qué se grafica) o
+// varias apiladas (part-to-whole, con leyenda siempre presente, porque nadie
+// debería depender de acordarse de qué color es cuál).
+//
+// Especificaciones fijas: barra de 22px como tope, extremo de dato redondeado a
+// 4px y cuadrado en la línea base, separación de 2px DEL COLOR DE LA SUPERFICIE
+// entre segmentos —nunca un borde dibujado encima—, rejilla sólida de 1px un
+// tono fuera de la superficie, y el valor rotulado en la punta con color de
+// TEXTO, no del dato: un verde legible como relleno es ilegible como letra.
+function BarrasHorizontales({
+  datos, series, fmt, anchoEtiqueta = 150, refValor = null, refEtiqueta = "",
+  maxBarras = 12, vacio = "Sin datos en el periodo",
+}) {
+  const [activa, setActiva] = useState(null);
+  if (!datos || !datos.length) {
+    return <div style={{ padding: "28px 18px", textAlign: "center", color: C.textMuted, fontSize: 12 }}>{vacio}</div>;
+  }
+  // Más allá de ~12 barras la gráfica deja de leerse y la tabla de al lado hace
+  // mejor trabajo. La cola se pliega en "Otros" en vez de recortarse en
+  // silencio: quitar filas sin decirlo haría que los totales no cuadren con la
+  // tabla que está dos centímetros arriba.
+  let filas = datos;
+  if (datos.length > maxBarras) {
+    const cabeza = datos.slice(0, maxBarras - 1);
+    const cola = datos.slice(maxBarras - 1);
+    const otros = { nombre: `Otros (${cola.length})`, total: 0, valores: {} };
+    for (const s of series) otros.valores[s.key] = cola.reduce((a, d) => a + (d.valores[s.key] || 0), 0);
+    otros.total = cola.reduce((a, d) => a + d.total, 0);
+    filas = [...cabeza, otros];
+  }
+  const max = Math.max(...filas.map(d => d.total), refValor || 0) || 1;
+  const pct = v => (v / max) * 100;
+  const multi = series.length > 1;
+
+  return (
+    <div>
+      {/* Leyenda: SIEMPRE con dos o más series. Con una sola sobra, porque el
+          título del panel ya nombra lo que se está graficando. */}
+      {multi && (
+        <div style={{ display: "flex", gap: 16, padding: "0 18px 12px", flexWrap: "wrap" }}>
+          {series.map(s => (
+            <span key={s.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, color: C.textMuted }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: s.color, flex: "none" }} />
+              {s.label}
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{ padding: "0 18px 14px" }}>
+        {filas.map((d, i) => {
+          const esActiva = activa === i;
+          return (
+            <div key={d.nombre} tabIndex={0}
+              onMouseEnter={() => setActiva(i)} onMouseLeave={() => setActiva(null)}
+              onFocus={() => setActiva(i)} onBlur={() => setActiva(null)}
+              style={{
+                position: "relative", display: "flex", alignItems: "center", gap: 10,
+                // 30px de alto de fila para que el área sensible al cursor sea
+                // cómoda aunque la barra mida 22px.
+                minHeight: 30, outline: "none",
+                backgroundColor: esActiva ? C.panelAlt : "transparent",
+                borderRadius: 6, transition: "background-color .12s",
+              }}>
+              <div style={{
+                width: anchoEtiqueta, flex: "none", fontSize: 11.5, fontWeight: 600, color: C.text,
+                textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              }} title={d.nombre}>{d.nombre}</div>
+              <div style={{ flex: 1, position: "relative", height: 22 }}>
+                {/* Línea de referencia (p. ej. el promedio): sólida y de 1px.
+                    Punteada leería como "proyección" y aquí es un hecho. */}
+                {refValor != null && refValor > 0 && (
+                  <div style={{
+                    position: "absolute", left: `${pct(refValor)}%`, top: -3, bottom: -3,
+                    width: 1, backgroundColor: VIZ.ref, opacity: .9, zIndex: 2,
+                  }} />
+                )}
+                <div style={{ display: "flex", height: "100%", alignItems: "stretch" }}>
+                  {series.map((s, si) => {
+                    const v = d.valores[s.key] || 0;
+                    if (v <= 0) return null;
+                    const ultimo = series.slice(si + 1).every(o => !(d.valores[o.key] > 0));
+                    return (
+                      <div key={s.key} style={{
+                        width: `${pct(v)}%`, backgroundColor: s.color,
+                        // Extremo del dato redondeado, base cuadrada.
+                        borderRadius: ultimo ? "0 4px 4px 0" : 0,
+                        // Separación de 2px EN EL COLOR DE LA SUPERFICIE entre
+                        // segmentos que se tocan, no un borde sobre la marca.
+                        marginRight: ultimo ? 0 : 2,
+                        minWidth: 2,
+                      }} />
+                    );
+                  })}
+                </div>
+              </div>
+              {/* Valor en la punta. Rotulado en TODAS las barras y no sólo en
+                  algunas porque son pocas y es el dato que se viene a leer: sin
+                  él la gráfica obligaría a pasar el cursor para saber cuánto. */}
+              <div style={{
+                width: 74, flex: "none", fontSize: 11.5, fontWeight: 700, color: C.text,
+                fontVariantNumeric: "tabular-nums", textAlign: "right", paddingRight: 4,
+              }}>{fmt(d.total)}</div>
+              {esActiva && multi && (
+                <div style={{
+                  position: "absolute", left: anchoEtiqueta + 14, bottom: "100%", zIndex: 30,
+                  backgroundColor: C.sidebar, color: "#fff", borderRadius: 7, padding: "8px 11px",
+                  fontSize: 11, boxShadow: "0 6px 20px rgba(0,0,0,.3)", whiteSpace: "nowrap", pointerEvents: "none",
+                }}>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>{d.nombre}</div>
+                  {series.map(s => (d.valores[s.key] > 0 ? (
+                    <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: s.color }} />
+                      <span style={{ opacity: .85 }}>{s.label}</span>
+                      <b style={{ marginLeft: "auto", paddingLeft: 12 }}>{fmt(d.valores[s.key])}</b>
+                    </div>
+                  ) : null))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {refValor != null && refValor > 0 && refEtiqueta && (
+        <div style={{ padding: "0 18px 12px", marginLeft: anchoEtiqueta + 10, fontSize: 10.5, color: C.textMuted, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 11, height: 1, backgroundColor: VIZ.ref, flex: "none" }} />
+          {refEtiqueta}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- CARGA MENSAJERÍA ---
 // Sube el Excel de órdenes, deduplica por Tracking (última versión gana) y hace
 // upsert a la tabla `mensajeria` de Supabase. Tolerante a headers truncados
@@ -2754,10 +2892,17 @@ function calcularCostos(rutas, motor) {
   const desgloseOp = {};
   rutaCosto.forEach(x => {
     const b = bucketDeOperacion(x.r);
-    if (!desgloseOp[b]) desgloseOp[b] = { tipo: b, costo: 0, paquetes: 0, rutas: 0 };
+    if (!desgloseOp[b]) desgloseOp[b] = { tipo: b, costo: 0, paquetes: 0, rutas: 0, propios: 0, asignados: 0 };
     desgloseOp[b].costo += x.costoContado;
     desgloseOp[b].paquetes += isCrossdock(x.r) ? (parseInt(x.r.recolecciones) || 0) : (parseInt(x.r.entregados) || 0);
     desgloseOp[b].rutas += 1;
+    desgloseOp[b].asignados += (parseInt(x.r.total) || 0);
+    // `propios` = la unidad de trabajo DE ESA OPERACIÓN, para poder dividir el
+    // costo de cada eslabón entre lo que ese eslabón movió. Difiere de
+    // `paquetes` en half mile, donde usa paqMovidos(): hay periodos capturados
+    // en `entregados` en vez de en `recolecciones`, y con el campo crudo el
+    // denominador saldría 0 y el costo unitario, infinito.
+    desgloseOp[b].propios += isCrossdock(x.r) ? paqMovidos(x.r) : (parseInt(x.r.entregados) || 0);
   });
   const desgloseList = DESGLOSE_ORDEN.filter(t => desgloseOp[t]).map(t => desgloseOp[t]);
   // Denominador para el costo/paquete real: EXCLUYE Half mile, porque esos
@@ -3852,10 +3997,38 @@ function ModuleEnvios() {
   // (el costo unitario se comparte y los paquetes se suman). No aplica a tipos
   // de tarifa fija porque ya cobran por paquete (dedup es equivalente).
   // Agregación compartida (ver calcularCostos, a nivel de módulo).
-  const { esDedup, getDedupInfo, rutaCosto, costoTotalDiaNuevo, entregadosTotal, costoPorPaqGlobal, sinAsistencia, sinAsistenciaPermisible, crossSinRecol, bucketDeOperacion, DESGLOSE_ORDEN, DESGLOSE_COLOR, desgloseList, desgloseTotalPaqFinal, carrierCostList, carrierTotCostoUM, carrierTotCostoHM, carrierTotEntHM } = useMemo(
+  const { esDedup, getDedupInfo, rutaCosto, costoTotalDiaNuevo, entregadosTotal, costoPorPaqGlobal, sinAsistencia, sinAsistenciaPermisible, crossSinRecol, bucketDeOperacion, DESGLOSE_ORDEN, DESGLOSE_COLOR, desgloseList, desgloseTotalPaqFinal, carrierCostList, carrierTotCostoUM, carrierTotCostoHM, carrierTotEntHM, hmVolumenMalCapturado, asignadosFinalTotal, entregadosFinalTotal } = useMemo(
     () => calcularCostos(rutas, { getCostoInfo, esPermisible }),
     [rutas, getCostoInfo, esPermisible]
   );
+
+  // --- Datos de las gráficas por proveedor ---
+  // Salen de carrierCostList, que ya está acotado al periodo de la barra de
+  // fechas (rutas se recarga al cambiarla), así que gráficas y tablas no pueden
+  // mostrar periodos distintos.
+  const graficaCostoProv = useMemo(() => carrierCostList
+    .map(c => ({ nombre: c.carrier, valores: { um: c.costoUM, mm: c.costoHM }, total: c.costoUM + c.costoHM }))
+    .filter(d => d.total > 0)
+    .sort((a, b) => b.total - a.total), [carrierCostList]);
+
+  // % de entrega = entregas finales ÷ asignados finales. Excluye media milla:
+  // una recolección no es una entrega y mezclarla inventaría un porcentaje que
+  // no corresponde a ningún compromiso con el cliente.
+  //
+  // Se piden al menos 20 asignados para graficar al proveedor: con 3 paquetes,
+  // fallar uno son 33 puntos porcentuales y la barra diría "pésimo" sobre ruido.
+  // Los que no alcanzan el mínimo siguen en las tablas de arriba.
+  const graficaEntregaProv = useMemo(() => carrierCostList
+    .filter(c => c.asignadosFinal >= 20)
+    .map(c => ({
+      nombre: c.carrier,
+      valores: { pct: (c.entregadosFinal / c.asignadosFinal) * 100 },
+      total: (c.entregadosFinal / c.asignadosFinal) * 100,
+      _asig: c.asignadosFinal,
+    }))
+    .sort((a, b) => b.total - a.total), [carrierCostList]);
+
+  const pctEntregaGlobal = asignadosFinalTotal > 0 ? (entregadosFinalTotal / asignadosFinalTotal) * 100 : 0;
 
   // Costo Última Milla + Media Milla por proveedor (Total = ÚM + MM, sin foráneo/PETCO)
   const umMmPorProveedor = carrierCostList
@@ -4208,6 +4381,105 @@ function ModuleEnvios() {
         </div>
       )}
 
+      {/* LOS DOS SENTIDOS DEL COSTO POR PAQUETE.
+          Son dos preguntas distintas y la confusión entre ellas es justo lo que
+          impide ver dónde se encarece la operación:
+
+            · COSTO DE RED  = costo TOTAL ÷ paquetes entregados al cliente.
+              Incluye el half mile, el foráneo y el PETCO en el numerador aunque
+              no sean entregas finales, porque todo eso se gastó para poner el
+              paquete en la puerta. Es el número que se compara contra la tarifa
+              que se cobra.
+
+            · COSTO POR OPERACIÓN = costo de cada eslabón ÷ lo que movió ESE
+              eslabón. Half mile se divide entre los paquetes que half mile
+              movió, no entre las entregas finales. Es el número que señala qué
+              eslabón se está encareciendo.
+
+          NO SUMAN entre sí y no deben compararse uno contra otro: tienen
+          denominadores distintos. Se muestran juntos y rotulados para que nadie
+          los confunda, que es lo que pasaba cuando sólo existía el primero. */}
+      {desgloseList.length > 0 && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Costo por paquete — los dos sentidos</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+              {fechaDesde === fechaHasta
+                ? new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" })
+                : `${new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" })} — ${new Date(fechaHasta + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })}`}
+              {" · "}{rutas.length} rutas en el periodo
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(230px, 300px) 1fr", gap: 0 }}>
+            {/* Sentido 1 — la cifra de red */}
+            <div style={{ padding: "18px", borderRight: "1px solid " + C.border }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Costo de red</div>
+              {/* Figura destacada: proporcional, no tabular — los dígitos de
+                  ancho fijo hacen que un número grande se vea suelto. */}
+              <div style={{ fontSize: 40, fontWeight: 800, color: C.accent, lineHeight: 1.1, marginTop: 6 }}>
+                {desgloseTotalPaqFinal > 0 ? "$" + (costoTotalDiaNuevo / desgloseTotalPaqFinal).toFixed(2) : "—"}
+              </div>
+              <div style={{ fontSize: 11.5, color: C.text, fontWeight: 600, marginTop: 4 }}>por paquete entregado</div>
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 10, lineHeight: 1.5 }}>
+                ${Math.round(costoTotalDiaNuevo).toLocaleString()} de costo total ÷{" "}
+                {desgloseTotalPaqFinal.toLocaleString()} entregas finales.
+                El half mile está en el numerador: se gastó para que esas entregas ocurrieran.
+              </div>
+            </div>
+
+            {/* Sentido 2 — cada eslabón contra su propia unidad de trabajo */}
+            <div style={{ padding: "18px 18px 6px" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>
+                Costo por operación
+              </div>
+              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>
+                Cada eslabón entre los paquetes que movió. Aquí se ve cuál se encarece.
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {["Operación", "Costo", "Paquetes", "$/paquete propio"].map((h, i) => (
+                      <th key={h} style={{ padding: "0 8px 7px 0", textAlign: i === 0 ? "left" : "right", fontSize: 9.5, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {desgloseList.map(d => {
+                    const unit = d.propios > 0 ? d.costo / d.propios : null;
+                    const esHM = d.tipo === "Half mile";
+                    return (
+                      <tr key={d.tipo} style={{ borderTop: "1px solid " + C.border }}>
+                        <td style={{ padding: "7px 8px 7px 0", fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap" }}>
+                          <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, backgroundColor: DESGLOSE_COLOR[d.tipo], marginRight: 7 }} />
+                          {d.tipo}
+                        </td>
+                        <td style={{ padding: "7px 8px", fontSize: 12, textAlign: "right", color: C.text, fontVariantNumeric: "tabular-nums" }}>${Math.round(d.costo).toLocaleString()}</td>
+                        <td style={{ padding: "7px 8px", fontSize: 12, textAlign: "right", color: C.textMuted, fontVariantNumeric: "tabular-nums" }}>
+                          {d.propios.toLocaleString()}{esHM ? <span style={{ fontSize: 10 }}> movidos</span> : ""}
+                        </td>
+                        <td style={{ padding: "7px 0 7px 8px", fontSize: 13, textAlign: "right", fontWeight: 800, color: C.accent, fontVariantNumeric: "tabular-nums" }}>
+                          {unit != null ? "$" + unit.toFixed(2) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div style={{ fontSize: 10.5, color: C.textMuted, padding: "10px 0 12px", lineHeight: 1.5 }}>
+                Estas cifras <b>no suman</b> al costo de red ni se comparan entre sí como si fueran lo mismo:
+                cada una tiene su propio denominador. Half mile se divide entre los paquetes que half mile movió
+                —no entre las entregas finales— que es lo que permite ver si ese eslabón se encareció.
+                {hmVolumenMalCapturado > 0 && (
+                  <> {" "}⚠ {hmVolumenMalCapturado} ruta(s) de half mile traen su volumen en <b>entregados</b> en vez
+                  de en <b>recolecciones</b>; se contaron igual para no dejar el denominador en cero.</>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 3) Costo General por proveedor (Total = ÚM + MM) */}
       {umMmPorProveedor.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
@@ -4240,6 +4512,51 @@ function ModuleEnvios() {
               </tr>
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* GRÁFICAS POR PROVEEDOR.
+          Van DESPUÉS de las tablas a propósito: cada gráfica tiene su gemela
+          tabular justo arriba, así que ningún valor queda detrás de un color ni
+          de un tooltip. Las dos leen del mismo periodo que las tablas —el que
+          fija la barra de fechas— porque `rutas` ya viene acotado al rango. */}
+      {graficaCostoProv.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 16, marginBottom: 20 }}>
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px 12px" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Costo por proveedor</div>
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Última milla y media milla, ordenado por costo total</div>
+            </div>
+            <BarrasHorizontales
+              datos={graficaCostoProv}
+              series={[
+                { key: "um", label: "Última milla", color: VIZ.entrega },
+                { key: "mm", label: "Media milla", color: VIZ.costo },
+              ]}
+              fmt={v => "$" + Math.round(v).toLocaleString("es-MX")}
+              anchoEtiqueta={168}
+            />
+          </div>
+
+          <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px 12px" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Porcentaje de entrega por proveedor</div>
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                Entregas finales ÷ asignados. Excluye media milla, que es movimiento intermedio
+              </div>
+            </div>
+            {/* Una sola serie: un color y sin leyenda — el título ya dice qué
+                se grafica, y una caja con un solo recuadro repetiría el título. */}
+            <BarrasHorizontales
+              datos={graficaEntregaProv}
+              series={[{ key: "pct", label: "% de entrega", color: VIZ.entrega }]}
+              fmt={v => v.toFixed(1) + "%"}
+              anchoEtiqueta={168}
+              refValor={pctEntregaGlobal}
+              refEtiqueta={`Promedio del periodo: ${pctEntregaGlobal.toFixed(1)}%`}
+              vacio="Sin asignados en el periodo"
+            />
+          </div>
         </div>
       )}
 

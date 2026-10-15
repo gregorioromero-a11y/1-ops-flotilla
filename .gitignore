@@ -42,3 +42,6 @@ next-env.d.ts
 
 # mapas de muestra que genera scripts/mapaHtmlTest.mjs --guardar
 scripts/mapa-*.html
+
+# vista previa de gráficas (scripts/previewGraficas.mjs)
+scripts/preview-graficas.html
