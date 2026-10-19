@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { canAccess, ROLE_LABELS } from "../lib/auth";
-import { TARIFAS_POR_RUTA, TIPOS_DEDICADOS, TARIFAS_POR_PAQUETE, etiquetaDedicada } from "../lib/costEngine";
+import { TARIFAS_POR_RUTA, TIPOS_DEDICADOS, TARIFAS_POR_PAQUETE, TIPOS_POR_PAQUETE, tarifaPorPaquete, vigenciasDe, etiquetaDedicada } from "../lib/costEngine";
 import { rutear, metricas as calcMetricas, resumenRuta, etaRuta, PARAMS_DEFAULT } from "../lib/ruteo";
 import { mapaRuteoHTML } from "../lib/mapaHtml";
 import * as PRONO from "../lib/pronostico";
@@ -2731,8 +2731,15 @@ function crearMotorCostos(carriers, asistencia) {
         missing: false, tipo_operacion: r.tipoRuta, tarifaPorRuta: true, tarifaPorRutaValor: tarifaRuta,
       };
     }
-    // Flat-rate tipos (per-package): bypass asistencia lookup entirely
-    const rateFija = TARIFAS_FIJAS[r.tipoRuta];
+    // Tarifa por paquete: no consulta asistencia ni catálogo, porque el costo no
+    // depende de qué unidad trajo el operador.
+    //
+    // Depende de la FECHA DE LA RUTA, no de hoy: las tarifas se renegocian y
+    // cada ruta debe cobrarse al precio que regía el día que salió, o un rango
+    // viejo se recalcularía al precio nuevo y dejaría de cuadrar con lo ya
+    // facturado. Se usa fecha_salida y, si falta, la de registro.
+    const fechaRuta = ((r.salida || r.fechaRegistro || "") + "").substring(0, 10);
+    const rateFija = tarifaPorPaquete(r.tipoRuta, fechaRuta);
     if (rateFija != null) {
       const paqOperados = (parseInt(r.entregados) || 0) + (isCrossdock(r) ? (parseInt(r.recolecciones) || 0) : 0);
       const baseCost = rateFija * paqOperados;
@@ -2805,14 +2812,10 @@ function crearMotorCostos(carriers, asistencia) {
   // unidad trajo el operador, así que exigir asistencia sólo generaría ruido.
   const TIPOS_PERMISIBLES = new Set([
     "Foráneo Puebla", "PETCO", "HalfMile",
-    ...Object.keys(TARIFAS_POR_PAQUETE), ...TIPOS_DEDICADOS,
+    ...TIPOS_POR_PAQUETE, ...TIPOS_DEDICADOS,
   ]);
   const esPermisible = r => TIPOS_PERMISIBLES.has(r.tipoRuta);
-  // Tarifa por paquete entregado. Vive en lib/costEngine.js porque Consultas
-  // tenía su propia copia y podían separarse sin que nada lo delatara.
-  const TARIFAS_FIJAS = TARIFAS_POR_PAQUETE;
-
-  return { evalFormula, norm, getCostoInfo, isCrossdock, getCostoReal, getCostoPorPaquete, esPermisible, TIPOS_PERMISIBLES, TARIFAS_FIJAS };
+  return { evalFormula, norm, getCostoInfo, isCrossdock, getCostoReal, getCostoPorPaquete, esPermisible, TIPOS_PERMISIBLES };
 }
 
 // ============================================================
@@ -3130,7 +3133,7 @@ function ModuleEnvios() {
 
   // Motor de costos compartido (definido a nivel de módulo, más abajo lo usa
   // también el Dashboard OPS para que ambos calculen EXACTAMENTE igual).
-  const { getCostoInfo, getCostoReal, getCostoPorPaquete, esPermisible, TIPOS_PERMISIBLES, TARIFAS_FIJAS } =
+  const { getCostoInfo, getCostoReal, getCostoPorPaquete, esPermisible, TIPOS_PERMISIBLES } =
     useMemo(() => crearMotorCostos(carriers, asistencia), [carriers, asistencia]);
 
   // IMPORTANTE: todas las funciones de guardado trabajan por `id` de la ruta
@@ -3208,6 +3211,8 @@ function ModuleEnvios() {
         entregados: r.entregados || 0, recolecciones: r.recolecciones || 0,
         pctEntrega: parseFloat(r.pct_entrega) || 0, intentados: r.intentados || 0,
         noVisitados: r.no_visitados || 0, salida: r.fecha_salida || "",
+        // Respaldo para resolver la tarifa vigente cuando no hay fecha de salida.
+        fechaRegistro: r.fecha_registro || "",
         intercambios: r.intercambios || 0, tipoRuta: r.tipo_ruta || "Última milla",
         kmEstimados: r.km_estimados || "—", kmRecorridos: r.km_recorridos || "—",
         tiempoEstimado: r.tiempo_estimado || "—", tiempoReal: r.tiempo_real || "—",
@@ -11042,11 +11047,11 @@ function ModuleConsultas() {
         cars.forEach(c => {
           idxCars.set(carrierKey(c.proveedor, c.tipo_unidad), parseFloat(c.costo_unidad) || 0);
         });
-        // Tarifa por paquete — la MISMA tabla que usa Registrar Envíos, no una
-        // copia. Antes era un objeto literal aquí y otro allá: agregar un tipo
-        // en uno y olvidar el otro hacía que esta consulta exportara un costo
-        // distinto al que factura Envíos, sin que nada lo delatara.
-        const TARIFAS_FIJAS_LOCAL = TARIFAS_POR_PAQUETE;
+        // La tarifa por paquete sale de tarifaPorPaquete(), la MISMA función que
+        // usa Registrar Envíos. Antes había un objeto literal aquí y otro allá:
+        // agregar un tipo en uno y olvidar el otro hacía que esta consulta
+        // exportara un costo distinto al que factura Envíos, sin que nada lo
+        // delatara. Resuelve por fecha de ruta, porque hay tarifas con vigencias.
         const evalLocal = (expr, costo) => {
           if (!expr || !String(expr).trim()) return NaN;
           let s = String(expr).replace(/costo/gi, "(" + (parseFloat(costo) || 0) + ")");
@@ -11059,7 +11064,7 @@ function ModuleConsultas() {
         };
 
         final = all.map(r => {
-          const tarFija = TARIFAS_FIJAS_LOCAL[r.tipo_ruta];
+          const tarFija = tarifaPorPaquete(r.tipo_ruta, r.fecha_salida || r.fecha_registro);
           const tarRuta = TARIFAS_POR_RUTA[r.tipo_ruta];
           let proveedor = null, tipo_unidad = null, costo_base = 0;
           if (tarRuta != null) {

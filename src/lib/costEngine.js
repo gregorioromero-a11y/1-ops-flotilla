@@ -55,9 +55,54 @@ export const DEDUP_TIPOS = new Set(["PETCO", "Foráneo Puebla", ...TIPOS_DEDICAD
 // El multiplicador es `entregados` (más `recolecciones` si el tipo es
 // crossdock): el conteo de paquetes que el archivo de ruta reporta como
 // ENTREGADOS, no los asignados. Una ruta que sale con 50 y entrega 38 cobra 38.
+//
+// TODAS LAS CIFRAS VAN SIN IVA, como todo costo en el sistema: la prefactura le
+// suma el 16 % al final (`subtotalNeto * 0.16`). Guardar aquí un monto con IVA
+// haría que se gravara dos veces y nadie lo notaría hasta conciliar.
+//
+// Un tipo puede tener UNA tarifa o una lista de VIGENCIAS. La lista existe
+// porque las tarifas se renegocian a mitad de un periodo: si se sustituyera el
+// número, al reconsultar un rango viejo se recalcularían esas rutas al precio
+// nuevo y la prefactura ya emitida dejaría de cuadrar. Con vigencias, cada ruta
+// se cobra al precio que regía EL DÍA QUE SALIÓ, para siempre.
 export const TARIFAS_POR_PAQUETE = {
   "PETCO Monterrey": 50,
   "Foráneo Monterrey": 55,
   "Foráneo GDL": 55,
-  "Operación TIL": 40,
+  // Renegociada a partir del 19 de octubre de 2026.
+  "Operación TIL": [
+    { desde: null, monto: 45 },           // hasta el 18 de octubre de 2026
+    { desde: "2026-10-19", monto: 55 },
+  ],
+};
+
+export const TIPOS_POR_PAQUETE = new Set(Object.keys(TARIFAS_POR_PAQUETE));
+
+/**
+ * Tarifa por paquete de un tipo de ruta en una fecha dada (ISO "YYYY-MM-DD").
+ * Devuelve null si el tipo no cobra por paquete.
+ *
+ * Sin fecha se aplica la vigencia MÁS ANTIGUA, no la actual. Es la opción
+ * conservadora: una ruta sin fecha es casi siempre un registro viejo, y de los
+ * dos errores posibles —cobrar de menos un registro nuevo o cobrar de más uno
+ * histórico ya facturado— el segundo es el que rompe una conciliación.
+ */
+export function tarifaPorPaquete(tipoRuta, fecha) {
+  const t = TARIFAS_POR_PAQUETE[tipoRuta];
+  if (t == null) return null;
+  if (typeof t === "number") return t;
+  const dia = String(fecha || "").substring(0, 10);
+  let aplicable = null;
+  for (const v of t) {
+    if (v.desde == null) { if (!aplicable) aplicable = v; continue; }
+    if (dia && dia >= v.desde) aplicable = v;
+  }
+  return aplicable ? aplicable.monto : null;
+}
+
+/** Las vigencias de un tipo, para poder explicarlas en la interfaz. */
+export const vigenciasDe = (tipoRuta) => {
+  const t = TARIFAS_POR_PAQUETE[tipoRuta];
+  if (t == null) return [];
+  return typeof t === "number" ? [{ desde: null, monto: t }] : t;
 };
