@@ -3062,6 +3062,8 @@ function ModuleEnvios() {
   const [prefactOpen, setPrefactOpen] = useState(false);
   const [prefactProveedor, setPrefactProveedor] = useState("");
   const [prefactIVA, setPrefactIVA] = useState(true);
+  // Desglose por proveedor: cerrado por omisión. Ver el comentario del bloque.
+  const [verDesglose, setVerDesglose] = useState(false);
   const [prefactOperaciones, setPrefactOperaciones] = useState([]);
   const blankManual = () => ({
     fecha: ayerStr,
@@ -4245,7 +4247,7 @@ function ModuleEnvios() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "2px solid " + C.border }}>
-                  {["Tipo de operación", "Rutas", "Paquetes", "Costo Total", "% del Costo", "Costo/Paquete entregado"].map(h => (
+                  {["Tipo de operación", "Rutas", "Paquetes", "Costo Total", "% del Costo", "Costo/Paquete entregado", "$/paquete propio"].map(h => (
                     <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                   ))}
                 </tr>
@@ -4268,6 +4270,13 @@ function ModuleEnvios() {
                       <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600 }}>${Math.round(d.costo).toLocaleString()}</td>
                       <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: DESGLOSE_COLOR[d.tipo] }}>{pct}%</td>
                       <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.accent }}>{cppq === null ? <span title="El costo de half mile se amortiza en los entregados de última milla" style={{ color: C.textMuted, fontWeight: 500 }}>amortizado en ÚM</span> : (typeof cppq === "string" && cppq === "—" ? "—" : "$" + cppq)}</td>
+                      {/* El OTRO denominador: cada eslabón entre lo que ese
+                          eslabón movió. Half mile sí tiene cifra aquí —es lo
+                          que permite ver si ese tramo se encareció— y por eso
+                          las dos columnas conviven: no son la misma pregunta. */}
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.text }} title="Costo de esta operación ÷ los paquetes que ella movió">
+                        {d.propios > 0 ? "$" + (d.costo / d.propios).toFixed(2) : "—"}
+                      </td>
                     </tr>
                   );
                 })}
@@ -4278,11 +4287,12 @@ function ModuleEnvios() {
                   <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600 }}>${Math.round(costoTotalDiaNuevo).toLocaleString()}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>100%</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.accent }}>{desgloseTotalPaqFinal > 0 ? "$" + (costoTotalDiaNuevo / desgloseTotalPaqFinal).toFixed(2) : "—"}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 12, color: C.textMuted }}>no suma</td>
                 </tr>
               </tbody>
             </table>
             <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
-              Costo/paquete entregado = Costo total ÷ entregados finales (última milla + foráneo + PETCO). Half mile son recolecciones intermedias: su costo se amortiza en última milla y no cuentan como entrega final.
+              Dos denominadores distintos, a propósito. <b>Costo/paquete entregado</b> reparte el costo entre las entregas finales (última milla + foráneo + PETCO): es lo que cuesta poner un paquete en la puerta, y por eso half mile no tiene cifra propia ahí. <b>$/paquete propio</b> divide cada eslabón entre lo que ese eslabón movió, y es la columna que señala cuál se está encareciendo. No suman entre sí.
             </div>
           </div>
         </div>
@@ -4339,6 +4349,32 @@ function ModuleEnvios() {
         </div>
       )}
 
+      {/* DESGLOSE POR PROVEEDOR — COLAPSADO.
+          Estas tres tablas son SUBCONJUNTOS de "Costo por Carrier", que está
+          arriba y ya trae costo ÚM, costo HM, total, entregados y costo por
+          paquete. "Costo General" son tres de sus columnas; las de última y
+          media milla son una columna cada una, filtrada.
+
+          Apiladas y siempre abiertas hacían que cada proveedor apareciera
+          HASTA CUATRO VECES al bajar por la pantalla. En modo día no se notaba
+          —con una sola operación dos de ellas salen vacías—, pero al abrir un
+          rango entran última y media milla, las cuatro se llenan y la página se
+          vuelve una repetición. Se colapsan en vez de borrarlas porque alguien
+          las usa para copiar una sola columna al prefacturar. */}
+      {(umPorProveedor.length > 0 || mmPorProveedor.length > 0) && (
+        <button onClick={() => setVerDesglose(v => !v)}
+          style={{ width: "100%", padding: "11px 18px", marginBottom: verDesglose ? 14 : 20, borderRadius: 12,
+            border: "1px solid " + C.border, backgroundColor: C.panel, color: C.textMuted,
+            fontSize: 12.5, fontWeight: 600, cursor: "pointer", textAlign: "left",
+            display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: C.accent }}>{verDesglose ? "▾" : "▸"}</span>
+          {verDesglose ? "Ocultar" : "Ver"} desglose por proveedor
+          <span style={{ fontWeight: 500, color: C.textFaint }}>
+            — última milla, media milla y general por separado. Son columnas de la tabla de arriba.
+          </span>
+        </button>
+      )}
+      {verDesglose && (<>
       {/* 1) Costo Última Milla por proveedor */}
       {umPorProveedor.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
@@ -4405,105 +4441,6 @@ function ModuleEnvios() {
         </div>
       )}
 
-      {/* LOS DOS SENTIDOS DEL COSTO POR PAQUETE.
-          Son dos preguntas distintas y la confusión entre ellas es justo lo que
-          impide ver dónde se encarece la operación:
-
-            · COSTO DE RED  = costo TOTAL ÷ paquetes entregados al cliente.
-              Incluye el half mile, el foráneo y el PETCO en el numerador aunque
-              no sean entregas finales, porque todo eso se gastó para poner el
-              paquete en la puerta. Es el número que se compara contra la tarifa
-              que se cobra.
-
-            · COSTO POR OPERACIÓN = costo de cada eslabón ÷ lo que movió ESE
-              eslabón. Half mile se divide entre los paquetes que half mile
-              movió, no entre las entregas finales. Es el número que señala qué
-              eslabón se está encareciendo.
-
-          NO SUMAN entre sí y no deben compararse uno contra otro: tienen
-          denominadores distintos. Se muestran juntos y rotulados para que nadie
-          los confunda, que es lo que pasaba cuando sólo existía el primero. */}
-      {desgloseList.length > 0 && (
-        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Costo por paquete — los dos sentidos</div>
-            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
-              {fechaDesde === fechaHasta
-                ? new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" })
-                : `${new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" })} — ${new Date(fechaHasta + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })}`}
-              {" · "}{rutas.length} rutas en el periodo
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(230px, 300px) 1fr", gap: 0 }}>
-            {/* Sentido 1 — la cifra de red */}
-            <div style={{ padding: "18px", borderRight: "1px solid " + C.border }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>Costo de red</div>
-              {/* Figura destacada: proporcional, no tabular — los dígitos de
-                  ancho fijo hacen que un número grande se vea suelto. */}
-              <div style={{ fontSize: 40, fontWeight: 600, color: C.accent, lineHeight: 1.1, marginTop: 6 }}>
-                {desgloseTotalPaqFinal > 0 ? "$" + (costoTotalDiaNuevo / desgloseTotalPaqFinal).toFixed(2) : "—"}
-              </div>
-              <div style={{ fontSize: 11.5, color: C.text, fontWeight: 600, marginTop: 4 }}>por paquete entregado</div>
-              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 10, lineHeight: 1.5 }}>
-                ${Math.round(costoTotalDiaNuevo).toLocaleString()} de costo total ÷{" "}
-                {desgloseTotalPaqFinal.toLocaleString()} entregas finales.
-                El half mile está en el numerador: se gastó para que esas entregas ocurrieran.
-              </div>
-            </div>
-
-            {/* Sentido 2 — cada eslabón contra su propia unidad de trabajo */}
-            <div style={{ padding: "18px 18px 6px" }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0, marginBottom: 2 }}>
-                Costo por operación
-              </div>
-              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>
-                Cada eslabón entre los paquetes que movió. Aquí se ve cuál se encarece.
-              </div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    {["Operación", "Costo", "Paquetes", "$/paquete propio"].map((h, i) => (
-                      <th key={h} style={{ padding: "0 8px 7px 0", textAlign: i === 0 ? "left" : "right", fontSize: 9.5, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {desgloseList.map(d => {
-                    const unit = d.propios > 0 ? d.costo / d.propios : null;
-                    const esHM = d.tipo === "Half mile";
-                    return (
-                      <tr key={d.tipo} style={{ borderTop: "1px solid " + C.border }}>
-                        <td style={{ padding: "7px 8px 7px 0", fontSize: 12, fontWeight: 600, color: C.text, whiteSpace: "nowrap" }}>
-                          <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, backgroundColor: DESGLOSE_COLOR[d.tipo], marginRight: 7 }} />
-                          {d.tipo}
-                        </td>
-                        <td style={{ padding: "7px 8px", fontSize: 12, textAlign: "right", color: C.text, fontVariantNumeric: "tabular-nums" }}>${Math.round(d.costo).toLocaleString()}</td>
-                        <td style={{ padding: "7px 8px", fontSize: 12, textAlign: "right", color: C.textMuted, fontVariantNumeric: "tabular-nums" }}>
-                          {d.propios.toLocaleString()}{esHM ? <span style={{ fontSize: 12 }}> movidos</span> : ""}
-                        </td>
-                        <td style={{ padding: "7px 0 7px 8px", fontSize: 13, textAlign: "right", fontWeight: 600, color: C.accent, fontVariantNumeric: "tabular-nums" }}>
-                          {unit != null ? "$" + unit.toFixed(2) : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <div style={{ fontSize: 10.5, color: C.textMuted, padding: "10px 0 12px", lineHeight: 1.5 }}>
-                Estas cifras <b>no suman</b> al costo de red ni se comparan entre sí como si fueran lo mismo:
-                cada una tiene su propio denominador. Half mile se divide entre los paquetes que half mile movió
-                —no entre las entregas finales— que es lo que permite ver si ese eslabón se encareció.
-                {hmVolumenMalCapturado > 0 && (
-                  <> {" "}⚠ {hmVolumenMalCapturado} ruta(s) de half mile traen su volumen en <b>entregados</b> en vez
-                  de en <b>recolecciones</b>; se contaron igual para no dejar el denominador en cero.</>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* 3) Costo General por proveedor (Total = ÚM + MM) */}
       {umMmPorProveedor.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
@@ -4536,6 +4473,57 @@ function ModuleEnvios() {
               </tr>
             </tbody>
           </table>
+        </div>
+      )}
+
+      </>)}
+
+      {/* LOS DOS SENTIDOS DEL COSTO POR PAQUETE.
+          Son dos preguntas distintas y la confusión entre ellas es justo lo que
+          impide ver dónde se encarece la operación:
+
+            · COSTO DE RED  = costo TOTAL ÷ paquetes entregados al cliente.
+              Incluye el half mile, el foráneo y el PETCO en el numerador aunque
+              no sean entregas finales, porque todo eso se gastó para poner el
+              paquete en la puerta. Es el número que se compara contra la tarifa
+              que se cobra.
+
+            · COSTO POR OPERACIÓN = costo de cada eslabón ÷ lo que movió ESE
+              eslabón. Half mile se divide entre los paquetes que half mile
+              movió, no entre las entregas finales. Es el número que señala qué
+              eslabón se está encareciendo.
+
+          NO SUMAN entre sí y no deben compararse uno contra otro: tienen
+          denominadores distintos. Se muestran juntos y rotulados para que nadie
+          los confunda, que es lo que pasaba cuando sólo existía el primero. */}
+      {desgloseList.length > 0 && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Costo por paquete — los dos sentidos</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+              {fechaDesde === fechaHasta
+                ? new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" })
+                : `${new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short" })} — ${new Date(fechaHasta + "T12:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric" })}`}
+              {" · "}{rutas.length} rutas en el periodo
+            </div>
+          </div>
+
+          <div style={{ padding: "18px 20px", display: "flex", alignItems: "baseline", gap: 18, flexWrap: "wrap" }}>
+            {/* Figura destacada: proporcional, no tabular — los dígitos de
+                ancho fijo hacen que un número grande se vea suelto. */}
+            <div style={{ fontSize: 40, fontWeight: 600, color: C.accent, lineHeight: 1.1 }}>
+              {desgloseTotalPaqFinal > 0 ? "$" + (costoTotalDiaNuevo / desgloseTotalPaqFinal).toFixed(2) : "—"}
+            </div>
+            <div style={{ flex: "1 1 320px", minWidth: 260 }}>
+              <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>por paquete entregado</div>
+              <div style={{ fontSize: 12, color: C.textMuted, marginTop: 4, lineHeight: 1.5 }}>
+                ${Math.round(costoTotalDiaNuevo).toLocaleString()} de costo total ÷{" "}
+                {desgloseTotalPaqFinal.toLocaleString()} entregas finales. El half mile está en el
+                numerador: se gastó para que esas entregas ocurrieran. El costo de cada eslabón por
+                separado está en la columna <b>$/paquete propio</b> de la tabla de arriba.
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
