@@ -9,9 +9,9 @@ const THEMES = {
     border: "#22304A", red: "#F0556D", redBg: "rgba(240,85,109,0.15)",
   },
   light: {
-    bg: "#F8F9FC", accent: "#E63B2E", text: "#0C1425", textMuted: "#7C8495",
+    bg: "#F7F8FA", accent: "#E63B2E", text: "#0C1425", textMuted: "#6B7280",
     panelGrad: "#FFFFFF", inputBg: "#FFFFFF",
-    border: "#E2E6EE", red: "#DC2626", redBg: "#FEE2E2",
+    border: "#ECEEF2", red: "#D92D20", redBg: "#FDECEA",
   },
 };
 
@@ -19,7 +19,9 @@ export default function LoginScreen({ onLogin }) {
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [error, setError] = useState("");
-  const [theme, setTheme] = useState("dark");
+  // Claro por defecto, como el resto de T1. El acento del tema claro es el rojo
+  // T1; el del oscuro es azul, y esa era la primera cosa que veía un usuario.
+  const [theme, setTheme] = useState("light");
   useEffect(() => {
     try { if (localStorage.getItem("t1_theme") === "light") setTheme("light"); } catch {}
   }, []);
@@ -51,7 +53,7 @@ export default function LoginScreen({ onLogin }) {
           <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 6 }}>Contraseña</label>
           <input type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder="Contraseña" style={{ width: "100%", padding: "11px 13px", borderRadius: 8, border: "1.5px solid " + C.border, fontSize: 14, outline: "none", boxSizing: "border-box", backgroundColor: C.inputBg, color: C.text }} />
         </div>
-        <button type="submit" style={{ width: "100%", padding: "12px 0", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 15, fontWeight: 700, cursor: "pointer" }}>
+        <button type="submit" style={{ width: "100%", padding: "12px 0", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>
           Iniciar sesión
         </button>
       </form>

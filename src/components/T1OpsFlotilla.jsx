@@ -23,8 +23,15 @@ const supabase = createClient(
 // despacho, azul-tinta oscuro) y "light" (el estilo claro anterior).
 // `C` es un objeto MUTABLE: applyThemePalette() reescribe sus props in situ y un
 // re-render del árbol relee los nuevos valores (todos los estilos usan C.*).
+// Los tokens `sidebar*` describen la navegación por su ROL, no por su color.
+// Antes el sidebar pintaba sus textos con rgba(255,255,255,…) escrito a mano,
+// lo que daba por hecho que el fondo era oscuro: al volverlo blanco, como en el
+// resto de T1, las etiquetas quedaban en blanco sobre blanco. Con tokens, cada
+// tema decide y la navegación funciona en los dos.
 const PALETTE_DARK = {
   bg: "#0A0F1A", sidebar: "#0E1626", sidebarHover: "#1A2540", sidebarActive: "#1E3A5F",
+  sidebarText: "rgba(255,255,255,0.56)", sidebarTextActive: "#FFFFFF",
+  sidebarSection: "rgba(255,255,255,0.28)", sidebarBorde: "rgba(255,255,255,0.07)",
   accent: "#4C8DFF", accentDark: "#3B6FCC", accentLight: "rgba(76,141,255,0.14)",
   text: "#E8EEF9", textMuted: "#8295B2", textFaint: "#5A6C8A", border: "#22304A",
   white: "#111A2B", panel: "#111A2B", panelAlt: "#16223A",
@@ -36,20 +43,26 @@ const PALETTE_DARK = {
   purple: "#A78BFA", purpleBg: "rgba(167,139,250,0.15)",
   selBg: "rgba(76,141,255,0.25)",
 };
+// Tema claro = el de T1: lienzo blanco, navegación blanca, acento rojo T1 y
+// bordes casi imperceptibles. El ítem activo es una píldora gris muy clara con
+// texto oscuro, no un bloque de color: en T1 el color se reserva para la marca
+// y para los estados, nunca para decir "estás aquí".
 const PALETTE_LIGHT = {
-  bg: "#F8F9FC", sidebar: "#0C1425", sidebarHover: "#1A2540", sidebarActive: "#1E3A5F",
+  bg: "#F7F8FA", sidebar: "#FFFFFF", sidebarHover: "#F2F4F7", sidebarActive: "#F2F4F7",
+  sidebarText: "#5B6475", sidebarTextActive: "#0C1425",
+  sidebarSection: "#A3AAB8", sidebarBorde: "#ECEEF2",
   accent: "#E63B2E", accentDark: "#C42E23", accentLight: "#FDECEA",
-  text: "#0C1425", textMuted: "#7C8495", textFaint: "#9AA3B2", border: "#E2E6EE",
-  white: "#FFFFFF", panel: "#FFFFFF", panelAlt: "#FAFBFF",
+  text: "#0C1425", textMuted: "#6B7280", textFaint: "#9AA1AE", border: "#ECEEF2",
+  white: "#FFFFFF", panel: "#FFFFFF", panelAlt: "#FAFBFC",
   panelGrad: "#FFFFFF",
-  green: "#16A34A", greenBg: "#DCFCE7",
-  yellow: "#D97706", yellowBg: "#FEF9C3",
-  red: "#DC2626", redBg: "#FEE2E2",
-  blue: "#2563EB", blueBg: "#DBEAFE",
-  purple: "#7C3AED", purpleBg: "#EDE9FE",
-  selBg: "#DBEAFE",
+  green: "#15A05A", greenBg: "#E6F6EC",
+  yellow: "#C2770A", yellowBg: "#FDF4E3",
+  red: "#D92D20", redBg: "#FDECEA",
+  blue: "#2563EB", blueBg: "#E8EFFD",
+  purple: "#7C3AED", purpleBg: "#F0EBFE",
+  selBg: "#E8EFFD",
 };
-const C = { ...PALETTE_DARK };
+const C = { ...PALETTE_LIGHT };
 const applyThemePalette = (name) => {
   Object.assign(C, name === "light" ? PALETTE_LIGHT : PALETTE_DARK);
   // Los colores de serie tienen su propio juego por tema (ver VIZ más abajo):
@@ -60,8 +73,8 @@ const applyThemePalette = (name) => {
   if (typeof document !== "undefined") document.documentElement.dataset.theme = name;
 };
 const getSavedTheme = () => {
-  if (typeof window === "undefined") return "dark";
-  try { return localStorage.getItem("t1_theme") === "light" ? "light" : "dark"; } catch { return "dark"; }
+  if (typeof window === "undefined") return "light";
+  try { return localStorage.getItem("t1_theme") === "dark" ? "dark" : "light"; } catch { return "light"; }
 };
 
 const IC = {
@@ -101,10 +114,10 @@ const DEPOSITO = { lat: 19.398892731487283, lng: -99.11677448852873 };
 
 // ---- NAV ITEMS ----
 const navSections = [
-  { label: "DASHBOARD", items: [
+  { label: "Dashboard", items: [
     { id: "dashboard", label: "Dashboard OPS", icon: IC.Dashboard },
   ]},
-  { label: "CAPTURA DE DATOS", items: [
+  { label: "Captura de datos", items: [
     { id: "envios", label: "Registrar Envíos", icon: IC.Package },
     { id: "unidades", label: "Unidades", icon: IC.Truck },
     { id: "operadores", label: "Operadores", icon: IC.Users },
@@ -112,25 +125,25 @@ const navSections = [
     { id: "carriers", label: "Carriers / Proveedores", icon: IC.Truck },
     { id: "cargaflotilla", label: "Carga Flotilla Propia", icon: IC.Package },
   ]},
-  { label: "OPERACIONES", items: [
+  { label: "Operaciones", items: [
     { id: "t1envios", label: "T1 Envíos", icon: IC.Package },
     { id: "warehouse", label: "Warehouse", icon: IC.Warehouse },
     { id: "halfmile", label: "HalfMile", icon: IC.Map },
     { id: "sameday", label: "Same Day", icon: IC.Zap },
   ]},
-  { label: "PLANEACIÓN", items: [
+  { label: "Planeación", items: [
     { id: "pronostico", label: "Pronóstico de carga", icon: IC.BarChart },
   ]},
-  { label: "HERRAMIENTAS", items: [
+  { label: "Herramientas", items: [
     { id: "ruteo", label: "Ruteo / Clusters", icon: IC.Map },
     { id: "asignaciones", label: "Asignaciones", icon: IC.ClipboardCheck },
     { id: "manifiesto", label: "Manifiesto", icon: IC.ClipboardCheck },
     { id: "consultas", label: "Consultas", icon: IC.BarChart },
   ]},
-  { label: "FACTURACIÓN", items: [
+  { label: "Facturación", items: [
     { id: "facturacion", label: "Facturación", icon: IC.Dollar },
   ]},
-  { label: "SISTEMA", items: [
+  { label: "Sistema", items: [
     { id: "config", label: "Configuración", icon: IC.Settings },
   ]},
 ];
@@ -199,30 +212,36 @@ function StatusBadge({ status }) {
 
 // `spark` y `delta` son OPCIONALES: las llamadas que no los pasan (Unidades,
 // Carriers, Envíos…) se siguen viendo exactamente igual que antes.
+// Tarjeta de cifra, al estilo de T1: etiqueta gris arriba, número grande debajo
+// y nada más.
+//
+// Se le quitó el cuadro de color con icono que llevaba en la esquina. En T1 la
+// tarjeta es sólo el dato —ver t1 cross: "Escaneadas hoy / 0"— y el color se
+// reserva para la marca y para los estados. Con 40 tarjetas en pantalla a lo
+// largo de la consola, 40 cuadros de colores competían entre sí y ninguna cifra
+// destacaba. El `icon` y `color` se siguen aceptando porque los llaman decenas
+// de sitios: `color` ahora tiñe la chispa de tendencia, e `icon` se ignora.
 function StatCard({ label, value, subvalue, trend, trendUp, icon, color, spark, sparkColor, delta }) {
   return (
-    <div style={{ background: C.panelGrad, borderRadius: 12, padding: "20px 22px", border: `1px solid ${C.border}`, flex: 1, minWidth: 0 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-        <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 500 }}>{label}</span>
-        <div style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: color + "26", display: "flex", alignItems: "center", justifyContent: "center", color }}>
-          {icon}
-        </div>
-      </div>
+    <div style={{ background: C.panel, borderRadius: 12, padding: "18px 20px", border: `1px solid ${C.border}`, flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 13, color: C.textMuted, fontWeight: 500, marginBottom: 10, lineHeight: 1.35 }}>{label}</div>
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 10 }}>
         {/* Cifra protagonista: figuras proporcionales, no tabulares — a este
             tamaño las cifras de ancho fijo se ven sueltas. */}
-        <div className="font-grotesk" style={{ fontSize: 26, fontWeight: 800, color: C.text, letterSpacing: "-0.02em", lineHeight: 1, minWidth: 0 }}>{value}</div>
-        {spark && spark.length > 1 && <Sparkline datos={spark} color={sparkColor || color} />}
+        <div style={{ fontSize: 30, fontWeight: 600, color: C.text, letterSpacing: "-0.02em", lineHeight: 1.1, minWidth: 0 }}>{value}</div>
+        {spark && spark.length > 1 && <Sparkline datos={spark} color={sparkColor || color || VIZ.costo} />}
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-        {delta}
-        {trend && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 12, fontWeight: 700, color: trendUp ? C.green : C.red }}>
-            {trendUp ? <IC.ArrowUp /> : <IC.ArrowDown />} {trend}
-          </span>
-        )}
-        {subvalue && <span style={{ fontSize: 11, color: C.textMuted }}>{subvalue}</span>}
-      </div>
+      {(delta || trend || subvalue) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+          {delta}
+          {trend && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 12, fontWeight: 600, color: trendUp ? C.green : C.red }}>
+              {trendUp ? <IC.ArrowUp /> : <IC.ArrowDown />} {trend}
+            </span>
+          )}
+          {subvalue && <span style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.4 }}>{subvalue}</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -237,11 +256,11 @@ function MiniBarChart({ data, dataKey, color, height = 140 }) {
         const h = (d[dataKey] / max) * height * 0.85;
         return (
           <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-            <span style={{ fontSize: 9, color: C.textMuted, fontWeight: 600 }}>
+            <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>
               {dataKey === "costo" ? `$${(d[dataKey]/1000000).toFixed(1)}M` : d[dataKey].toLocaleString()}
             </span>
             <div style={{ width: "100%", height: h, backgroundColor: color, borderRadius: "4px 4px 0 0", minHeight: 4, opacity: i === data.length - 1 ? 1 : 0.7, transition: "all 0.3s" }} />
-            <span style={{ fontSize: 10, color: C.textMuted }}>{d.mes}</span>
+            <span style={{ fontSize: 12, color: C.textMuted }}>{d.mes}</span>
           </div>
         );
       })}
@@ -278,7 +297,7 @@ function GaugeChart({ value, label, size = 160 }) {
           <path d={`M ${bgEnd.x} ${bgEnd.y} A ${r} ${r} 0 ${largeArc} 1 ${valEnd.x} ${valEnd.y}`}
             fill="none" stroke={color} strokeWidth="14" strokeLinecap="round" />
         )}
-        <text x={cx} y={cy - 8} textAnchor="middle" style={{ fontSize: 28, fontWeight: 800, fill: C.text }}>{value}%</text>
+        <text x={cx} y={cy - 8} textAnchor="middle" style={{ fontSize: 28, fontWeight: 600, fill: C.text }}>{value}%</text>
         <text x={cx} y={cy + 12} textAnchor="middle" style={{ fontSize: 11, fill: C.textMuted }}>{label}</text>
       </svg>
     </div>
@@ -293,7 +312,7 @@ function OpsBar({ data }) {
       <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", height: 28, marginBottom: 14 }}>
         {data.map((d, i) => (
           <div key={i} style={{ width: `${(d.envios/total)*100}%`, backgroundColor: d.color, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span style={{ fontSize: 9, fontWeight: 700, color: "white" }}>{Math.round((d.envios/total)*100)}%</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "white" }}>{Math.round((d.envios/total)*100)}%</span>
           </div>
         ))}
       </div>
@@ -321,7 +340,7 @@ function OpsBar({ data }) {
 // los mismos tonos. Si cambias un hex, vuelve a correr el validador.
 const VIZ_DARK = { costo: "#4C8DFF", volumen: "#C98500", entrega: "#0F9E8E", grid: "#22304A", ref: "#8295B2" };
 const VIZ_LIGHT = { costo: "#2563EB", volumen: "#D97706", entrega: "#16A34A", grid: "#E2E6EE", ref: "#7C8495" };
-const VIZ = { ...VIZ_DARK };
+const VIZ = { ...VIZ_LIGHT };
 const applyThemeViz = (name) => Object.assign(VIZ, name === "light" ? VIZ_LIGHT : VIZ_DARK);
 
 // Sparkline: línea de 2px sin ejes ni etiquetas. Vive DENTRO de una tarjeta de
@@ -384,7 +403,7 @@ function DeltaBadge({ actual, previo, formato = "pct", bueno = "arriba" }) {
   const prevTxt = formato === "pp" ? previo.toFixed(1) + "%" : previo.toLocaleString("es-MX", { maximumFractionDigits: 2 });
   return (
     <span title={`Periodo anterior: ${prevTxt}`}
-      style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 700, color }}>
+      style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 600, color }}>
       {sube ? "▲" : "▼"} {txt} <span style={{ color: C.textFaint, fontWeight: 500 }}>vs anterior</span>
     </span>
   );
@@ -524,14 +543,14 @@ function GraficaComparada({ datos, series, alto = 380, formatoX }) {
             <span key={s.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: C.textMuted }}>
               <span style={{ width: 14, height: 3, borderRadius: 2, backgroundColor: s.color, display: "inline-block" }} />
               {s.label}
-              <strong style={{ color: C.text, fontWeight: 700 }}>
+              <strong style={{ color: C.text, fontWeight: 600 }}>
                 {s.base == null ? "—" : `prom. ${s.fmt(s.base)}`}
               </strong>
             </span>
           ))}
         </div>
         <button onClick={() => setVerTabla(v => !v)}
-          style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+          style={{ padding: "5px 12px", borderRadius: 8, border: `1px solid ${C.border}`, backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
           {verTabla ? "Ver gráfica" : "Ver tabla"}
         </button>
       </div>
@@ -540,8 +559,8 @@ function GraficaComparada({ datos, series, alto = 380, formatoX }) {
         <div style={{ overflowX: "auto", maxHeight: alto, overflowY: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead><tr style={{ position: "sticky", top: 0, backgroundColor: C.panel }}>
-              <th style={{ textAlign: "left", padding: "7px 10px", color: C.textMuted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>DÍA</th>
-              {idx.map(s => <th key={s.id} style={{ textAlign: "right", padding: "7px 10px", color: C.textMuted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{s.label.toUpperCase()}</th>)}
+              <th style={{ textAlign: "left", padding: "7px 10px", color: C.textMuted, fontSize: 12, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>DÍA</th>
+              {idx.map(s => <th key={s.id} style={{ textAlign: "right", padding: "7px 10px", color: C.textMuted, fontSize: 12, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{s.label.toUpperCase()}</th>)}
             </tr></thead>
             <tbody>
               {datos.map((d, i) => (
@@ -567,7 +586,7 @@ function GraficaComparada({ datos, series, alto = 380, formatoX }) {
               <line x1={M.left} x2={M.left + pw} y1={py(v)} y2={py(v)}
                 stroke={v === 100 ? VIZ.ref : VIZ.grid} strokeWidth={v === 100 ? 1.5 : 1} opacity={v === 100 ? 0.75 : 1} />
               <text x={M.left - 8} y={py(v) + 4} textAnchor="end"
-                style={{ fontSize: 10, fill: v === 100 ? C.textMuted : C.textFaint, fontWeight: v === 100 ? 700 : 400 }}>
+                style={{ fontSize: 12, fill: v === 100 ? C.textMuted : C.textFaint, fontWeight: v === 100 ? 700 : 400 }}>
                 {etiquetaMult(v)}
               </text>
             </g>
@@ -595,10 +614,10 @@ function GraficaComparada({ datos, series, alto = 380, formatoX }) {
             <g key={s.id}>
               <line x1={px(i) + 4} x2={M.left + pw + 10} y1={py(s.puntos[i])} y2={y}
                 stroke={s.color} strokeWidth="1" opacity="0.35" />
-              <text x={M.left + pw + 14} y={y + 3} style={{ fontSize: 11, fill: s.color, fontWeight: 700 }}>
+              <text x={M.left + pw + 14} y={y + 3} style={{ fontSize: 11, fill: s.color, fontWeight: 600 }}>
                 {s.fmt(s.crudos[i])}
               </text>
-              <text x={M.left + pw + 14} y={y + 15} style={{ fontSize: 9, fill: C.textFaint }}>{s.corto}</text>
+              <text x={M.left + pw + 14} y={y + 15} style={{ fontSize: 11, fill: C.textFaint }}>{s.corto}</text>
             </g>
           ))}
 
@@ -608,7 +627,7 @@ function GraficaComparada({ datos, series, alto = 380, formatoX }) {
             if (i % paso !== 0 && i !== datos.length - 1) return null;
             return (
               <text key={i} x={px(i)} y={M.top + ph + 20} textAnchor="middle"
-                style={{ fontSize: 10, fill: hover === i ? C.text : C.textFaint, fontWeight: hover === i ? 700 : 400 }}>
+                style={{ fontSize: 12, fill: hover === i ? C.text : C.textFaint, fontWeight: hover === i ? 700 : 400 }}>
                 {formatoX ? formatoX(d, i) : i}
               </text>
             );
@@ -624,20 +643,20 @@ function GraficaComparada({ datos, series, alto = 380, formatoX }) {
           backgroundColor: C.panelAlt, border: `1px solid ${C.border}`, borderRadius: 8,
           padding: "9px 12px", pointerEvents: "none", minWidth: 172, boxShadow: "0 6px 20px rgba(0,0,0,0.28)", zIndex: 5,
         }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: C.text, marginBottom: 6 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 6 }}>
             {formatoX ? formatoX(datos[hover], hover, true) : hover}
           </div>
           {idx.map(s => (
             <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 3 }}>
               <span style={{ width: 9, height: 3, borderRadius: 2, backgroundColor: s.color }} />
               <span style={{ fontSize: 11, color: C.textMuted, flex: 1 }}>{s.corto}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: C.text, fontVariantNumeric: "tabular-nums" }}>
                 {s.crudos[hover] == null ? "—" : s.fmt(s.crudos[hover])}
               </span>
               {/* El color juzga el cambio según la métrica, no según el signo:
                   bajar el costo por paquete es BUENO y va en verde. */}
               <span style={{
-                fontSize: 10, fontWeight: 700, width: 42, textAlign: "right",
+                fontSize: 12, fontWeight: 600, width: 42, textAlign: "right",
                 color: s.puntos[hover] == null ? C.textFaint : colorDeCambio(s.puntos[hover] - 100, s.bueno || "neutro"),
               }}>
                 {s.puntos[hover] == null ? "" : `${s.puntos[hover] >= 100 ? "+" : ""}${(s.puntos[hover] - 100).toFixed(0)}%`}
@@ -753,13 +772,13 @@ function GraficaDispersion({ puntos, ejeX, ejeY, refX, refY, alto = 420, etiquet
             {etiquetaTam || "tamaño = volumen"}
           </span>
           {malos.length > 0 && (
-            <span style={{ color: C.red, fontWeight: 700 }}>
+            <span style={{ color: C.red, fontWeight: 600 }}>
               {malos.length} proveedor{malos.length !== 1 ? "es" : ""} en el cuadrante crítico
             </span>
           )}
         </div>
         <button onClick={() => setVerTabla(v => !v)}
-          style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+          style={{ padding: "5px 12px", borderRadius: 8, border: `1px solid ${C.border}`, backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
           {verTabla ? "Ver gráfica" : "Ver tabla"}
         </button>
       </div>
@@ -769,7 +788,7 @@ function GraficaDispersion({ puntos, ejeX, ejeY, refX, refY, alto = 420, etiquet
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead><tr style={{ position: "sticky", top: 0, backgroundColor: C.panel }}>
               {["PROVEEDOR", ejeX.label.toUpperCase(), ejeY.label.toUpperCase(), (etiquetaTam || "VOLUMEN").toUpperCase(), "CUADRANTE"].map((h, i) => (
-                <th key={h} style={{ textAlign: i === 0 ? "left" : "right", padding: "7px 10px", color: C.textMuted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                <th key={h} style={{ textAlign: i === 0 ? "left" : "right", padding: "7px 10px", color: C.textMuted, fontSize: 12, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
@@ -779,7 +798,7 @@ function GraficaDispersion({ puntos, ejeX, ejeY, refX, refY, alto = 420, etiquet
                   <td style={{ padding: "6px 10px", textAlign: "right", color: C.text, fontVariantNumeric: "tabular-nums" }}>{ejeX.fmt(p.x)}</td>
                   <td style={{ padding: "6px 10px", textAlign: "right", color: C.text, fontVariantNumeric: "tabular-nums" }}>{ejeY.fmt(p.y)}</td>
                   <td style={{ padding: "6px 10px", textAlign: "right", color: C.textMuted, fontVariantNumeric: "tabular-nums" }}>{(p.tam || 0).toLocaleString("es-MX")}</td>
-                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700, color: enCuadranteMalo(p) ? C.red : enCuadranteBueno(p) ? C.green : C.textMuted }}>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: enCuadranteMalo(p) ? C.red : enCuadranteBueno(p) ? C.green : C.textMuted }}>
                     {enCuadranteMalo(p) ? "crítico" : enCuadranteBueno(p) ? "bueno" : "mixto"}
                   </td>
                 </tr>
@@ -802,18 +821,18 @@ function GraficaDispersion({ puntos, ejeX, ejeY, refX, refY, alto = 420, etiquet
           {/* Líneas de referencia = promedios ponderados de la operación */}
           {rx != null && <line x1={rx} x2={rx} y1={M.top} y2={M.top + ph} stroke={VIZ.ref} strokeWidth="1.5" opacity="0.6" />}
           {ry != null && <line x1={M.left} x2={M.left + pw} y1={ry} y2={ry} stroke={VIZ.ref} strokeWidth="1.5" opacity="0.6" />}
-          {rx != null && <text x={rx + 5} y={M.top + 11} style={{ fontSize: 9, fill: C.textFaint, fontWeight: 700 }}>media {ejeX.fmt(refX)}</text>}
-          {ry != null && <text x={M.left + 5} y={ry - 5} style={{ fontSize: 9, fill: C.textFaint, fontWeight: 700 }}>media {ejeY.fmt(refY)}</text>}
+          {rx != null && <text x={rx + 5} y={M.top + 11} style={{ fontSize: 11, fill: C.textFaint, fontWeight: 600 }}>media {ejeX.fmt(refX)}</text>}
+          {ry != null && <text x={M.left + 5} y={ry - 5} style={{ fontSize: 11, fill: C.textFaint, fontWeight: 600 }}>media {ejeY.fmt(refY)}</text>}
 
           {/* Rótulos de cuadrante en las esquinas */}
           {rx != null && ry != null && (
             <>
               <text x={ejeX.buenoAlta ? M.left + 6 : M.left + pw - 6} y={ejeY.buenoAlta ? M.top + ph - 8 : M.top + 14}
-                textAnchor={ejeX.buenoAlta ? "start" : "end"} style={{ fontSize: 10, fill: C.red, fontWeight: 800, opacity: 0.75 }}>
+                textAnchor={ejeX.buenoAlta ? "start" : "end"} style={{ fontSize: 12, fill: C.red, fontWeight: 600, opacity: 0.75 }}>
                 CARO Y CON BAJA ENTREGA
               </text>
               <text x={ejeX.buenoAlta ? M.left + pw - 6 : M.left + 6} y={ejeY.buenoAlta ? M.top + 14 : M.top + ph - 8}
-                textAnchor={ejeX.buenoAlta ? "end" : "start"} style={{ fontSize: 10, fill: C.green, fontWeight: 800, opacity: 0.75 }}>
+                textAnchor={ejeX.buenoAlta ? "end" : "start"} style={{ fontSize: 12, fill: C.green, fontWeight: 600, opacity: 0.75 }}>
                 BARATO Y CUMPLIENDO
               </text>
             </>
@@ -832,7 +851,7 @@ function GraficaDispersion({ puntos, ejeX, ejeY, refX, refY, alto = 420, etiquet
 
           {etiquetas.map(({ p, x, y }) => (
             <text key={p.id} x={x} y={y + 3} style={{
-              fontSize: 10, fill: hover && hover.id === p.id ? C.text : C.textMuted,
+              fontSize: 12, fill: hover && hover.id === p.id ? C.text : C.textMuted,
               fontWeight: hover && hover.id === p.id ? 800 : 600, pointerEvents: "none",
             }}>{p.label}</text>
           ))}
@@ -845,15 +864,15 @@ function GraficaDispersion({ puntos, ejeX, ejeY, refX, refY, alto = 420, etiquet
             const vy = escalas.y0 + (escalas.y1 - escalas.y0) * f;
             return (
               <g key={f}>
-                <text x={M.left + pw * f} y={M.top + ph + 17} textAnchor="middle" style={{ fontSize: 10, fill: C.textFaint }}>{ejeX.fmt(vx)}</text>
-                <text x={M.left - 8} y={M.top + ph - ph * f + 4} textAnchor="end" style={{ fontSize: 10, fill: C.textFaint }}>{ejeY.fmt(vy)}</text>
+                <text x={M.left + pw * f} y={M.top + ph + 17} textAnchor="middle" style={{ fontSize: 12, fill: C.textFaint }}>{ejeX.fmt(vx)}</text>
+                <text x={M.left - 8} y={M.top + ph - ph * f + 4} textAnchor="end" style={{ fontSize: 12, fill: C.textFaint }}>{ejeY.fmt(vy)}</text>
               </g>
             );
           })}
-          <text x={M.left + pw / 2} y={alto - 8} textAnchor="middle" style={{ fontSize: 11, fill: C.textMuted, fontWeight: 700 }}>
+          <text x={M.left + pw / 2} y={alto - 8} textAnchor="middle" style={{ fontSize: 11, fill: C.textMuted, fontWeight: 600 }}>
             {ejeX.label} →  mejor
           </text>
-          <text x={14} y={M.top + ph / 2} textAnchor="middle" transform={`rotate(-90 14 ${M.top + ph / 2})`} style={{ fontSize: 11, fill: C.textMuted, fontWeight: 700 }}>
+          <text x={14} y={M.top + ph / 2} textAnchor="middle" transform={`rotate(-90 14 ${M.top + ph / 2})`} style={{ fontSize: 11, fill: C.textMuted, fontWeight: 600 }}>
             ← mejor  {ejeY.label}
           </text>
         </svg>
@@ -866,14 +885,14 @@ function GraficaDispersion({ puntos, ejeX, ejeY, refX, refY, alto = 420, etiquet
           backgroundColor: C.panelAlt, border: `1px solid ${C.border}`, borderRadius: 8,
           padding: "9px 12px", pointerEvents: "none", minWidth: 186, boxShadow: "0 6px 20px rgba(0,0,0,0.28)", zIndex: 5,
         }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: C.text, marginBottom: 5 }}>{hover.label}</div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 5 }}>{hover.label}</div>
           {[[ejeY.label, ejeY.fmt(hover.y)], [ejeX.label, ejeX.fmt(hover.x)], [etiquetaTam || "Volumen", (hover.tam || 0).toLocaleString("es-MX")], ...(hover.extra || [])].map(([k, v]) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 14, marginTop: 2 }}>
               <span style={{ fontSize: 11, color: C.textMuted }}>{k}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>{v}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: C.text, fontVariantNumeric: "tabular-nums" }}>{v}</span>
             </div>
           ))}
-          <div style={{ marginTop: 6, fontSize: 10, fontWeight: 800, color: enCuadranteMalo(hover) ? C.red : enCuadranteBueno(hover) ? C.green : C.textMuted }}>
+          <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: enCuadranteMalo(hover) ? C.red : enCuadranteBueno(hover) ? C.green : C.textMuted }}>
             {enCuadranteMalo(hover) ? "▲ cuadrante crítico" : enCuadranteBueno(hover) ? "✓ barato y cumpliendo" : "· mixto"}
           </div>
         </div>
@@ -938,7 +957,7 @@ function Histograma({ valores, fmt, refs = [], alto = 300, etiquetaX = "", etiqu
         {[0.5, 1].map(f => (
           <g key={f}>
             <line x1={M.left} x2={M.left + pw} y1={py(nMax * f)} y2={py(nMax * f)} stroke={VIZ.grid} strokeWidth="1" />
-            <text x={M.left - 7} y={py(nMax * f) + 4} textAnchor="end" style={{ fontSize: 10, fill: C.textFaint }}>{Math.round(nMax * f)}</text>
+            <text x={M.left - 7} y={py(nMax * f) + 4} textAnchor="end" style={{ fontSize: 12, fill: C.textFaint }}>{Math.round(nMax * f)}</text>
           </g>
         ))}
 
@@ -965,7 +984,7 @@ function Histograma({ valores, fmt, refs = [], alto = 300, etiquetaX = "", etiqu
             <g key={r.label}>
               <line x1={x} x2={x} y1={M.top - 6} y2={M.top + ph} stroke={r.color || C.text} strokeWidth="1.5" opacity="0.8" />
               <text x={x} y={M.top - 11} textAnchor={i === refs.length - 1 ? "end" : "middle"}
-                style={{ fontSize: 10, fill: r.color || C.text, fontWeight: 800 }}>
+                style={{ fontSize: 12, fill: r.color || C.text, fontWeight: 600 }}>
                 {r.label} {fmt(r.v)}
               </text>
             </g>
@@ -976,9 +995,9 @@ function Histograma({ valores, fmt, refs = [], alto = 300, etiquetaX = "", etiqu
         {bins.cubos.map(c => {
           const paso = Math.ceil(bins.cubos.length / Math.max(2, Math.floor(pw / 58)));
           if (c.i % paso !== 0) return null;
-          return <text key={c.i} x={M.left + c.i * bw} y={M.top + ph + 16} textAnchor="middle" style={{ fontSize: 10, fill: C.textFaint }}>{fmt(c.desde)}</text>;
+          return <text key={c.i} x={M.left + c.i * bw} y={M.top + ph + 16} textAnchor="middle" style={{ fontSize: 12, fill: C.textFaint }}>{fmt(c.desde)}</text>;
         })}
-        <text x={M.left + pw / 2} y={alto - 6} textAnchor="middle" style={{ fontSize: 11, fill: C.textMuted, fontWeight: 700 }}>{etiquetaX}</text>
+        <text x={M.left + pw / 2} y={alto - 6} textAnchor="middle" style={{ fontSize: 11, fill: C.textMuted, fontWeight: 600 }}>{etiquetaX}</text>
       </svg>
 
       {hover != null && bins.cubos[hover] && (
@@ -987,7 +1006,7 @@ function Histograma({ valores, fmt, refs = [], alto = 300, etiquetaX = "", etiqu
           backgroundColor: C.panelAlt, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 11px",
           pointerEvents: "none", boxShadow: "0 6px 20px rgba(0,0,0,0.28)", zIndex: 5,
         }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: C.text }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: C.text }}>
             {fmt(bins.cubos[hover].desde)} – {fmt(bins.cubos[hover].hasta)}
           </div>
           <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
@@ -1137,7 +1156,7 @@ function BarrasHorizontales({
                 // cómoda aunque la barra mida 22px.
                 minHeight: 30, outline: "none",
                 backgroundColor: esActiva ? C.panelAlt : "transparent",
-                borderRadius: 6, transition: "background-color .12s",
+                borderRadius: 8, transition: "background-color .12s",
               }}>
               <div style={{
                 width: anchoEtiqueta, flex: "none", fontSize: 11.5, fontWeight: 600, color: C.text,
@@ -1175,16 +1194,16 @@ function BarrasHorizontales({
                   algunas porque son pocas y es el dato que se viene a leer: sin
                   él la gráfica obligaría a pasar el cursor para saber cuánto. */}
               <div style={{
-                width: 74, flex: "none", fontSize: 11.5, fontWeight: 700, color: C.text,
+                width: 74, flex: "none", fontSize: 11.5, fontWeight: 600, color: C.text,
                 fontVariantNumeric: "tabular-nums", textAlign: "right", paddingRight: 4,
               }}>{fmt(d.total)}</div>
               {esActiva && multi && (
                 <div style={{
                   position: "absolute", left: anchoEtiqueta + 14, bottom: "100%", zIndex: 30,
-                  backgroundColor: C.sidebar, color: "#fff", borderRadius: 7, padding: "8px 11px",
+                  backgroundColor: C.sidebar, color: "#fff", borderRadius: 8, padding: "8px 11px",
                   fontSize: 11, boxShadow: "0 6px 20px rgba(0,0,0,.3)", whiteSpace: "nowrap", pointerEvents: "none",
                 }}>
-                  <div style={{ fontWeight: 700, marginBottom: 4 }}>{d.nombre}</div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{d.nombre}</div>
                   {series.map(s => (d.valores[s.key] > 0 ? (
                     <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
                       <span style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: s.color }} />
@@ -1313,13 +1332,13 @@ function ModuleFlotillaCarga() {
   return (
     <div>
       <div style={{ marginBottom: 18 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Carga Flotilla Propia</h1>
+        <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0, color: C.text }}>Carga Flotilla Propia</h1>
         <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Sube el Excel de órdenes · se deduplica por Tracking · alimenta los KPIs de Flotilla Propia</p>
       </div>
 
       <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: 24, marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-          <label style={{ padding: "10px 18px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: uploading ? "default" : "pointer", opacity: uploading ? 0.6 : 1 }}>
+          <label style={{ padding: "10px 18px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 600, cursor: uploading ? "default" : "pointer", opacity: uploading ? 0.6 : 1 }}>
             {uploading ? "Procesando…" : "Seleccionar archivo (.xlsx/.csv)"}
             <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} disabled={uploading} style={{ display: "none" }} />
           </label>
@@ -1340,7 +1359,7 @@ function ModuleFlotillaCarga() {
 
       {mapping && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
-          <div style={{ padding: "12px 18px", borderBottom: "1px solid " + C.border, fontSize: 12, fontWeight: 700, color: C.text }}>
+          <div style={{ padding: "12px 18px", borderBottom: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color: C.text }}>
             Mapeo de columnas detectado <span style={{ fontWeight: 500, color: C.textMuted }}>(si algo está mal, dime y lo ajusto)</span>
           </div>
           <div style={{ padding: "10px 18px", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 6 }}>
@@ -1926,15 +1945,15 @@ function ModuleDashboard() {
   const colorPct = (v) => v >= 95 ? C.green : v >= 85 ? C.yellow : C.red;
   const th = (label, campo, align = "right") => (
     <th onClick={campo ? () => setOrden(o => ({ campo, dir: o.campo === campo && o.dir === "desc" ? "asc" : "desc" })) : undefined}
-      style={{ padding: "9px 12px", textAlign: align, fontSize: 10, fontWeight: 700, color: orden.campo === campo ? C.accent : C.textMuted,
-        textTransform: "uppercase", letterSpacing: "0.06em", cursor: campo ? "pointer" : "default", whiteSpace: "nowrap", userSelect: "none" }}>
+      style={{ padding: "9px 12px", textAlign: align, fontSize: 12, fontWeight: 600, color: orden.campo === campo ? C.accent : C.textMuted,
+        letterSpacing: 0, cursor: campo ? "pointer" : "default", whiteSpace: "nowrap", userSelect: "none" }}>
       {label}{orden.campo === campo ? (orden.dir === "desc" ? " ▾" : " ▴") : ""}
     </th>
   );
 
   const btnPreset = (id, label) => (
     <button onClick={() => aplicarPreset(id)} style={{
-      padding: "7px 14px", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer",
+      padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
       border: "1px solid " + (preset === id ? C.accent : C.border),
       backgroundColor: preset === id ? C.accentLight : "transparent",
       color: preset === id ? C.accent : C.textMuted,
@@ -1954,7 +1973,7 @@ function ModuleDashboard() {
       {/* ---------- Encabezado + periodo ---------- */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Dashboard OPS</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0, color: C.text }}>Dashboard OPS</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>
             Costos y desempeño por proveedor · detalle por operador · entregas por zona
             {opSel !== "todas" && <> · <b style={{ color: C.accent }}>viendo sólo {opSel}</b></>}
@@ -1967,10 +1986,10 @@ function ModuleDashboard() {
           {btnPreset("mesAnt", "Mes anterior")}
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
             <input type="date" value={desde} max={hasta} onChange={e => { setDesde(e.target.value); setPreset("custom"); }}
-              style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid " + (preset === "custom" ? C.accent : C.border), backgroundColor: C.white, color: C.text, fontSize: 12 }} />
+              style={{ padding: "7px 9px", borderRadius: 8, border: "1px solid " + (preset === "custom" ? C.accent : C.border), backgroundColor: C.white, color: C.text, fontSize: 12 }} />
             <span style={{ color: C.textMuted, fontSize: 12 }}>→</span>
             <input type="date" value={hasta} min={desde} max={hoyISO()} onChange={e => { setHasta(e.target.value); setPreset("custom"); }}
-              style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid " + (preset === "custom" ? C.accent : C.border), backgroundColor: C.white, color: C.text, fontSize: 12 }} />
+              style={{ padding: "7px 9px", borderRadius: 8, border: "1px solid " + (preset === "custom" ? C.accent : C.border), backgroundColor: C.white, color: C.text, fontSize: 12 }} />
           </div>
         </div>
       </div>
@@ -1986,7 +2005,7 @@ function ModuleDashboard() {
       ) : rutasScope.length === 0 ? (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 48, border: "1px solid " + C.border, textAlign: "center" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 6 }}>
             {opSel === "todas" ? "Sin rutas en este periodo" : `Sin rutas de ${opSel} en este periodo`}
           </div>
           <div style={{ fontSize: 13, color: C.textMuted }}>
@@ -1996,7 +2015,7 @@ function ModuleDashboard() {
           </div>
           {opSel !== "todas" && (
             <button onClick={() => { setOpSel("todas"); setProvSel(null); }}
-              style={{ marginTop: 14, padding: "8px 18px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              style={{ marginTop: 14, padding: "8px 18px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
               ← Ver todos los tipos de operación
             </button>
           )}
@@ -2081,7 +2100,7 @@ function ModuleDashboard() {
           <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>
                   Costo · Volumen · Efectividad
                 </div>
                 <div style={{ fontSize: 11, color: C.textMuted, maxWidth: 700, lineHeight: 1.5 }}>
@@ -2127,14 +2146,14 @@ function ModuleDashboard() {
           {/* ---------- Composición del periodo (y control del filtro) ---------- */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>Composición del periodo por tipo de operación</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Composición del periodo por tipo de operación</div>
               <div style={{ fontSize: 11, color: C.textMuted }}>Clic en un tipo para ver sólo ese · {money(aggTodas.costoTotalDiaNuevo)} en total</div>
             </div>
             <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14 }}>
               Half mile es movimiento intermedio, no entrega al cliente: su volumen y su costo por paquete
               <b> no son comparables</b> con los de última milla, por eso nunca se promedian juntos.
             </div>
-            <div style={{ display: "flex", height: 26, borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
+            <div style={{ display: "flex", height: 26, borderRadius: 8, overflow: "hidden", marginBottom: 12 }}>
               {composicion.map(d => {
                 const w = aggTodas.costoTotalDiaNuevo > 0 ? (d.costo / aggTodas.costoTotalDiaNuevo) * 100 : 0;
                 if (w <= 0) return null;
@@ -2144,7 +2163,7 @@ function ModuleDashboard() {
                     onClick={() => { setOpSel(opSel === d.tipo ? "todas" : d.tipo); setProvSel(null); }}
                     style={{ width: w + "%", backgroundColor: aggTodas.DESGLOSE_COLOR[d.tipo] || C.textMuted, cursor: "pointer",
                       opacity: activo ? 1 : 0.3, transition: "opacity .15s", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {w > 8 && <span style={{ fontSize: 10, fontWeight: 800, color: "white" }}>{w.toFixed(0)}%</span>}
+                    {w > 8 && <span style={{ fontSize: 12, fontWeight: 600, color: "white" }}>{w.toFixed(0)}%</span>}
                   </div>
                 );
               })}
@@ -2158,7 +2177,7 @@ function ModuleDashboard() {
                       border: "1px solid " + (activo ? (aggTodas.DESGLOSE_COLOR[d.tipo] || C.border) : C.border),
                       backgroundColor: activo ? (aggTodas.DESGLOSE_COLOR[d.tipo] || C.textMuted) + "22" : "transparent" }}>
                     <div style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: aggTodas.DESGLOSE_COLOR[d.tipo] || C.textMuted }} />
-                    <span style={{ fontSize: 12, color: C.text, fontWeight: 700 }}>{d.tipo}</span>
+                    <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{d.tipo}</span>
                     <span style={{ fontSize: 11, color: C.textMuted }}>
                       {money(d.costo)} · {d.volumen.toLocaleString("es-MX")} {d.esHM ? "movidos" : "entregados"}
                       {d.volumen > 0 ? ` · $${(d.costo / d.volumen).toFixed(2)}/paq` : ""}
@@ -2168,7 +2187,7 @@ function ModuleDashboard() {
               })}
               {opSel !== "todas" && (
                 <button onClick={() => { setOpSel("todas"); setProvSel(null); }}
-                  style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
                   ✕ Ver todas
                 </button>
               )}
@@ -2183,7 +2202,7 @@ function ModuleDashboard() {
             <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>
                     Frontera de eficiencia por proveedor
                   </div>
                   <div style={{ fontSize: 11, color: C.textMuted, maxWidth: 700, lineHeight: 1.5 }}>
@@ -2220,7 +2239,7 @@ function ModuleDashboard() {
           {distribucion && (
             <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "1px solid " + C.border, marginBottom: 16 }}>
               <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>
                   Cuánto tardan las rutas · P50 y P90
                 </div>
                 <div style={{ fontSize: 11, color: C.textMuted, maxWidth: 720, lineHeight: 1.5 }}>
@@ -2240,9 +2259,9 @@ function ModuleDashboard() {
                   { l: "La peor del periodo", v: distribucion.max, c: C.red, sub: "máximo" },
                 ].map(k => (
                   <div key={k.sub} style={{ flex: "1 1 170px", padding: "12px 14px", borderRadius: 8, backgroundColor: C.panelAlt, border: `1px solid ${C.border}` }}>
-                    <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, marginBottom: 5, lineHeight: 1.3 }}>{k.l}</div>
-                    <div className="font-grotesk" style={{ fontSize: 22, fontWeight: 800, color: k.c, letterSpacing: "-0.02em", lineHeight: 1 }}>{fmtDuracion(k.v)}</div>
-                    <div style={{ fontSize: 10, color: C.textFaint, marginTop: 4 }}>{k.sub}</div>
+                    <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 600, marginBottom: 5, lineHeight: 1.3 }}>{k.l}</div>
+                    <div className="font-grotesk" style={{ fontSize: 22, fontWeight: 600, color: k.c, letterSpacing: "-0.02em", lineHeight: 1 }}>{fmtDuracion(k.v)}</div>
+                    <div style={{ fontSize: 12, color: C.textFaint, marginTop: 4 }}>{k.sub}</div>
                   </div>
                 ))}
               </div>
@@ -2271,7 +2290,7 @@ function ModuleDashboard() {
               {/* La cola */}
               {distribucion.cola.length > 0 && (
                 <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 3 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 3 }}>
                     Quién vive arriba del P90 · {distribucion.colaN} ruta{distribucion.colaN !== 1 ? "s" : ""} por encima de {fmtDuracion(distribucion.p90)}
                   </div>
                   <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>
@@ -2285,10 +2304,10 @@ function ModuleDashboard() {
                         <div style={{ flex: 1, height: 16, backgroundColor: C.panelAlt, borderRadius: 4, overflow: "hidden", minWidth: 60 }}>
                           <div style={{ width: `${Math.max(2, c.share)}%`, height: "100%", backgroundColor: c.share >= 15 ? C.red : C.yellow, borderRadius: 4 }} />
                         </div>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: C.text, width: 92, textAlign: "right", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: C.text, width: 92, textAlign: "right", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
                           {c.n} de {c.total} ({c.share.toFixed(0)}%)
                         </span>
-                        <span style={{ fontSize: 10, color: C.textMuted, width: 76, textAlign: "right", flexShrink: 0 }}>
+                        <span style={{ fontSize: 12, color: C.textMuted, width: 76, textAlign: "right", flexShrink: 0 }}>
                           peor {fmtDuracion(c.peor)}
                         </span>
                       </div>
@@ -2313,7 +2332,7 @@ function ModuleDashboard() {
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, marginBottom: 16, overflow: "hidden" }}>
             <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
                   Costos y desempeño por proveedor
                   {opSel !== "todas" && <span style={{ fontSize: 12, fontWeight: 600, color: C.accent, marginLeft: 8 }}>· sólo {opSel}</span>}
                 </div>
@@ -2326,7 +2345,7 @@ function ModuleDashboard() {
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 11, color: C.textMuted }}>{filasProveedor.length} proveedores · {desde} → {hasta}</span>
                 <button onClick={toggleTabla}
-                  style={{ padding: "7px 16px", borderRadius: 8, border: `1px solid ${tablaAbierta ? C.border : C.accent}`, backgroundColor: tablaAbierta ? C.panelAlt : C.accentLight, color: tablaAbierta ? C.textMuted : C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  style={{ padding: "7px 16px", borderRadius: 8, border: `1px solid ${tablaAbierta ? C.border : C.accent}`, backgroundColor: tablaAbierta ? C.panelAlt : C.accentLight, color: tablaAbierta ? C.textMuted : C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
                   {tablaAbierta ? "Ocultar tabla" : `Ver tabla completa (${filasProveedor.length})`}
                 </button>
               </div>
@@ -2338,8 +2357,8 @@ function ModuleDashboard() {
                   {colsFinal && colsHM && (
                     <tr>
                       <th colSpan={3} />
-                      <th colSpan={5} style={{ padding: "6px 12px", textAlign: "center", fontSize: 10, fontWeight: 800, color: C.green, textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "2px solid " + C.green + "55" }}>Entrega final</th>
-                      <th colSpan={3} style={{ padding: "6px 12px", textAlign: "center", fontSize: 10, fontWeight: 800, color: C.blue, textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "2px solid " + C.blue + "55" }}>Half mile (movimiento)</th>
+                      <th colSpan={5} style={{ padding: "6px 12px", textAlign: "center", fontSize: 12, fontWeight: 600, color: C.green, letterSpacing: 0, borderBottom: "2px solid " + C.green + "55" }}>Entrega final</th>
+                      <th colSpan={3} style={{ padding: "6px 12px", textAlign: "center", fontSize: 12, fontWeight: 600, color: C.blue, letterSpacing: 0, borderBottom: "2px solid " + C.blue + "55" }}>Half mile (movimiento)</th>
                       <th />
                     </tr>
                   )}
@@ -2367,7 +2386,7 @@ function ModuleDashboard() {
                           style={{ borderTop: "1px solid " + C.border, cursor: "pointer", backgroundColor: abierto ? C.selBg : "transparent" }}
                           onMouseEnter={e => { if (!abierto) e.currentTarget.style.backgroundColor = C.panelAlt; }}
                           onMouseLeave={e => { e.currentTarget.style.backgroundColor = abierto ? C.selBg : "transparent"; }}>
-                          <td style={{ padding: "11px 12px", fontSize: 13, fontWeight: 700, color: C.text, whiteSpace: "nowrap" }}>
+                          <td style={{ padding: "11px 12px", fontSize: 13, fontWeight: 600, color: C.text, whiteSpace: "nowrap" }}>
                             <span style={{ color: C.textMuted, marginRight: 6, fontSize: 11 }}>{abierto ? "▾" : "▸"}</span>{f.carrier}
                           </td>
                           <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: C.textMuted }}>
@@ -2381,26 +2400,26 @@ function ModuleDashboard() {
                           {colsFinal && <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: C.green, fontWeight: 600 }}>{f.entregados.toLocaleString("es-MX")}</td>}
                           {colsFinal && (
                             <td style={{ padding: "11px 12px", textAlign: "right" }}>
-                              <span style={{ fontSize: 12, fontWeight: 800, color: f.pctEntrega == null ? C.textMuted : colorPct(f.pctEntrega) }}>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: f.pctEntrega == null ? C.textMuted : colorPct(f.pctEntrega) }}>
                                 {f.pctEntrega == null ? "—" : f.pctEntrega.toFixed(1) + "%"}
                               </span>
                             </td>
                           )}
                           {colsFinal && (
-                            <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", fontWeight: 700, color: f.costoPaq == null ? C.textMuted : f.costoPaq <= 40 ? C.green : f.costoPaq <= 45 ? C.yellow : C.red }}>
+                            <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", fontWeight: 600, color: f.costoPaq == null ? C.textMuted : f.costoPaq <= 40 ? C.green : f.costoPaq <= 45 ? C.yellow : C.red }}>
                               {f.costoPaq == null ? "—" : "$" + f.costoPaq.toFixed(2)}
                             </td>
                           )}
                           {colsFinal && (
                             <td style={{ padding: "11px 12px", textAlign: "right" }}>
-                              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{money(f.costo)}</div>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{money(f.costo)}</div>
                               <div style={{ height: 3, borderRadius: 2, backgroundColor: C.purple, opacity: 0.75, width: Math.max(4, (f.costo / maxCosto) * 100) + "%", marginLeft: "auto", marginTop: 3 }} />
                             </td>
                           )}
                           {colsHM && <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: f.movidosHM ? C.blue : C.textFaint }}>{f.movidosHM ? f.movidosHM.toLocaleString("es-MX") : "—"}</td>}
                           {colsHM && <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: f.costoPaqHM == null ? C.textFaint : C.blue, fontWeight: 600 }}>{f.costoPaqHM == null ? "—" : "$" + f.costoPaqHM.toFixed(2)}</td>}
                           {colsHM && <td style={{ padding: "11px 12px", fontSize: 13, textAlign: "right", color: f.costoHM ? C.text : C.textFaint }}>{f.costoHM ? money(f.costoHM) : "—"}</td>}
-                          <td style={{ padding: "11px 12px", textAlign: "right", fontSize: 11, color: C.accent, fontWeight: 700, whiteSpace: "nowrap" }}>
+                          <td style={{ padding: "11px 12px", textAlign: "right", fontSize: 11, color: C.accent, fontWeight: 600, whiteSpace: "nowrap" }}>
                             {abierto ? "Ocultar" : "Ver operadores"}
                           </td>
                         </tr>
@@ -2408,7 +2427,7 @@ function ModuleDashboard() {
                           <tr>
                             <td colSpan={nCols} style={{ padding: 0, backgroundColor: C.panelAlt }}>
                               <div style={{ padding: "14px 18px" }}>
-                                <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 2 }}>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 2 }}>
                                   Eficiencia por operador — {f.carrier}
                                 </div>
                                 <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
@@ -2421,7 +2440,7 @@ function ModuleDashboard() {
                                       <tr>
                                         {["Operador", "Días", "Asignados", "Entregados", "% Entrega", "Paq/día", "$ / paq", "Costo",
                                           ...(colsHM ? ["Movidos HM", "$ / movido", "Costo HM"] : []), "Operación"].map((h, i) => (
-                                          <th key={h} style={{ padding: "7px 10px", textAlign: i === 0 ? "left" : "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>{h}</th>
+                                          <th key={h} style={{ padding: "7px 10px", textAlign: i === 0 ? "left" : "right", fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0, borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>{h}</th>
                                         ))}
                                       </tr>
                                     </thead>
@@ -2433,21 +2452,21 @@ function ModuleDashboard() {
                                           <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right" }}>{o.asignados.toLocaleString("es-MX")}</td>
                                           <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: C.green, fontWeight: 600 }}>{o.entregados.toLocaleString("es-MX")}</td>
                                           <td style={{ padding: "7px 10px", textAlign: "right" }}>
-                                            <span style={{ fontSize: 11, fontWeight: 800, color: o.pctEntrega == null ? C.textMuted : colorPct(o.pctEntrega) }}>
+                                            <span style={{ fontSize: 11, fontWeight: 600, color: o.pctEntrega == null ? C.textMuted : colorPct(o.pctEntrega) }}>
                                               {o.pctEntrega == null ? "—" : o.pctEntrega.toFixed(1) + "%"}
                                             </span>
                                           </td>
-                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", fontWeight: 700, color: o.paqPorDia == null ? C.textFaint : C.blue }}>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", fontWeight: 600, color: o.paqPorDia == null ? C.textFaint : C.blue }}>
                                             {o.paqPorDia == null ? "—" : o.paqPorDia.toFixed(0)}
                                           </td>
-                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", fontWeight: 700, color: o.costoPaq == null ? C.textMuted : o.costoPaq <= 40 ? C.green : o.costoPaq <= 45 ? C.yellow : C.red }}>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", fontWeight: 600, color: o.costoPaq == null ? C.textMuted : o.costoPaq <= 40 ? C.green : o.costoPaq <= 45 ? C.yellow : C.red }}>
                                             {o.costoPaq == null ? "—" : "$" + o.costoPaq.toFixed(2)}
                                           </td>
                                           <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right" }}>{money(o.costo)}</td>
                                           {colsHM && <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: o.movidosHM ? C.blue : C.textFaint }}>{o.movidosHM ? o.movidosHM.toLocaleString("es-MX") : "—"}</td>}
                                           {colsHM && <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: o.costoPaqHM == null ? C.textFaint : C.blue }}>{o.costoPaqHM == null ? "—" : "$" + o.costoPaqHM.toFixed(2)}</td>}
                                           {colsHM && <td style={{ padding: "7px 10px", fontSize: 12, textAlign: "right", color: o.costoHM ? C.text : C.textFaint }}>{o.costoHM ? money(o.costoHM) : "—"}</td>}
-                                          <td style={{ padding: "7px 10px", fontSize: 10, color: C.textMuted, textAlign: "right", whiteSpace: "nowrap" }}>{o.tipos.join(", ")}</td>
+                                          <td style={{ padding: "7px 10px", fontSize: 12, color: C.textMuted, textAlign: "right", whiteSpace: "nowrap" }}>{o.tipos.join(", ")}</td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -2465,17 +2484,17 @@ function ModuleDashboard() {
                     contradecir a sus propias filas, que fue el bug original. */}
                 <tfoot>
                   <tr style={{ borderTop: "2px solid " + C.border, backgroundColor: C.bg }}>
-                    <td style={{ padding: "11px 12px", fontSize: 12, fontWeight: 800, color: C.text }}>TOTAL</td>
-                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700 }}>{kpis.rutas.toLocaleString("es-MX")}</td>
+                    <td style={{ padding: "11px 12px", fontSize: 12, fontWeight: 600, color: C.text }}>TOTAL</td>
+                    <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 600 }}>{kpis.rutas.toLocaleString("es-MX")}</td>
                     <td />
-                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700 }}>{kpis.asignados.toLocaleString("es-MX")}</td>}
-                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 700, color: C.green }}>{kpis.entregados.toLocaleString("es-MX")}</td>}
-                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800, color: kpis.pct == null ? C.textMuted : colorPct(kpis.pct) }}>{kpis.pct == null ? "—" : kpis.pct.toFixed(1) + "%"}</td>}
-                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800 }}>{kpis.costoPaq == null ? "—" : "$" + kpis.costoPaq.toFixed(2)}</td>}
-                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800 }}>{money(kpis.costo)}</td>}
-                    {colsHM && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800, color: C.blue }}>{kpis.movidosHM.toLocaleString("es-MX")}</td>}
-                    {colsHM && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800, color: C.blue }}>{kpis.costoPaqHM == null ? "—" : "$" + kpis.costoPaqHM.toFixed(2)}</td>}
-                    {colsHM && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 800 }}>{money(kpis.costoHM)}</td>}
+                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 600 }}>{kpis.asignados.toLocaleString("es-MX")}</td>}
+                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 600, color: C.green }}>{kpis.entregados.toLocaleString("es-MX")}</td>}
+                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 600, color: kpis.pct == null ? C.textMuted : colorPct(kpis.pct) }}>{kpis.pct == null ? "—" : kpis.pct.toFixed(1) + "%"}</td>}
+                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 600 }}>{kpis.costoPaq == null ? "—" : "$" + kpis.costoPaq.toFixed(2)}</td>}
+                    {colsFinal && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 600 }}>{money(kpis.costo)}</td>}
+                    {colsHM && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 600, color: C.blue }}>{kpis.movidosHM.toLocaleString("es-MX")}</td>}
+                    {colsHM && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 600, color: C.blue }}>{kpis.costoPaqHM == null ? "—" : "$" + kpis.costoPaqHM.toFixed(2)}</td>}
+                    {colsHM && <td style={{ padding: "11px 12px", fontSize: 12, textAlign: "right", fontWeight: 600 }}>{money(kpis.costoHM)}</td>}
                     <td />
                   </tr>
                 </tfoot>
@@ -2488,7 +2507,7 @@ function ModuleDashboard() {
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
             <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Entregas por zona</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Entregas por zona</div>
                 <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
                   Municipios del Marco Geoestadístico de <b>INEGI</b> · CDMX, Edomex, Nuevo León, Jalisco y Puebla
                 </div>
@@ -2496,12 +2515,12 @@ function ModuleDashboard() {
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 {zonaRows && (
                   <>
-                    <button onClick={() => setZonaMetric("entregas")} style={{ padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "1px solid " + (zonaMetric === "entregas" ? C.blue : C.border), backgroundColor: zonaMetric === "entregas" ? C.blueBg : "transparent", color: zonaMetric === "entregas" ? C.blue : C.textMuted }}>Volumen</button>
-                    <button onClick={() => setZonaMetric("sla")} style={{ padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "1px solid " + (zonaMetric === "sla" ? C.green : C.border), backgroundColor: zonaMetric === "sla" ? C.greenBg : "transparent", color: zonaMetric === "sla" ? C.green : C.textMuted }}>SLA a tiempo</button>
+                    <button onClick={() => setZonaMetric("entregas")} style={{ padding: "6px 12px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "1px solid " + (zonaMetric === "entregas" ? C.blue : C.border), backgroundColor: zonaMetric === "entregas" ? C.blueBg : "transparent", color: zonaMetric === "entregas" ? C.blue : C.textMuted }}>Volumen</button>
+                    <button onClick={() => setZonaMetric("sla")} style={{ padding: "6px 12px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "1px solid " + (zonaMetric === "sla" ? C.green : C.border), backgroundColor: zonaMetric === "sla" ? C.greenBg : "transparent", color: zonaMetric === "sla" ? C.green : C.textMuted }}>SLA a tiempo</button>
                   </>
                 )}
                 <button onClick={cargarZona} disabled={zonaLoading}
-                  style={{ padding: "7px 16px", borderRadius: 7, border: "none", backgroundColor: zonaLoading ? C.textMuted : C.accent, color: "white", fontSize: 12, fontWeight: 700, cursor: zonaLoading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                  style={{ padding: "7px 16px", borderRadius: 8, border: "none", backgroundColor: zonaLoading ? C.textMuted : C.accent, color: "white", fontSize: 12, fontWeight: 600, cursor: zonaLoading ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 6 }}>
                   <IC.Map /> {zonaLoading ? "Cargando..." : zonaRows ? "Recargar" : "Cargar mapa"}
                 </button>
               </div>
@@ -2539,7 +2558,7 @@ function ModuleDashboard() {
                       <thead style={{ position: "sticky", top: 0, backgroundColor: C.bg, zIndex: 1 }}>
                         <tr>
                           {["Municipio", "Entregas", "SLA"].map((h, i) => (
-                            <th key={h} style={{ padding: "8px 12px", textAlign: i === 0 ? "left" : "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>{h}</th>
+                            <th key={h} style={{ padding: "8px 12px", textAlign: i === 0 ? "left" : "right", fontSize: 12, fontWeight: 600, color: C.textMuted,  borderBottom: "1px solid " + C.border }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -2548,10 +2567,10 @@ function ModuleDashboard() {
                           <tr key={z.key} style={{ borderBottom: "1px solid " + C.border }}>
                             <td style={{ padding: "7px 12px", fontSize: 12 }}>
                               <div style={{ fontWeight: 600, color: C.text }}>{z.municipio}</div>
-                              <div style={{ fontSize: 10, color: C.textFaint }}>{z.estado}</div>
+                              <div style={{ fontSize: 12, color: C.textFaint }}>{z.estado}</div>
                             </td>
-                            <td style={{ padding: "7px 12px", fontSize: 12, textAlign: "right", fontWeight: 700, color: C.text }}>{z.entregas.toLocaleString("es-MX")}</td>
-                            <td style={{ padding: "7px 12px", fontSize: 12, textAlign: "right", fontWeight: 700, color: z.sla == null ? C.textMuted : colorPct(z.sla) }}>
+                            <td style={{ padding: "7px 12px", fontSize: 12, textAlign: "right", fontWeight: 600, color: C.text }}>{z.entregas.toLocaleString("es-MX")}</td>
+                            <td style={{ padding: "7px 12px", fontSize: 12, textAlign: "right", fontWeight: 600, color: z.sla == null ? C.textMuted : colorPct(z.sla) }}>
                               {z.sla == null ? "—" : z.sla.toFixed(0) + "%"}
                             </td>
                           </tr>
@@ -2561,7 +2580,7 @@ function ModuleDashboard() {
                   </div>
                 </div>
                 <div style={{ padding: "10px 18px", borderTop: "1px solid " + C.border, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", fontSize: 11, color: C.textMuted }}>
-                  <span style={{ fontWeight: 700 }}>{zonaMetric === "sla" ? "SLA a tiempo:" : "Volumen de entregas:"}</span>
+                  <span style={{ fontWeight: 600 }}>{zonaMetric === "sla" ? "SLA a tiempo:" : "Volumen de entregas:"}</span>
                   {(zonaMetric === "sla"
                     ? [["#F0556D", "<50%"], ["#F6A623", "50-70%"], ["#84CC16", "70-90%"], ["#16A34A", "≥90%"]]
                     : [["#DBEAFE", "bajo"], ["#93C5FD", ""], ["#4C8DFF", ""], ["#2563EB", ""], ["#1E3A8A", "alto"]]
@@ -2594,15 +2613,15 @@ function CircleGauge({ value, size = 40 }) {
         <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={3}
           strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" />
       </svg>
-      <span style={{ position: "absolute", fontSize: 9, fontWeight: 700, color }}>{Math.round(value)}%</span>
+      <span style={{ position: "absolute", fontSize: 11, fontWeight: 600, color }}>{Math.round(value)}%</span>
     </div>
   );
 }
 
 // --- Risk Icon ---
 function RiskIcon({ level }) {
-  if (level === "high") return <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: "50%", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 800 }}>!</span>;
-  if (level === "medium") return <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: "50%", backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11, fontWeight: 800 }}>!</span>;
+  if (level === "high") return <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: "50%", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600 }}>!</span>;
+  if (level === "medium") return <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: "50%", backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11, fontWeight: 600 }}>!</span>;
   return null;
 }
 
@@ -4151,7 +4170,7 @@ function ModuleEnvios() {
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Registrar Envíos</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Registrar Envíos</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Vista de rutas operativas · Carga masiva desde Excel</p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -4163,19 +4182,19 @@ function ModuleEnvios() {
             setPrefactOpen(true);
           }} style={{
             padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.green, backgroundColor: C.greenBg,
-            color: C.green, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+            color: C.green, fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
           }}>
             <IC.Download /> Descargar prefactura
           </button>
           <button onClick={() => { setManualForm(blankManual()); setManualMsg(""); setManualOpen(true); }} style={{
             padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight,
-            color: C.accent, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+            color: C.accent, fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
           }}>
             <IC.Plus /> Captura manual
           </button>
           <button onClick={() => setShowUpload(!showUpload)} style={{
             padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showUpload ? C.textMuted : C.accent,
-            color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+            color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
           }}>
             {showUpload ? <><IC.X /> Cancelar</> : <><IC.Download /> Carga masiva</>}
           </button>
@@ -4219,7 +4238,7 @@ function ModuleEnvios() {
             })}
           </div>
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
-            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 600, color: C.text }}>
               Costo por tipo de operación — Periodo seleccionado
               <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(costo real calculado, según tipo de ruta)</span>
             </div>
@@ -4227,7 +4246,7 @@ function ModuleEnvios() {
               <thead>
                 <tr style={{ borderBottom: "2px solid " + C.border }}>
                   {["Tipo de operación", "Rutas", "Paquetes", "Costo Total", "% del Costo", "Costo/Paquete entregado"].map(h => (
-                    <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                    <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -4246,19 +4265,19 @@ function ModuleEnvios() {
                       </td>
                       <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.rutas}</td>
                       <td style={{ padding: "10px 14px", fontSize: 13 }}>{d.paquetes.toLocaleString()}{esHM ? <span style={{ color: C.textMuted, fontSize: 11 }}> recol.</span> : ""}</td>
-                      <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${Math.round(d.costo).toLocaleString()}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600 }}>${Math.round(d.costo).toLocaleString()}</td>
                       <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: DESGLOSE_COLOR[d.tipo] }}>{pct}%</td>
-                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.accent }}>{cppq === null ? <span title="El costo de half mile se amortiza en los entregados de última milla" style={{ color: C.textMuted, fontWeight: 500 }}>amortizado en ÚM</span> : (typeof cppq === "string" && cppq === "—" ? "—" : "$" + cppq)}</td>
+                      <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.accent }}>{cppq === null ? <span title="El costo de half mile se amortiza en los entregados de última milla" style={{ color: C.textMuted, fontWeight: 500 }}>amortizado en ÚM</span> : (typeof cppq === "string" && cppq === "—" ? "—" : "$" + cppq)}</td>
                     </tr>
                   );
                 })}
                 <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{desgloseList.reduce((s, d) => s + d.rutas, 0)}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{desgloseTotalPaqFinal.toLocaleString()}<span style={{ color: C.textMuted, fontSize: 11 }}> finales</span></td>
-                  <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${Math.round(costoTotalDiaNuevo).toLocaleString()}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>100%</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.accent }}>{desgloseTotalPaqFinal > 0 ? "$" + (costoTotalDiaNuevo / desgloseTotalPaqFinal).toFixed(2) : "—"}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>TOTAL</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{desgloseList.reduce((s, d) => s + d.rutas, 0)}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{desgloseTotalPaqFinal.toLocaleString()}<span style={{ color: C.textMuted, fontSize: 11 }}> finales</span></td>
+                  <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600 }}>${Math.round(costoTotalDiaNuevo).toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>100%</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.accent }}>{desgloseTotalPaqFinal > 0 ? "$" + (costoTotalDiaNuevo / desgloseTotalPaqFinal).toFixed(2) : "—"}</td>
                 </tr>
               </tbody>
             </table>
@@ -4272,7 +4291,7 @@ function ModuleEnvios() {
       {/* Cost by carrier table */}
       {carrierCostList.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 600, color: C.text }}>
             Costo por Carrier — Periodo seleccionado
             <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(costo real calculado)</span>
           </div>
@@ -4280,7 +4299,7 @@ function ModuleEnvios() {
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
                 {["Carrier", "Rutas", "Costo ÚM", "Costo HM", "Costo Total", "Entregados ÚM", "Entregados HM", "Costo/Paquete"].map(h => (
-                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -4295,22 +4314,22 @@ function ModuleEnvios() {
                     <td style={{ padding: "10px 14px", fontSize: 13 }}>{cc.rutas}</td>
                     <td style={{ padding: "10px 14px", fontSize: 13, color: C.green, fontWeight: 600 }}>${Math.round(cc.costoUM).toLocaleString()}</td>
                     <td style={{ padding: "10px 14px", fontSize: 13, color: C.blue, fontWeight: 600 }}>${Math.round(cc.costoHM).toLocaleString()}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${Math.round(cc.costo).toLocaleString()}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600 }}>${Math.round(cc.costo).toLocaleString()}</td>
                     <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{cc.entregadosUM.toLocaleString()}</td>
                     <td style={{ padding: "10px 14px", fontSize: 13, color: C.textMuted }}>{cc.entregadosHM > 0 ? cc.entregadosHM.toLocaleString() : "—"}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.accent }}>{typeof cppq === "string" && cppq === "—" ? "—" : "$" + cppq}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.accent }}>{typeof cppq === "string" && cppq === "—" ? "—" : "$" + cppq}</td>
                   </tr>
                 );
               })}
               <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{carrierCostList.reduce((s, c) => s + c.rutas, 0)}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.green }}>${Math.round(carrierTotCostoUM).toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.blue }}>${Math.round(carrierTotCostoHM).toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${Math.round(costoTotalDiaNuevo).toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{entregadosTotal.toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.textMuted }}>{carrierTotEntHM > 0 ? carrierTotEntHM.toLocaleString() : "—"}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: C.accent }}>{entregadosTotal > 0 ? "$" + costoPorPaqGlobal.toFixed(2) : "—"}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>TOTAL</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{carrierCostList.reduce((s, c) => s + c.rutas, 0)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.green }}>${Math.round(carrierTotCostoUM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.blue }}>${Math.round(carrierTotCostoHM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600 }}>${Math.round(costoTotalDiaNuevo).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{entregadosTotal.toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.textMuted }}>{carrierTotEntHM > 0 ? carrierTotEntHM.toLocaleString() : "—"}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.accent }}>{entregadosTotal > 0 ? "$" + costoPorPaqGlobal.toFixed(2) : "—"}</td>
               </tr>
             </tbody>
           </table>
@@ -4323,7 +4342,7 @@ function ModuleEnvios() {
       {/* 1) Costo Última Milla por proveedor */}
       {umPorProveedor.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 600, color: C.text }}>
             Costo Última Milla por Proveedor
             <span style={{ fontWeight: 500, color: C.green, fontSize: 11, marginLeft: 8 }}>(solo última milla)</span>
           </div>
@@ -4331,7 +4350,7 @@ function ModuleEnvios() {
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
                 {["Proveedor", "Rutas", "Costo Última Milla"].map(h => (
-                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -4340,13 +4359,13 @@ function ModuleEnvios() {
                 <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13 }}>{c.rutasUM}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 14, color: C.green, fontWeight: 700 }}>${Math.round(c.costoUM).toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 14, color: C.green, fontWeight: 600 }}>${Math.round(c.costoUM).toLocaleString()}</td>
                 </tr>
               ))}
               <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{umPorProveedor.reduce((s, c) => s + c.rutasUM, 0)}</td>
-                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800, color: C.green }}>${Math.round(umMmTotUM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>TOTAL</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{umPorProveedor.reduce((s, c) => s + c.rutasUM, 0)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600, color: C.green }}>${Math.round(umMmTotUM).toLocaleString()}</td>
               </tr>
             </tbody>
           </table>
@@ -4356,7 +4375,7 @@ function ModuleEnvios() {
       {/* 2) Costo Media Milla por proveedor */}
       {mmPorProveedor.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 600, color: C.text }}>
             Costo Media Milla por Proveedor
             <span style={{ fontWeight: 500, color: C.blue, fontSize: 11, marginLeft: 8 }}>(solo media milla / half mile)</span>
           </div>
@@ -4364,7 +4383,7 @@ function ModuleEnvios() {
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
                 {["Proveedor", "Rutas", "Costo Media Milla"].map(h => (
-                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -4373,13 +4392,13 @@ function ModuleEnvios() {
                 <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13 }}>{c.rutasHM}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 14, color: C.blue, fontWeight: 700 }}>${Math.round(c.costoHM).toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 14, color: C.blue, fontWeight: 600 }}>${Math.round(c.costoHM).toLocaleString()}</td>
                 </tr>
               ))}
               <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700 }}>{mmPorProveedor.reduce((s, c) => s + c.rutasHM, 0)}</td>
-                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800, color: C.blue }}>${Math.round(umMmTotHM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>TOTAL</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{mmPorProveedor.reduce((s, c) => s + c.rutasHM, 0)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600, color: C.blue }}>${Math.round(umMmTotHM).toLocaleString()}</td>
               </tr>
             </tbody>
           </table>
@@ -4407,7 +4426,7 @@ function ModuleEnvios() {
       {desgloseList.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
           <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Costo por paquete — los dos sentidos</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Costo por paquete — los dos sentidos</div>
             <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
               {fechaDesde === fechaHasta
                 ? new Date(fechaDesde + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" })
@@ -4419,10 +4438,10 @@ function ModuleEnvios() {
           <div style={{ display: "grid", gridTemplateColumns: "minmax(230px, 300px) 1fr", gap: 0 }}>
             {/* Sentido 1 — la cifra de red */}
             <div style={{ padding: "18px", borderRight: "1px solid " + C.border }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Costo de red</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>Costo de red</div>
               {/* Figura destacada: proporcional, no tabular — los dígitos de
                   ancho fijo hacen que un número grande se vea suelto. */}
-              <div style={{ fontSize: 40, fontWeight: 800, color: C.accent, lineHeight: 1.1, marginTop: 6 }}>
+              <div style={{ fontSize: 40, fontWeight: 600, color: C.accent, lineHeight: 1.1, marginTop: 6 }}>
                 {desgloseTotalPaqFinal > 0 ? "$" + (costoTotalDiaNuevo / desgloseTotalPaqFinal).toFixed(2) : "—"}
               </div>
               <div style={{ fontSize: 11.5, color: C.text, fontWeight: 600, marginTop: 4 }}>por paquete entregado</div>
@@ -4435,7 +4454,7 @@ function ModuleEnvios() {
 
             {/* Sentido 2 — cada eslabón contra su propia unidad de trabajo */}
             <div style={{ padding: "18px 18px 6px" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0, marginBottom: 2 }}>
                 Costo por operación
               </div>
               <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>
@@ -4445,7 +4464,7 @@ function ModuleEnvios() {
                 <thead>
                   <tr>
                     {["Operación", "Costo", "Paquetes", "$/paquete propio"].map((h, i) => (
-                      <th key={h} style={{ padding: "0 8px 7px 0", textAlign: i === 0 ? "left" : "right", fontSize: 9.5, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</th>
+                      <th key={h} style={{ padding: "0 8px 7px 0", textAlign: i === 0 ? "left" : "right", fontSize: 9.5, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -4461,9 +4480,9 @@ function ModuleEnvios() {
                         </td>
                         <td style={{ padding: "7px 8px", fontSize: 12, textAlign: "right", color: C.text, fontVariantNumeric: "tabular-nums" }}>${Math.round(d.costo).toLocaleString()}</td>
                         <td style={{ padding: "7px 8px", fontSize: 12, textAlign: "right", color: C.textMuted, fontVariantNumeric: "tabular-nums" }}>
-                          {d.propios.toLocaleString()}{esHM ? <span style={{ fontSize: 10 }}> movidos</span> : ""}
+                          {d.propios.toLocaleString()}{esHM ? <span style={{ fontSize: 12 }}> movidos</span> : ""}
                         </td>
-                        <td style={{ padding: "7px 0 7px 8px", fontSize: 13, textAlign: "right", fontWeight: 800, color: C.accent, fontVariantNumeric: "tabular-nums" }}>
+                        <td style={{ padding: "7px 0 7px 8px", fontSize: 13, textAlign: "right", fontWeight: 600, color: C.accent, fontVariantNumeric: "tabular-nums" }}>
                           {unit != null ? "$" + unit.toFixed(2) : "—"}
                         </td>
                       </tr>
@@ -4488,7 +4507,7 @@ function ModuleEnvios() {
       {/* 3) Costo General por proveedor (Total = ÚM + MM) */}
       {umMmPorProveedor.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 700, color: C.text }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 600, color: C.text }}>
             Costo General por Proveedor
             <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(última milla + media milla)</span>
           </div>
@@ -4496,7 +4515,7 @@ function ModuleEnvios() {
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
                 {["Proveedor", "Costo Última Milla", "Costo Media Milla", "Costo Total (ÚM + MM)"].map(h => (
-                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -4506,14 +4525,14 @@ function ModuleEnvios() {
                   <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, color: C.green, fontWeight: 600 }}>${Math.round(c.costoUM).toLocaleString()}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13, color: C.blue, fontWeight: 600 }}>${Math.round(c.costoHM).toLocaleString()}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 700 }}>${Math.round(c.total).toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600 }}>${Math.round(c.total).toLocaleString()}</td>
                 </tr>
               ))}
               <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800 }}>TOTAL</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.green }}>${Math.round(umMmTotUM).toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 700, color: C.blue }}>${Math.round(umMmTotHM).toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 800 }}>${Math.round(umMmTotUM + umMmTotHM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>TOTAL</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.green }}>${Math.round(umMmTotUM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.blue }}>${Math.round(umMmTotHM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600 }}>${Math.round(umMmTotUM + umMmTotHM).toLocaleString()}</td>
               </tr>
             </tbody>
           </table>
@@ -4529,7 +4548,7 @@ function ModuleEnvios() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 16, marginBottom: 20 }}>
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
             <div style={{ padding: "14px 18px 12px" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Costo por proveedor</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Costo por proveedor</div>
               <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Última milla y media milla, ordenado por costo total</div>
             </div>
             <BarrasHorizontales
@@ -4545,7 +4564,7 @@ function ModuleEnvios() {
 
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
             <div style={{ padding: "14px 18px 12px" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Porcentaje de entrega por proveedor</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Porcentaje de entrega por proveedor</div>
               <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
                 Entregas finales ÷ asignados. Excluye media milla, que es movimiento intermedio
               </div>
@@ -4569,11 +4588,11 @@ function ModuleEnvios() {
       {showUpload && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: `2px dashed ${C.accent}`, marginBottom: 20, textAlign: "center" }}>
           <div style={{ fontSize: 36, marginBottom: 10 }}>📊</div>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6, color: C.text }}>Carga masiva de rutas</div>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6, color: C.text }}>Carga masiva de rutas</div>
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 16 }}>Sube tu archivo Excel (.xlsx) con las columnas: ID ruta, Carrier, Nombre operador, Total, Entregados, etc.</div>
           <label style={{
             display: "inline-flex", alignItems: "center", gap: 8, padding: "12px 28px", borderRadius: 8,
-            backgroundColor: C.accent, color: "white", fontSize: 14, fontWeight: 700, cursor: "pointer",
+            backgroundColor: C.accent, color: "white", fontSize: 14, fontWeight: 600, cursor: "pointer",
           }}>
             <IC.Download /> Seleccionar archivo Excel
             <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} style={{ display: "none" }} />
@@ -4589,10 +4608,10 @@ function ModuleEnvios() {
       {/* Date + Filter bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Día:</span>
+          <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted,  }}>Día:</span>
           {/* Flecha día anterior */}
           <button onClick={() => shiftDay(-1)} title="Día anterior"
-            style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, color: C.text, fontSize: 15, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, color: C.text, fontSize: 15, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
             ‹
           </button>
           {/* Input fecha (un solo toque por default) */}
@@ -4602,30 +4621,30 @@ function ModuleEnvios() {
               if (!modoRango) setFechaHasta(e.target.value);
               else if (e.target.value > fechaHasta) setFechaHasta(e.target.value);
             }}
-            style={{ padding: "6px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
+            style={{ padding: "6px 9px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
           {modoRango && (
             <>
               <span style={{ fontSize: 12, color: C.textMuted }}>al</span>
               <input type="date" value={fechaHasta}
                 onChange={e => { if (e.target.value >= fechaDesde) setFechaHasta(e.target.value); }}
-                style={{ padding: "6px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
+                style={{ padding: "6px 9px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600 }} />
             </>
           )}
           {/* Flecha día siguiente */}
           <button onClick={() => shiftDay(1)} title="Día siguiente"
-            style={{ width: 30, height: 30, borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, color: C.text, fontSize: 15, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, color: C.text, fontSize: 15, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
             ›
           </button>
           {/* Botón Ayer */}
           <button onClick={() => { setFechaDesde(ayerStr); setFechaHasta(ayerStr); setModoRango(false); }}
             title="Ayer (día vencido)"
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, color: C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
             Ayer
           </button>
           {/* Toggle modo rango */}
           <button onClick={() => { setModoRango(!modoRango); if (modoRango) setFechaHasta(fechaDesde); }}
             title={modoRango ? "Volver a un solo día" : "Filtrar rango de días"}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid " + (modoRango ? C.accent : C.border), backgroundColor: modoRango ? C.accentLight : C.white, color: modoRango ? C.accent : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid " + (modoRango ? C.accent : C.border), backgroundColor: modoRango ? C.accentLight : C.white, color: modoRango ? C.accent : C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
             {modoRango ? "Un día" : "Rango"}
           </button>
           <span style={{ fontSize: 13, fontWeight: 600, color: C.text, marginLeft: 4 }}>
@@ -4639,7 +4658,7 @@ function ModuleEnvios() {
         <div style={{ display: "flex", gap: 6 }}>
           {["Todas", "En ruta", "En riesgo", "Completadas"].map(f => (
             <button key={f} onClick={() => setFilter(f)} style={{
-              padding: "6px 16px", borderRadius: 6, border: `1px solid ${filter === f ? C.accent : C.border}`,
+              padding: "6px 16px", borderRadius: 8, border: `1px solid ${filter === f ? C.accent : C.border}`,
               backgroundColor: filter === f ? C.accentLight : C.white, color: filter === f ? C.accent : C.textMuted,
               fontSize: 12, fontWeight: 600, cursor: "pointer",
             }}>{f}</button>
@@ -4648,12 +4667,12 @@ function ModuleEnvios() {
       </div>
 
       {/* Filtros adicionales: Proveedor / Operador / Tipo de operación */}
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14, padding: "10px 14px", backgroundColor: C.white, borderRadius: 10, border: "1px solid " + C.border }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>Filtros:</span>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14, padding: "10px 14px", backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>Filtros:</span>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <label style={{ fontSize: 11, fontWeight: 600, color: C.textMuted }}>Proveedor</label>
           <select value={filterProveedor} onChange={e => { setFilterProveedor(e.target.value); setFilterOperador("Todos"); }}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid " + (filterProveedor !== "Todos" ? C.accent : C.border), fontSize: 12, fontWeight: 600, backgroundColor: filterProveedor !== "Todos" ? C.accentLight : C.white, color: filterProveedor !== "Todos" ? C.accent : C.text, cursor: "pointer" }}>
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid " + (filterProveedor !== "Todos" ? C.accent : C.border), fontSize: 12, fontWeight: 600, backgroundColor: filterProveedor !== "Todos" ? C.accentLight : C.white, color: filterProveedor !== "Todos" ? C.accent : C.text, cursor: "pointer" }}>
             <option value="Todos">Todos</option>
             {proveedoresFiltro.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
@@ -4661,7 +4680,7 @@ function ModuleEnvios() {
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <label style={{ fontSize: 11, fontWeight: 600, color: C.textMuted }}>Operador</label>
           <select value={filterOperador} onChange={e => setFilterOperador(e.target.value)}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid " + (filterOperador !== "Todos" ? C.accent : C.border), fontSize: 12, fontWeight: 600, backgroundColor: filterOperador !== "Todos" ? C.accentLight : C.white, color: filterOperador !== "Todos" ? C.accent : C.text, cursor: "pointer", maxWidth: 240 }}>
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid " + (filterOperador !== "Todos" ? C.accent : C.border), fontSize: 12, fontWeight: 600, backgroundColor: filterOperador !== "Todos" ? C.accentLight : C.white, color: filterOperador !== "Todos" ? C.accent : C.text, cursor: "pointer", maxWidth: 240 }}>
             <option value="Todos">Todos ({operadoresFiltro.length})</option>
             {operadoresFiltro.map(o => <option key={o} value={o}>{o}</option>)}
           </select>
@@ -4669,14 +4688,14 @@ function ModuleEnvios() {
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <label style={{ fontSize: 11, fontWeight: 600, color: C.textMuted }}>Tipo operación</label>
           <select value={filterOperacion} onChange={e => setFilterOperacion(e.target.value)}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid " + (filterOperacion !== "Todas" ? C.accent : C.border), fontSize: 12, fontWeight: 600, backgroundColor: filterOperacion !== "Todas" ? C.accentLight : C.white, color: filterOperacion !== "Todas" ? C.accent : C.text, cursor: "pointer" }}>
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid " + (filterOperacion !== "Todas" ? C.accent : C.border), fontSize: 12, fontWeight: 600, backgroundColor: filterOperacion !== "Todas" ? C.accentLight : C.white, color: filterOperacion !== "Todas" ? C.accent : C.text, cursor: "pointer" }}>
             <option value="Todas">Todas</option>
             {OPERACIONES_CANONICAS.map(op => <option key={op} value={op}>{op}</option>)}
           </select>
         </div>
         {(filterProveedor !== "Todos" || filterOperador !== "Todos" || filterOperacion !== "Todas") && (
           <button onClick={() => { setFilterProveedor("Todos"); setFilterOperador("Todos"); setFilterOperacion("Todas"); }}
-            style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.red, backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid " + C.red, backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
             ✕ Limpiar
           </button>
         )}
@@ -4685,16 +4704,16 @@ function ModuleEnvios() {
 
       {/* Bulk action bar */}
       {selectedRows.size > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", marginBottom: 12, backgroundColor: C.accentLight, borderRadius: 10, border: "1px solid " + C.accent }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.accent }}>{selectedRows.size} seleccionada{selectedRows.size > 1 ? "s" : ""}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", marginBottom: 12, backgroundColor: C.accentLight, borderRadius: 12, border: "1px solid " + C.accent }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.accent }}>{selectedRows.size} seleccionada{selectedRows.size > 1 ? "s" : ""}</span>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted }}>Tipo de ruta:</span>
-          <button onClick={() => bulkUpdateTipo("Última milla")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", color: C.text }}>Última milla</button>
-          <button onClick={() => bulkUpdateTipo("Half mile")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", color: C.text }}>Half mile</button>
-          <button onClick={() => bulkUpdateTipo("Same Day")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", color: C.text }}>Same Day</button>
+          <button onClick={() => bulkUpdateTipo("Última milla")} style={{ padding: "5px 14px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", color: C.text }}>Última milla</button>
+          <button onClick={() => bulkUpdateTipo("Half mile")} style={{ padding: "5px 14px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", color: C.text }}>Half mile</button>
+          <button onClick={() => bulkUpdateTipo("Same Day")} style={{ padding: "5px 14px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", color: C.text }}>Same Day</button>
           <div style={{ width: 1, height: 24, backgroundColor: C.border, margin: "0 4px" }} />
-          <button onClick={bulkDelete} style={{ padding: "5px 14px", borderRadius: 6, border: "none", backgroundColor: C.red, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>Eliminar</button>
-          <button onClick={() => setSelectedRows(new Set())} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, cursor: "pointer", color: C.textMuted }}>✕</button>
+          <button onClick={bulkDelete} style={{ padding: "5px 14px", borderRadius: 8, border: "none", backgroundColor: C.red, color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>Eliminar</button>
+          <button onClick={() => setSelectedRows(new Set())} style={{ padding: "5px 10px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 12, cursor: "pointer", color: C.textMuted }}>✕</button>
         </div>
       )}
 
@@ -4707,18 +4726,18 @@ function ModuleEnvios() {
               <th style={{ width: 30, padding: "10px 6px" }}>
                 <input type="checkbox" checked={selectedRows.size === filtered.length && filtered.length > 0} onChange={toggleAll} style={{ cursor: "pointer", accentColor: C.accent }} />
               </th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", minWidth: 140, whiteSpace: "nowrap" }}>Empleado</th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", minWidth: 180, whiteSpace: "nowrap" }}>Estatus</th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", minWidth: 130, whiteSpace: "nowrap" }}>Transportista</th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Tipo ruta</th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Costo unidad</th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Penalties</th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Costo real</th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>$/Paq</th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap" }}>Inter.</th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap", minWidth: 140 }}>Fecha despacho</th>
-              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", whiteSpace: "nowrap", minWidth: 160 }}>Nota</th>
-              <th style={{ width: 40, padding: "10px 6px", textAlign: "center", fontSize: 10, fontWeight: 700, color: C.textMuted, whiteSpace: "nowrap" }}>⋯</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  minWidth: 140, whiteSpace: "nowrap" }}>Empleado</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  minWidth: 180, whiteSpace: "nowrap" }}>Estatus</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  minWidth: 130, whiteSpace: "nowrap" }}>Transportista</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  whiteSpace: "nowrap" }}>Tipo ruta</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  whiteSpace: "nowrap" }}>Costo unidad</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  whiteSpace: "nowrap" }}>Penalties</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  whiteSpace: "nowrap" }}>Costo real</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  whiteSpace: "nowrap" }}>$/Paq</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  whiteSpace: "nowrap" }}>Inter.</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  whiteSpace: "nowrap", minWidth: 140 }}>Fecha despacho</th>
+              <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  whiteSpace: "nowrap", minWidth: 160 }}>Nota</th>
+              <th style={{ width: 40, padding: "10px 6px", textAlign: "center", fontSize: 12, fontWeight: 600, color: C.textMuted, whiteSpace: "nowrap" }}>⋯</th>
             </tr>
           </thead>
           <tbody>
@@ -4749,24 +4768,24 @@ function ModuleEnvios() {
                     <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{r.operador}</span>
                     {r._esAsistencia && (
                       <span title="Sólo asistencia: este operador tiene check-in en Registro Diario pero no tiene ruta cargada del Excel."
-                        style={{ fontSize: 9, fontWeight: 800, color: C.blue, padding: "2px 6px", borderRadius: 10, backgroundColor: C.blueBg, letterSpacing: "0.05em" }}>
+                        style={{ fontSize: 11, fontWeight: 600, color: C.blue, padding: "2px 6px", borderRadius: 12, backgroundColor: C.blueBg, letterSpacing: "0.05em" }}>
                         ASISTENCIA
                       </span>
                     )}
                     {!r._esAsistencia && (String(r.idRuta || "").startsWith("MAN-") ? (
                       <span title="Ruta capturada manualmente desde el botón Captura manual."
-                        style={{ fontSize: 9, fontWeight: 800, color: C.green, padding: "2px 6px", borderRadius: 10, backgroundColor: C.greenBg, letterSpacing: "0.05em" }}>
+                        style={{ fontSize: 11, fontWeight: 600, color: C.green, padding: "2px 6px", borderRadius: 12, backgroundColor: C.greenBg, letterSpacing: "0.05em" }}>
                         MANUAL
                       </span>
                     ) : (
                       <span title="Ruta importada automáticamente desde la carga masiva de Excel."
-                        style={{ fontSize: 9, fontWeight: 800, color: C.textMuted, padding: "2px 6px", borderRadius: 10, backgroundColor: C.panelAlt, letterSpacing: "0.05em" }}>
+                        style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, padding: "2px 6px", borderRadius: 12, backgroundColor: C.panelAlt, letterSpacing: "0.05em" }}>
                         EXCEL
                       </span>
                     ))}
                     {dedupRow && (
                       <span title={"Forma parte de un grupo de " + dedupRow.groupSize + " rutas del mismo operador hoy"}
-                        style={{ fontSize: 9, fontWeight: 800, color: C.purple, padding: "2px 6px", borderRadius: 10, backgroundColor: C.purpleBg, letterSpacing: "0.05em" }}>
+                        style={{ fontSize: 11, fontWeight: 600, color: C.purple, padding: "2px 6px", borderRadius: 12, backgroundColor: C.purpleBg, letterSpacing: "0.05em" }}>
                         GRUPO {dedupRow.groupSize}
                       </span>
                     )}
@@ -4797,7 +4816,7 @@ function ModuleEnvios() {
                       <select value={r.tipoRuta} onChange={e => updateRuta(rutas.indexOf(r), "tipoRuta", e.target.value)}
                         title={isPerm ? "Permisible: puede no tener registro automático de operador" : ""}
                         style={{
-                          fontSize: 12, padding: "4px 8px", borderRadius: 6,
+                          fontSize: 12, padding: "4px 8px", borderRadius: 8,
                           border: "1px solid " + (isPerm ? C.purple : C.border),
                           backgroundColor: isPerm ? C.purpleBg : C.white,
                           color: isPerm ? C.purple : C.text,
@@ -4833,25 +4852,25 @@ function ModuleEnvios() {
                   return <>
                     <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
                       {info.flatRate ? (
-                        <div title={"Tarifa fija " + r.tipoRuta + ": $" + info.flatRateValue + " × " + info.paqOperados + " paquetes operados"} style={{ fontSize: 12, fontWeight: 700, color: C.blue, lineHeight: 1.2 }}>
+                        <div title={"Tarifa fija " + r.tipoRuta + ": $" + info.flatRateValue + " × " + info.paqOperados + " paquetes operados"} style={{ fontSize: 12, fontWeight: 600, color: C.blue, lineHeight: 1.2 }}>
                           ${info.baseCost.toLocaleString()}
-                          <div style={{ fontSize: 9, color: C.blue, fontWeight: 600 }}>${info.flatRateValue}/paq × {info.paqOperados}</div>
+                          <div style={{ fontSize: 11, color: C.blue, fontWeight: 600 }}>${info.flatRateValue}/paq × {info.paqOperados}</div>
                         </div>
                       ) : info.missing ? (
                         esPermisible(r) ? (
                           <div title={"Sin registro de operador (permisible: " + r.tipoRuta + ")"} style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, lineHeight: 1.2 }}>
                             <span style={{ color: C.purple }}>●</span> Permisible
-                            <div style={{ fontSize: 9, color: C.purple, fontWeight: 600 }}>{r.tipoRuta}</div>
+                            <div style={{ fontSize: 11, color: C.purple, fontWeight: 600 }}>{r.tipoRuta}</div>
                           </div>
                         ) : (
-                          <div title="Operador no encontrado en Registro Diario (solo check-in automático). Si es foráneo, PETCO o HalfMile, cambia el Tipo ruta." style={{ fontSize: 12, color: C.red, fontWeight: 700, display: "flex", alignItems: "center", gap: 3 }}>
+                          <div title="Operador no encontrado en Registro Diario (solo check-in automático). Si es foráneo, PETCO o HalfMile, cambia el Tipo ruta." style={{ fontSize: 12, color: C.red, fontWeight: 600, display: "flex", alignItems: "center", gap: 3 }}>
                             <span>⚠</span><span>$0</span>
                           </div>
                         )
                       ) : (
-                        <div style={{ fontSize: 12, fontWeight: 700, color: C.green, lineHeight: 1.2 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: C.green, lineHeight: 1.2 }}>
                           ${info.baseCost.toLocaleString()}
-                          <div style={{ fontSize: 9, color: info.fallback ? C.purple : C.textMuted, fontWeight: info.fallback ? 600 : 500 }}>
+                          <div style={{ fontSize: 11, color: info.fallback ? C.purple : C.textMuted, fontWeight: info.fallback ? 600 : 500 }}>
                             {info.tipo_unidad}
                             {info.fallback === "operador" && <span title="Costo inferido del último check-in del operador"> · ref.</span>}
                             {info.fallback === "carrier" && <span title="Operador sin historial. Costo estimado del carrier/transportista"> · est.</span>}
@@ -4866,12 +4885,12 @@ function ModuleEnvios() {
                         title={"Cualquier operación matemática (+, −, ×, ÷, paréntesis).\nEvalúa al COSTO REAL FINAL.\nVariable 'costo' = costo base de esta ruta.\n\nEjemplos:\n  costo+200      ← suma fee de \$200 al costo base\n  costo-250      ← resta \$250\n  costo*0.86     ← paga 86% del costo\n  costo*1.1      ← sube 10% por fee de temporada\n  1500+200       ← override directo (resultado: 1700)\n  700            ← costo fijo \$700\n  (costo+150)*1.16  ← suma fee y aplica IVA"}
                         style={{ width: 90, padding: "4px 6px", borderRadius: 5, border: "1px solid " + (penInvalid ? C.red : (hasFormula && !penInvalid ? C.green : C.border)), fontSize: 11, fontFamily: "monospace", backgroundColor: penInvalid ? C.redBg : (hasFormula && !penInvalid ? C.greenBg : C.white) }} />
                       {hasFormula && !penInvalid && (
-                        <div style={{ fontSize: 9, color: C.green, fontWeight: 700, marginTop: 2, textAlign: "center" }} title="Resultado de la fórmula">
+                        <div style={{ fontSize: 11, color: C.green, fontWeight: 600, marginTop: 2, textAlign: "center" }} title="Resultado de la fórmula">
                           = ${evaluated.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                         </div>
                       )}
                       {penInvalid && (
-                        <div style={{ fontSize: 9, color: C.red, fontWeight: 700, marginTop: 2, textAlign: "center" }}>
+                        <div style={{ fontSize: 11, color: C.red, fontWeight: 600, marginTop: 2, textAlign: "center" }}>
                           ⚠ inválida
                         </div>
                       )}
@@ -4882,13 +4901,13 @@ function ModuleEnvios() {
                       ) : dedup && !dedup.isPrimary ? (
                         <div title={"Costo compartido con la primera ruta del operador (×" + dedup.groupSize + " hoy)"} style={{ fontSize: 11, color: C.textMuted, fontStyle: "italic", lineHeight: 1.2 }}>
                           Compartido
-                          <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>×{dedup.groupSize} hoy</div>
+                          <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 500 }}>×{dedup.groupSize} hoy</div>
                         </div>
                       ) : (
-                        <div style={{ fontSize: 12, fontWeight: 800, color: descuento > 0 ? C.accent : C.text, lineHeight: 1.2 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: descuento > 0 ? C.accent : C.text, lineHeight: 1.2 }}>
                           ${costoNuevo.toLocaleString()}
-                          {descuento !== 0 && <div style={{ fontSize: 9, fontWeight: 600, color: descuento > 0 ? C.red : C.green }}>{descuento > 0 ? "−" : "+"}${Math.abs(descuento).toLocaleString()}</div>}
-                          {dedup && dedup.isPrimary && <div style={{ fontSize: 9, fontWeight: 600, color: C.purple }}>×{dedup.groupSize} rutas</div>}
+                          {descuento !== 0 && <div style={{ fontSize: 11, fontWeight: 600, color: descuento > 0 ? C.red : C.green }}>{descuento > 0 ? "−" : "+"}${Math.abs(descuento).toLocaleString()}</div>}
+                          {dedup && dedup.isPrimary && <div style={{ fontSize: 11, fontWeight: 600, color: C.purple }}>×{dedup.groupSize} rutas</div>}
                         </div>
                       )}
                     </td>
@@ -4903,9 +4922,9 @@ function ModuleEnvios() {
                             style={{ width: 50, padding: "3px 5px", borderRadius: 5, border: "1px solid " + C.yellow, fontSize: 11, textAlign: "center" }} />
                         </div>
                       ) : cpp !== null ? (
-                        <div style={{ fontSize: 12, fontWeight: 800, color: C.accent, lineHeight: 1.2 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: C.accent, lineHeight: 1.2 }}>
                           ${cpp.toFixed(2)}
-                          <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 500 }}>
+                          <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 500 }}>
                             {dedup ? "/Σ " + dedup.sumPaq + " paq" : "/" + (cross ? "recol" : "entr")}
                           </div>
                         </div>
@@ -4925,7 +4944,7 @@ function ModuleEnvios() {
                     const [fecha, hora] = r.salida.substring(0, 16).split(" ");
                     return <div style={{ lineHeight: 1.3 }}>
                       <div style={{ fontWeight: 600, color: C.text }}>{fecha}</div>
-                      <div style={{ fontSize: 10, color: C.textMuted }}>{hora || ""}</div>
+                      <div style={{ fontSize: 12, color: C.textMuted }}>{hora || ""}</div>
                     </div>;
                   })() : "—"}
                 </td>
@@ -5419,11 +5438,11 @@ function ModuleEnvios() {
         <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(12,20,37,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 }}
           onClick={() => setConfirmModal(null)}>
           <div onClick={e => e.stopPropagation()} style={{ backgroundColor: C.white, borderRadius: 12, padding: 28, width: 440, maxWidth: "90vw", boxShadow: "0 12px 48px rgba(0,0,0,0.25)" }}>
-            <div style={{ fontSize: 17, fontWeight: 800, color: C.text, marginBottom: 10 }}>Confirmar eliminación</div>
+            <div style={{ fontSize: 17, fontWeight: 600, color: C.text, marginBottom: 10 }}>Confirmar eliminación</div>
             <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 22, lineHeight: 1.5 }}>{confirmModal.message}</div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button onClick={() => setConfirmModal(null)} style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 13, fontWeight: 600, cursor: "pointer", color: C.text }}>Cancelar</button>
-              <button onClick={async () => { const fn = confirmModal.onConfirm; setConfirmModal(null); try { await fn(); } catch (e) { console.error(e); alert("Error: " + e.message); } }} style={{ padding: "9px 22px", borderRadius: 8, border: "none", backgroundColor: C.red, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Eliminar</button>
+              <button onClick={async () => { const fn = confirmModal.onConfirm; setConfirmModal(null); try { await fn(); } catch (e) { console.error(e); alert("Error: " + e.message); } }} style={{ padding: "9px 22px", borderRadius: 8, border: "none", backgroundColor: C.red, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Eliminar</button>
             </div>
           </div>
         </div>
@@ -5451,10 +5470,10 @@ function ModuleUnidades() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Unidades</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Unidades</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Gestión de vehículos de flotilla propia</p>
         </div>
-        <button onClick={() => setShowForm(!showForm)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => setShowForm(!showForm)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
           <IC.Plus /> Nueva unidad
         </button>
       </div>
@@ -5472,7 +5491,7 @@ function ModuleUnidades() {
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>
               {["ID", "Tipo", "Placas", "Modelo", "Kilometraje", "Próx. Mantenimiento", "Status", ""].map(h => (
-                <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -5481,7 +5500,7 @@ function ModuleUnidades() {
               <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}
                 onMouseEnter={ev => ev.currentTarget.style.backgroundColor = C.panelAlt}
                 onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
-                <td style={{ padding: "12px", fontSize: 13, fontWeight: 700, color: C.accent, fontFamily: "monospace" }}>{u.id}</td>
+                <td style={{ padding: "12px", fontSize: 13, fontWeight: 600, color: C.accent, fontFamily: "monospace" }}>{u.id}</td>
                 <td style={{ padding: "12px", fontSize: 13 }}>{u.tipo}</td>
                 <td style={{ padding: "12px", fontSize: 13, fontFamily: "monospace" }}>{u.placas}</td>
                 <td style={{ padding: "12px", fontSize: 13 }}>{u.modelo}</td>
@@ -5732,16 +5751,16 @@ function ModuleOperadores() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Operadores</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Operadores</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Base de datos de operadores por proveedor — usada en el check-in</p>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={() => { setShowBulk(!showBulk); setShowForm(false); setBulkPreview([]); setBulkMsg(""); }}
-            style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showBulk ? C.textMuted : C.purple, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showBulk ? C.textMuted : C.purple, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
             {showBulk ? <><IC.X /> Cancelar</> : <><IC.Plus /> Carga masiva</>}
           </button>
           <button onClick={() => { setShowForm(!showForm); setShowBulk(false); }}
-            style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showForm ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
             {showForm ? <><IC.X /> Cancelar</> : <><IC.Plus /> Nuevo operador</>}
           </button>
         </div>
@@ -5756,38 +5775,38 @@ function ModuleOperadores() {
 
       {showBulk && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.purple, marginBottom: 20 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4, color: C.purple }}>Carga masiva de operadores</div>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4, color: C.purple }}>Carga masiva de operadores</div>
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 18 }}>Sube un archivo Excel o CSV. Formato: 5 filas por operador en columna A (Nombre, Correo, Tipo, Ubicación, Estatus), comenzando en fila 1.</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Etiqueta / Proveedor</label>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Etiqueta / Proveedor</label>
               <select value={bulkProveedor} onChange={e => setBulkProveedor(e.target.value)}
-                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
                 <option value="">Seleccionar proveedor...</option>
                 {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
               <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>Todos los operadores del archivo se asignarán a este proveedor.</div>
             </div>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo (.xlsx, .xls, .csv)</label>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Archivo (.xlsx, .xls, .csv)</label>
               <input type="file" accept=".xlsx,.xls,.csv" onChange={handleBulkFile}
-                style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt }} />
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt }} />
             </div>
           </div>
 
           {bulkPreview.length > 0 && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Vista previa — {bulkPreview.length} operadores detectados:</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 8 }}>Vista previa — {bulkPreview.length} operadores detectados:</div>
               <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid " + C.border, borderRadius: 8 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid " + C.border, backgroundColor: C.panelAlt }}>
-                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>#</th>
-                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Nombre</th>
-                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Correo</th>
-                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Tipo</th>
-                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Estatus</th>
-                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>Proveedor</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>#</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>Nombre</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>Correo</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>Tipo</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>Estatus</th>
+                      <th style={{ padding: "6px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>Proveedor</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -5801,7 +5820,7 @@ function ModuleOperadores() {
                           <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: op.estatus === "ACTIVE" ? C.greenBg : C.redBg, color: op.estatus === "ACTIVE" ? C.green : C.red }}>{op.estatus}</span>
                         </td>
                         <td style={{ padding: "6px 12px" }}>
-                          <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, backgroundColor: C.purpleBg, color: C.purple }}>{bulkProveedor || "—"}</span>
+                          <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: C.purpleBg, color: C.purple }}>{bulkProveedor || "—"}</span>
                         </td>
                       </tr>
                     ))}
@@ -5823,7 +5842,7 @@ function ModuleOperadores() {
               Cancelar
             </button>
             <button onClick={importarOperadores} disabled={!bulkProveedor || bulkPreview.length === 0 || importing}
-              style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: bulkProveedor && bulkPreview.length > 0 && !importing ? C.purple : C.border, color: "white", fontSize: 13, fontWeight: 700, cursor: bulkProveedor && bulkPreview.length > 0 && !importing ? "pointer" : "default" }}>
+              style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: bulkProveedor && bulkPreview.length > 0 && !importing ? C.purple : C.border, color: "white", fontSize: 13, fontWeight: 600, cursor: bulkProveedor && bulkPreview.length > 0 && !importing ? "pointer" : "default" }}>
               {importing ? "Importando..." : `Importar ${bulkPreview.length} operadores`}
             </button>
           </div>
@@ -5832,25 +5851,25 @@ function ModuleOperadores() {
 
       {showForm && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>Nuevo operador</div>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 18, color: C.accent }}>Nuevo operador</div>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 2fr 1fr", gap: 14, marginBottom: 14 }}>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Nombre completo</label>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Nombre completo</label>
               <input type="text" placeholder="Nombre del operador" value={form.nombre} onChange={e => setForm({ ...form, nombre: e.target.value })}
-                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
             </div>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Proveedor</label>
               <select value={form.proveedor} onChange={e => setForm({ ...form, proveedor: e.target.value })}
-                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
                 <option value="">Seleccionar proveedor...</option>
                 {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Tipo licencia</label>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Tipo licencia</label>
               <select value={form.tipo_licencia} onChange={e => setForm({ ...form, tipo_licencia: e.target.value })}
-                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
                 {LICENCIAS.map(l => <option key={l} value={l}>Tipo {l}</option>)}
               </select>
             </div>
@@ -5859,12 +5878,12 @@ function ModuleOperadores() {
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button onClick={() => setShowForm(false)} style={{ padding: "8px 20px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.white, fontSize: 13, cursor: "pointer" }}>Cancelar</button>
             <button onClick={saveOperador} disabled={!form.nombre.trim() || !form.proveedor}
-              style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: form.nombre.trim() && form.proveedor ? C.accent : C.border, color: "white", fontSize: 13, fontWeight: 700, cursor: form.nombre.trim() && form.proveedor ? "pointer" : "default" }}>
+              style={{ padding: "8px 24px", borderRadius: 8, border: "none", backgroundColor: form.nombre.trim() && form.proveedor ? C.accent : C.border, color: "white", fontSize: 13, fontWeight: 600, cursor: form.nombre.trim() && form.proveedor ? "pointer" : "default" }}>
               Guardar operador
             </button>
           </div>
           <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid " + C.border }}>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 2 }}>Municipios que conoce</label>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 2 }}>Municipios que conoce</label>
             <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
               Las zonas donde ya operó y se mueve bien. En Asignaciones se marcan los proveedores que tienen gente que conoce el municipio de cada ruta.
             </div>
@@ -5876,19 +5895,19 @@ function ModuleOperadores() {
 
       {/* Filtro por proveedor */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted }}>Filtrar por proveedor:</span>
-        <select value={filtroProv} onChange={e => setFiltroProv(e.target.value)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color: C.text, cursor: "pointer" }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Filtrar por proveedor:</span>
+        <select value={filtroProv} onChange={e => setFiltroProv(e.target.value)} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color: C.text, cursor: "pointer" }}>
           <option value="Todos">Todos los proveedores</option>
           {proveedoresOps.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
-        {filtroProv !== "Todos" && <button onClick={() => setFiltroProv("Todos")} style={{ padding: "5px 10px", borderRadius: 6, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Limpiar</button>}
+        {filtroProv !== "Todos" && <button onClick={() => setFiltroProv("Todos")} style={{ padding: "5px 10px", borderRadius: 8, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Limpiar</button>}
         <span style={{ fontSize: 12, color: C.textMuted, marginLeft: "auto" }}>{filteredOps.length} operador{filteredOps.length !== 1 ? "es" : ""}</span>
       </div>
 
       {/* Barra de acciones masivas */}
       {selected.size > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "10px 14px", backgroundColor: C.accentLight, border: `1px solid ${C.accent}`, borderRadius: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{selected.size} seleccionado{selected.size !== 1 ? "s" : ""}</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{selected.size} seleccionado{selected.size !== 1 ? "s" : ""}</span>
           {[
             { l: "Activar", c: C.green, on: () => bulkSetActivo(true) },
             { l: "Inactivar", c: C.yellow, on: () => bulkSetActivo(false) },
@@ -5896,38 +5915,38 @@ function ModuleOperadores() {
             { l: "Eliminar", c: C.red, on: bulkDelete },
           ].map(b => (
             <button key={b.l} onClick={b.on} disabled={bulkBusy}
-              style={{ padding: "6px 14px", borderRadius: 6, border: "none", backgroundColor: b.c, color: "#fff", fontSize: 12, fontWeight: 700, cursor: bulkBusy ? "default" : "pointer", opacity: bulkBusy ? 0.6 : 1 }}>
+              style={{ padding: "6px 14px", borderRadius: 8, border: "none", backgroundColor: b.c, color: "#fff", fontSize: 12, fontWeight: 600, cursor: bulkBusy ? "default" : "pointer", opacity: bulkBusy ? 0.6 : 1 }}>
               {b.l}
             </button>
           ))}
-          <button onClick={clearSelection} style={{ marginLeft: "auto", padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.border}`, backgroundColor: C.white, color: C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Deseleccionar</button>
+          <button onClick={clearSelection} style={{ marginLeft: "auto", padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.border}`, backgroundColor: C.white, color: C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Deseleccionar</button>
         </div>
       )}
 
       {/* Panel de edición masiva */}
       {showBulkEdit && selected.size > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 18, border: "2px solid " + C.blue, marginBottom: 16 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, color: C.blue }}>Editar {selected.size} operador{selected.size !== 1 ? "es" : ""}</div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4, color: C.blue }}>Editar {selected.size} operador{selected.size !== 1 ? "es" : ""}</div>
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14 }}>Solo se cambian los campos que llenes; los vacíos se dejan igual.</div>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 12, alignItems: "end" }}>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Proveedor</label>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Proveedor</label>
               <select value={bulkEditForm.proveedor} onChange={e => setBulkEditForm({ ...bulkEditForm, proveedor: e.target.value })}
-                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
                 <option value="">(sin cambio)</option>
                 {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Tipo licencia</label>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Tipo licencia</label>
               <select value={bulkEditForm.tipo_licencia} onChange={e => setBulkEditForm({ ...bulkEditForm, tipo_licencia: e.target.value })}
-                style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
+                style={{ width: "100%", padding: "9px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }}>
                 <option value="">(sin cambio)</option>
                 {LICENCIAS.map(l => <option key={l} value={l}>Tipo {l}</option>)}
               </select>
             </div>
             <button onClick={bulkUpdate} disabled={bulkBusy || (!bulkEditForm.proveedor && !bulkEditForm.tipo_licencia)}
-              style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: (!bulkEditForm.proveedor && !bulkEditForm.tipo_licencia) || bulkBusy ? C.border : C.blue, color: "#fff", fontSize: 13, fontWeight: 700, cursor: (!bulkEditForm.proveedor && !bulkEditForm.tipo_licencia) || bulkBusy ? "default" : "pointer" }}>
+              style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: (!bulkEditForm.proveedor && !bulkEditForm.tipo_licencia) || bulkBusy ? C.border : C.blue, color: "#fff", fontSize: 13, fontWeight: 600, cursor: (!bulkEditForm.proveedor && !bulkEditForm.tipo_licencia) || bulkBusy ? "default" : "pointer" }}>
               {bulkBusy ? "Aplicando…" : "Aplicar"}
             </button>
           </div>
@@ -5945,7 +5964,7 @@ function ModuleOperadores() {
                   <input type="checkbox" checked={allFilteredSelected} onChange={toggleSelectAll} style={{ width: 16, height: 16, cursor: "pointer" }} title="Seleccionar todos" />
                 </th>
                 {["Nombre", "Proveedor", "Licencia", "Municipios que conoce", "Status", ""].map(h => (
-                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -5966,27 +5985,27 @@ function ModuleOperadores() {
                   <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: C.text }}>{o.nombre}</td>
                   <td style={{ padding: "12px 14px", fontSize: 13, color: C.textMuted }}>{o.proveedor}</td>
                   <td style={{ padding: "12px 14px" }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, backgroundColor: C.blueBg, color: C.blue }}>Tipo {o.tipo_licencia}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, backgroundColor: C.blueBg, color: C.blue }}>Tipo {o.tipo_licencia}</span>
                   </td>
                   <td style={{ padding: "12px 14px", maxWidth: 320 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                       {(o.municipios || []).slice(0, 3).map(m => (
-                        <span key={m} style={{ fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 10, backgroundColor: C.accentLight, color: C.accent }}>{m}</span>
+                        <span key={m} style={{ fontSize: 12, fontWeight: 600, padding: "2px 7px", borderRadius: 12, backgroundColor: C.accentLight, color: C.accent }}>{m}</span>
                       ))}
                       {(o.municipios || []).length > 3 && (
-                        <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 600 }}>+{o.municipios.length - 3}</span>
+                        <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 600 }}>+{o.municipios.length - 3}</span>
                       )}
                       {(!o.municipios || o.municipios.length === 0) && (
                         <span style={{ fontSize: 11, color: C.textMuted, fontStyle: "italic" }}>sin zonas</span>
                       )}
                       <button onClick={() => setEditMun(o)} title="Configurar municipios que conoce"
-                        style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid " + C.border, backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                        style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid " + C.border, backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                         editar
                       </button>
                     </div>
                   </td>
                   <td style={{ padding: "12px 14px" }}>
-                    <button onClick={() => toggleActivo(o.id, o.activo)} style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20, border: "none", cursor: "pointer", backgroundColor: o.activo ? C.greenBg : C.redBg, color: o.activo ? C.green : C.red }}>
+                    <button onClick={() => toggleActivo(o.id, o.activo)} style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, border: "none", cursor: "pointer", backgroundColor: o.activo ? C.greenBg : C.redBg, color: o.activo ? C.green : C.red }}>
                       {o.activo ? "Activo" : "Inactivo"}
                     </button>
                   </td>
@@ -6005,7 +6024,7 @@ function ModuleOperadores() {
           onClick={() => !munBusy && setEditMun(null)}>
           <div onClick={e => e.stopPropagation()} style={{ backgroundColor: C.white, borderRadius: 14, width: 520, maxWidth: "96vw", maxHeight: "92vh", overflow: "auto", boxShadow: "0 16px 56px rgba(0,0,0,0.28)" }}>
             <div style={{ padding: "18px 24px", borderBottom: "1px solid " + C.border }}>
-              <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Municipios que conoce</div>
+              <div style={{ fontSize: 17, fontWeight: 600, color: C.text }}>Municipios que conoce</div>
               <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{editMun.nombre} · {editMun.proveedor}</div>
             </div>
             <div style={{ padding: 24 }}>
@@ -6014,9 +6033,9 @@ function ModuleOperadores() {
             </div>
             <div style={{ padding: "14px 24px", borderTop: "1px solid " + C.border, display: "flex", justifyContent: "flex-end", gap: 10 }}>
               <button onClick={() => setEditMun(null)} disabled={munBusy}
-                style={{ padding: "9px 18px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: "transparent", color: C.textMuted, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
+                style={{ padding: "9px 18px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: "transparent", color: C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancelar</button>
               <button onClick={() => guardarMunicipios(editMun.id, editMun.municipios || [])} disabled={munBusy}
-                style={{ padding: "9px 22px", borderRadius: 8, border: "none", backgroundColor: munBusy ? C.border : C.accent, color: "#fff", fontSize: 13, fontWeight: 700, cursor: munBusy ? "default" : "pointer" }}>
+                style={{ padding: "9px 22px", borderRadius: 8, border: "none", backgroundColor: munBusy ? C.border : C.accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: munBusy ? "default" : "pointer" }}>
                 {munBusy ? "Guardando…" : "Guardar"}
               </button>
             </div>
@@ -6048,7 +6067,7 @@ function SelectorMunicipios({ valor, onChange, catalogo, cargando, error, alto =
           </span>
         ))}
         {sel.length > 0 && (
-          <button type="button" onClick={() => onChange([])} style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>limpiar</button>
+          <button type="button" onClick={() => onChange([])} style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, background: "transparent", border: "none", cursor: "pointer" }}>limpiar</button>
         )}
       </div>
       {error ? (
@@ -6058,8 +6077,8 @@ function SelectorMunicipios({ valor, onChange, catalogo, cargando, error, alto =
       ) : (
         <>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar municipio o alcaldía…"
-            style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt, color: C.text }} />
-          <div style={{ maxHeight: alto, overflowY: "auto", marginTop: 6, border: "1px solid " + C.border, borderRadius: 6 }}>
+            style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt, color: C.text }} />
+          <div style={{ maxHeight: alto, overflowY: "auto", marginTop: 6, border: "1px solid " + C.border, borderRadius: 8 }}>
             {opciones.length === 0 ? (
               <div style={{ padding: 12, fontSize: 12, color: C.textMuted }}>Sin coincidencias.</div>
             ) : opciones.map(m => {
@@ -6067,13 +6086,13 @@ function SelectorMunicipios({ valor, onChange, catalogo, cargando, error, alto =
               return (
                 <div key={m} onClick={() => toggle(m)}
                   style={{ padding: "7px 10px", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, backgroundColor: on ? C.accentLight : "transparent", color: on ? C.accent : C.text, fontWeight: on ? 700 : 400 }}>
-                  <span style={{ width: 13, height: 13, borderRadius: 3, border: "1.5px solid " + (on ? C.accent : C.border), backgroundColor: on ? C.accent : "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10, flexShrink: 0 }}>{on ? "✓" : ""}</span>
+                  <span style={{ width: 13, height: 13, borderRadius: 3, border: "1.5px solid " + (on ? C.accent : C.border), backgroundColor: on ? C.accent : "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 12, flexShrink: 0 }}>{on ? "✓" : ""}</span>
                   {m}
                 </div>
               );
             })}
           </div>
-          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 5 }}>
+          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 5 }}>
             {sel.length} seleccionado(s){opciones.length === 300 ? " · escribe para acotar la lista" : ""}
           </div>
         </>
@@ -6702,12 +6721,12 @@ function ModuleCostos() {
                           title={"La fórmula evalúa al COSTO FINAL (no al delta).\nVariable 'costo' = costo base de esta ruta.\n\nEjemplos:\n  costo+200      ← suma fee de \$200\n  costo-100      ← resta \$100\n  costo*1.1      ← sube 10% (fee de temporada)\n  costo*0.86     ← paga 86% del costo\n  1500+200       ← override directo (= \$1,700)\n  700            ← costo fijo \$700\n  (costo+150)*1.16  ← combinación arbitraria"}
                           style={{ width:130, padding:"5px 8px", borderRadius:5, border:"1px solid "+(penalInvalid?C.red:(hasFormula && !penalInvalid?C.green:C.border)), fontSize:11, fontFamily:"monospace", backgroundColor:penalInvalid?C.redBg:(hasFormula && !penalInvalid?C.greenBg:C.white) }} />
                         {hasFormula && !penalInvalid && (
-                          <div style={{ fontSize: 9, color: C.green, fontWeight: 700, marginTop: 2, textAlign: "center" }} title="Costo final calculado">
+                          <div style={{ fontSize: 11, color: C.green, fontWeight: 600, marginTop: 2, textAlign: "center" }} title="Costo final calculado">
                             = ${evaluatedVal.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                           </div>
                         )}
                         {penalInvalid && (
-                          <div style={{ fontSize: 9, color: C.red, fontWeight: 700, marginTop: 2, textAlign: "center" }}>
+                          <div style={{ fontSize: 11, color: C.red, fontWeight: 600, marginTop: 2, textAlign: "center" }}>
                             ⚠ inválida
                           </div>
                         )}
@@ -6816,33 +6835,33 @@ function ModuleCarriers() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Carriers / Proveedores</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Carriers / Proveedores</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Catalogo de proveedores, tipos de unidad y costos asociados</p>
         </div>
-        <button onClick={() => setShowNewCarrier(!showNewCarrier)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showNewCarrier ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => setShowNewCarrier(!showNewCarrier)} style={{ padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showNewCarrier ? C.textMuted : C.accent, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
           {showNewCarrier ? <><IC.X /> Cancelar</> : <><IC.Plus /> Nuevo carrier</>}
         </button>
       </div>
 
       {/* Filters */}
       <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center" }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted }}>Filtrar:</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Filtrar:</span>
         <div style={{ display: "flex", gap: 6 }}>
           {["Todas", "Última milla", "Half mile"].map(op => (
             <button key={op} onClick={() => setFilterOp(op)} style={{
-              padding: "6px 14px", borderRadius: 6, border: "1px solid " + (filterOp === op ? C.accent : C.border),
+              padding: "6px 14px", borderRadius: 8, border: "1px solid " + (filterOp === op ? C.accent : C.border),
               backgroundColor: filterOp === op ? C.accentLight : C.white, color: filterOp === op ? C.accent : C.textMuted,
               fontSize: 12, fontWeight: 600, cursor: "pointer",
             }}>{op}</button>
           ))}
         </div>
         <div style={{ width: 1, height: 20, backgroundColor: C.border }} />
-        <select value={filterProv} onChange={e => setFilterProv(e.target.value)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color: C.text, cursor: "pointer" }}>
+        <select value={filterProv} onChange={e => setFilterProv(e.target.value)} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, color: C.text, cursor: "pointer" }}>
           <option value="Todos">Todos los proveedores</option>
           {proveedores.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
         {(filterOp !== "Todas" || filterProv !== "Todos") && (
-          <button onClick={() => { setFilterOp("Todas"); setFilterProv("Todos"); }} style={{ padding: "6px 10px", borderRadius: 6, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Limpiar filtros</button>
+          <button onClick={() => { setFilterOp("Todas"); setFilterProv("Todos"); }} style={{ padding: "6px 10px", borderRadius: 8, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Limpiar filtros</button>
         )}
       </div>
 
@@ -6856,10 +6875,10 @@ function ModuleCarriers() {
       {showNewCarrier && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 20, border: "2px solid " + C.accent, marginBottom: 20, display: "flex", alignItems: "flex-end", gap: 14 }}>
           <div style={{ flex: 1 }}>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Nombre del proveedor / carrier</label>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Nombre del proveedor / carrier</label>
             <input value={newCarrierName} onChange={e => setNewCarrierName(e.target.value)} onKeyDown={e => e.key === "Enter" && createCarrier()} placeholder="Ej: CARDO, KEKO, FAST INTEGRAL" style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 14, boxSizing: "border-box" }} />
           </div>
-          <button onClick={createCarrier} style={{ padding: "10px 24px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>Crear carrier</button>
+          <button onClick={createCarrier} style={{ padding: "10px 24px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>Crear carrier</button>
         </div>
       )}
 
@@ -6873,37 +6892,37 @@ function ModuleCarriers() {
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: C.accent + "18", display: "flex", alignItems: "center", justifyContent: "center", color: C.accent }}><IC.Truck /></div>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{prov}</div>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{prov}</div>
                   <div style={{ fontSize: 11, color: C.textMuted }}>{units.length} tipo{units.length !== 1 ? "s" : ""} de unidad{units.length > 0 ? " - Costo total: $" + totalCosto.toLocaleString() + "/dia" : ""}</div>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => { setAddingUnitTo(isAdding ? null : prov); setEditId(null); setUnitForm({ tipo_unidad: "Sedan", operacion: "Última milla", costo_unidad: "" }); }} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid " + (isAdding ? C.textMuted : C.accent), backgroundColor: isAdding ? C.bg : C.accentLight, color: isAdding ? C.textMuted : C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                <button onClick={() => { setAddingUnitTo(isAdding ? null : prov); setEditId(null); setUnitForm({ tipo_unidad: "Sedan", operacion: "Última milla", costo_unidad: "" }); }} style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid " + (isAdding ? C.textMuted : C.accent), backgroundColor: isAdding ? C.bg : C.accentLight, color: isAdding ? C.textMuted : C.accent, fontSize: 11, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                   {isAdding ? <><IC.X /> Cancelar</> : <><IC.Plus /> Agregar unidad</>}
                 </button>
-                <button onClick={() => deleteCarrier(prov)} style={{ padding: "6px 10px", borderRadius: 6, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}><IC.Trash /></button>
+                <button onClick={() => deleteCarrier(prov)} style={{ padding: "6px 10px", borderRadius: 8, border: "none", backgroundColor: C.redBg, color: C.red, fontSize: 11, fontWeight: 600, cursor: "pointer" }}><IC.Trash /></button>
               </div>
             </div>
             {isAdding && (
               <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.border, backgroundColor: C.panelAlt, display: "flex", alignItems: "flex-end", gap: 12 }}>
                 <div style={{ flex: 1 }}>
-                  <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.text, marginBottom: 3 }}>Tipo de unidad</label>
-                  <select value={unitForm.tipo_unidad} onChange={e => setUnitForm({...unitForm, tipo_unidad: e.target.value})} style={{ width: "100%", padding: "7px 8px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 3 }}>Tipo de unidad</label>
+                  <select value={unitForm.tipo_unidad} onChange={e => setUnitForm({...unitForm, tipo_unidad: e.target.value})} style={{ width: "100%", padding: "7px 8px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
                     {TIPOS_UNIDAD.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.text, marginBottom: 3 }}>Operacion</label>
-                  <select value={unitForm.operacion} onChange={e => setUnitForm({...unitForm, operacion: e.target.value})} style={{ width: "100%", padding: "7px 8px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 3 }}>Operacion</label>
+                  <select value={unitForm.operacion} onChange={e => setUnitForm({...unitForm, operacion: e.target.value})} style={{ width: "100%", padding: "7px 8px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }}>
                     <option value="Última milla">Ultima milla</option>
                     <option value="Half mile">Half mile</option>
                   </select>
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.text, marginBottom: 3 }}>Costo / Unidad / Dia ($)</label>
-                  <input type="number" value={unitForm.costo_unidad} onChange={e => setUnitForm({...unitForm, costo_unidad: e.target.value})} placeholder="995" style={{ width: "100%", padding: "7px 8px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }} />
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 3 }}>Costo / Unidad / Dia ($)</label>
+                  <input type="number" value={unitForm.costo_unidad} onChange={e => setUnitForm({...unitForm, costo_unidad: e.target.value})} placeholder="995" style={{ width: "100%", padding: "7px 8px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 12, boxSizing: "border-box" }} />
                 </div>
-                <button onClick={() => addUnit(prov)} style={{ padding: "7px 18px", borderRadius: 6, border: "none", backgroundColor: C.green, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>{editId ? "Guardar" : "Agregar"}</button>
+                <button onClick={() => addUnit(prov)} style={{ padding: "7px 18px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>{editId ? "Guardar" : "Agregar"}</button>
               </div>
             )}
             {units.length > 0 ? (
@@ -6911,7 +6930,7 @@ function ModuleCarriers() {
                 <thead>
                   <tr style={{ borderBottom: "2px solid " + C.border }}>
                     {["Tipo unidad", "Operacion", "Costo/Unidad/Dia", "Acciones"].map(h => (
-                      <th key={h} style={{ padding: "8px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                      <th key={h} style={{ padding: "8px 16px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -6927,7 +6946,7 @@ function ModuleCarriers() {
                         <td style={{ padding: "12px 16px" }}>
                           <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 4, backgroundColor: c.operacion === "Última milla" ? C.greenBg : C.accentLight, color: c.operacion === "Última milla" ? C.green : C.accent }}>{c.operacion || "Última milla"}</span>
                         </td>
-                        <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: C.text }}>${parseFloat(c.costo_unidad).toLocaleString()}</td>
+                        <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 600, color: C.text }}>${parseFloat(c.costo_unidad).toLocaleString()}</td>
                         <td style={{ padding: "12px 16px", display: "flex", gap: 6 }}>
                           <button onClick={() => editUnit(c)} style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid " + C.border, backgroundColor: C.white, cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 4 }}><IC.Edit /> Editar</button>
                           <button onClick={() => deleteUnit(c.id)} style={{ padding: "4px 10px", borderRadius: 4, border: "none", backgroundColor: C.redBg, cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.red, display: "flex", alignItems: "center", gap: 4 }}><IC.Trash /></button>
@@ -8196,18 +8215,18 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Ruteo y Clusterización</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Ruteo y Clusterización</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Carga coordenadas · K-Means++ automático · Reasignación manual en mapa · Exportar CSV</p>
         </div>
         {puntos.length > 0 && (
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={guardarRuteo} disabled={loading} style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={guardarRuteo} disabled={loading} style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 13, fontWeight: 600, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, display: "flex", alignItems: "center", gap: 6 }}>
               <IC.Check /> Guardar ruteo
             </button>
-            <button onClick={exportMapHTML} style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={exportMapHTML} style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
               <IC.Map /> Descargar Mapa
             </button>
-            <button onClick={exportCSV} style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={exportCSV} style={{ padding: "9px 20px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
               <IC.Download /> Exportar CSV
             </button>
           </div>
@@ -8227,9 +8246,9 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
             elija aquí se puede seguir ajustando a mano abajo — y si se ajusta, el
             estado pasa a "personalizado" en vez de dejar un botón encendido que
             miente sobre lo que corre. */}
-        <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 10, backgroundColor: C.panelAlt, border: "1px solid " + C.border }}>
+        <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 12, backgroundColor: C.panelAlt, border: "1px solid " + C.border }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 1 }}>Modelo de ruteo</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>Modelo de ruteo</span>
             <div style={{ display: "flex", gap: 0, borderRadius: 8, overflow: "hidden", border: "1px solid " + C.border }}>
               {["v1", "v2"].map((clave, ix) => {
                 const activo = modoActivo === clave;
@@ -8241,7 +8260,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                       borderLeft: ix === 1 ? "1px solid " + C.border : "none",
                       backgroundColor: activo ? C.accent : C.white,
                       color: activo ? "white" : C.textMuted,
-                      fontSize: 13, fontWeight: 700, whiteSpace: "nowrap",
+                      fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
                     }}>
                     {MODOS[clave].nombre}
                   </button>
@@ -8249,7 +8268,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
               })}
             </div>
             {modoActivo === "personalizado" && (
-              <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 10, backgroundColor: C.yellowBg, color: C.yellow }}>
+              <span style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 12, backgroundColor: C.yellowBg, color: C.yellow }}>
                 personalizado — no coincide con v1 ni v2
               </span>
             )}
@@ -8267,7 +8286,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
             circuidad, fin de ruta sin retorno al CEDIS y el lazo que iguala jornadas.
           </div>
           {puntos.length > 0 && modoGenerado && modoGenerado !== modoActivo && (
-            <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
+            <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
               ⚠ El plan en pantalla se generó con <b>{MODOS[modoGenerado]?.nombre || modoGenerado}</b>.
               Cambiar el modelo no re-rutea: las métricas se recalculan con los parámetros nuevos, pero
               los sectores y el orden siguen siendo los anteriores. Usa <b>Re-clusterizar</b> para aplicarlo.
@@ -8277,16 +8296,16 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
 
         {/* Step 1: Upload */}
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 1 — Cargar archivo</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 8, letterSpacing: 0 }}>Paso 1 — Cargar archivo</div>
           <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
             <div style={{ flex: "1 1 260px" }}>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo de coordenadas (.csv o .xlsx)</label>
-              <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt }} />
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Archivo de coordenadas (.csv o .xlsx)</label>
+              <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt }} />
               <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>Columnas requeridas: <b>Latitud</b> y <b>Longitud</b>. El resto se conserva.</div>
             </div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.text, flexShrink: 0 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.text, flexShrink: 0 }}>
               <div style={{ marginBottom: 4 }}>Depósito fijo</div>
-              <div style={{ fontSize: 12, color: C.textMuted, padding: "9px 12px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: C.panelAlt, whiteSpace: "nowrap" }}>★ 19.3989, -99.1168</div>
+              <div style={{ fontSize: 12, color: C.textMuted, padding: "9px 12px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: C.panelAlt, whiteSpace: "nowrap" }}>★ 19.3989, -99.1168</div>
             </div>
           </div>
           {fileInfo && (
@@ -8299,21 +8318,21 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
         {/* Step 2: Set clusters + generate */}
         {fileInfo && (
           <div style={{ borderTop: "1px solid " + C.border, paddingTop: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 2 — Configurar y generar rutas</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 8, letterSpacing: 0 }}>Paso 2 — Configurar y generar rutas</div>
             <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
               <div>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Número de rutas (k)</label>
-                <input type="number" min="2" value={numClusters} onChange={e => setNumClusters(Math.max(2, parseInt(e.target.value) || 2))} style={{ width: 90, padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 16, fontWeight: 700, boxSizing: "border-box", textAlign: "center" }} />
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Número de rutas (k)</label>
+                <input type="number" min="2" value={numClusters} onChange={e => setNumClusters(Math.max(2, parseInt(e.target.value) || 2))} style={{ width: 90, padding: "9px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 16, fontWeight: 600, boxSizing: "border-box", textAlign: "center" }} />
               </div>
               <div style={{ flex: "1 1 240px", minWidth: 200 }}>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Nombre de la sesión (opcional)</label>
-                <input type="text" value={sesionNombre} onChange={e => setSesionNombre(e.target.value)} placeholder="ej: Ruteo CDMX Norte - Lunes" maxLength={80} style={{ width: "100%", padding: "9px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Nombre de la sesión (opcional)</label>
+                <input type="text" value={sesionNombre} onChange={e => setSesionNombre(e.target.value)} placeholder="ej: Ruteo CDMX Norte - Lunes" maxLength={80} style={{ width: "100%", padding: "9px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box" }} />
               </div>
-              <button onClick={generateRoutes} disabled={loading} style={{ padding: "10px 24px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 14, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, whiteSpace: "nowrap" }}>
+              <button onClick={generateRoutes} disabled={loading} style={{ padding: "10px 24px", borderRadius: 8, border: "none", backgroundColor: C.accent, color: "white", fontSize: 14, fontWeight: 600, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, whiteSpace: "nowrap" }}>
                 🗺️ Generar rutas
               </button>
               {puntos.length > 0 && (
-                <button onClick={reCluster} style={{ padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>↻ Re-clusterizar</button>
+                <button onClick={reCluster} style={{ padding: "10px 18px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>↻ Re-clusterizar</button>
               )}
             </div>
           </div>
@@ -8338,15 +8357,15 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
           {metricas && (
             <div style={{ backgroundColor: C.white, borderRadius: 12, padding: "14px 18px", border: "1px solid " + C.border, marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 8 }}>
                   Métricas del plan
                   {modoGenerado && (
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, backgroundColor: C.accentLight, color: C.accent }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, padding: "2px 8px", borderRadius: 12, backgroundColor: C.accentLight, color: C.accent }}>
                       {modoGenerado === "personalizado" ? "personalizado" : modoGenerado}
                     </span>
                   )}
                   {editadoManual && (
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, backgroundColor: C.yellowBg, color: C.yellow }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, padding: "2px 8px", borderRadius: 12, backgroundColor: C.yellowBg, color: C.yellow }}>
                       editado a mano
                     </span>
                   )}
@@ -8361,66 +8380,66 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
               </div>
               <div style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Distancia total</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: C.blue }}>{metricas.D.toFixed(1)} <span style={{ fontSize: 12, fontWeight: 600 }}>km</span></div>
-                  <div style={{ fontSize: 10, color: C.textFaint }}>incluye ida y vuelta al depósito</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>Distancia total</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, color: C.blue }}>{metricas.D.toFixed(1)} <span style={{ fontSize: 12, fontWeight: 600 }}>km</span></div>
+                  <div style={{ fontSize: 12, color: C.textFaint }}>incluye ida y vuelta al depósito</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>CV de carga</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: metricas.CV <= 0.15 ? C.green : metricas.CV <= 0.30 ? C.yellow : C.red }}>{metricas.CV.toFixed(3)}</div>
-                  <div style={{ fontSize: 10, color: C.textFaint }}>{metricas.minN}–{metricas.maxN} paradas por ruta</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>CV de carga</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, color: metricas.CV <= 0.15 ? C.green : metricas.CV <= 0.30 ? C.yellow : C.red }}>{metricas.CV.toFixed(3)}</div>
+                  <div style={{ fontSize: 12, color: C.textFaint }}>{metricas.minN}–{metricas.maxN} paradas por ruta</div>
                 </div>
                 {/* CV_T (25) — el que importa cuando se balancea por horas. Un CV
                     de carga bajo con CV_T alto significa que todos llevan los
                     mismos paquetes y unos terminan tres horas antes que otros. */}
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>CV de jornada</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: metricas.CV_T <= 0.05 ? C.green : metricas.CV_T <= 0.15 ? C.yellow : C.red }}>{metricas.CV_T.toFixed(3)}</div>
-                  <div style={{ fontSize: 10, color: C.textFaint }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>CV de jornada</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, color: metricas.CV_T <= 0.05 ? C.green : metricas.CV_T <= 0.15 ? C.yellow : C.red }}>{metricas.CV_T.toFixed(3)}</div>
+                  <div style={{ fontSize: 12, color: C.textFaint }}>
                     {metricas.duraciones && metricas.duraciones.length
                       ? `${Math.min(...metricas.duraciones).toFixed(1)}–${Math.max(...metricas.duraciones).toFixed(1)} h por ruta`
                       : "—"}
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>SLA en jornada</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: metricas.SLA >= 95 ? C.green : metricas.SLA >= 80 ? C.yellow : C.red }}>{metricas.SLA.toFixed(1)}%</div>
-                  <div style={{ fontSize: 10, color: C.textFaint }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>SLA en jornada</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, color: metricas.SLA >= 95 ? C.green : metricas.SLA >= 80 ? C.yellow : C.red }}>{metricas.SLA.toFixed(1)}%</div>
+                  <div style={{ fontSize: 12, color: C.textFaint }}>
                     la más larga: {metricas.durMax.toFixed(1)} h
                     {isFinite(paramsRuteo.Kmax) ? ` · tope ${paramsRuteo.Kmax} km` : ""}
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Km de la más larga</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: metricas.kmMax <= paramsRuteo.Kmax ? C.green : C.red }}>{metricas.kmMax.toFixed(0)} <span style={{ fontSize: 12, fontWeight: 600 }}>km</span></div>
-                  <div style={{ fontSize: 10, color: C.textFaint }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>Km de la más larga</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, color: metricas.kmMax <= paramsRuteo.Kmax ? C.green : C.red }}>{metricas.kmMax.toFixed(0)} <span style={{ fontSize: 12, fontWeight: 600 }}>km</span></div>
+                  <div style={{ fontSize: 12, color: C.textFaint }}>
                     {isFinite(paramsRuteo.Kmax) ? `K_max = ${paramsRuteo.Kmax} km` : "sin tope de km"}
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Balance</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: metricas.fueraRango === 0 ? C.green : C.yellow }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>Balance</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, color: metricas.fueraRango === 0 ? C.green : C.yellow }}>
                     {metricas.fueraRango === 0 ? "✓" : metricas.fueraRango}
                   </div>
-                  <div style={{ fontSize: 10, color: C.textFaint }}>
+                  <div style={{ fontSize: 12, color: C.textFaint }}>
                     {metricas.fueraRango === 0 ? `todas dentro de [${pM}, ${pMM}]` : `fuera de [${pM}, ${pMM}]`}
                   </div>
                 </div>
                 <button onClick={() => setShowParams(s => !s)}
-                  style={{ marginLeft: "auto", alignSelf: "center", padding: "6px 14px", borderRadius: 7, border: "1px solid " + C.border, backgroundColor: showParams ? C.accentLight : "transparent", color: showParams ? C.accent : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  style={{ marginLeft: "auto", alignSelf: "center", padding: "6px 14px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: showParams ? C.accentLight : "transparent", color: showParams ? C.accent : C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
                   {showParams ? "▴ Ocultar parámetros" : "⚙ Parámetros del modelo"}
                 </button>
               </div>
 
               {editadoManual && (
-                <div style={{ marginTop: 12, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ marginTop: 12, padding: "9px 12px", borderRadius: 8, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <span style={{ flex: "1 1 320px" }}>
                     Estas cifras son las del plan <b>tal como está ahora</b>, con tus cambios manuales incluidos.
                     El orden de visita de las rutas que tocaste ya no está optimizado — re-clusterizar vuelve a
                     optimizarlo, pero descarta las reasignaciones manuales.
                   </span>
                   {metricas.fueraRango > 0 && (
-                    <span style={{ padding: "3px 10px", borderRadius: 10, backgroundColor: C.redBg, color: C.red, fontWeight: 700 }}>
+                    <span style={{ padding: "3px 10px", borderRadius: 12, backgroundColor: C.redBg, color: C.red, fontWeight: 600 }}>
                       {metricas.fueraRango} ruta(s) fuera de [{pM}, {pMM}]
                     </span>
                   )}
@@ -8463,16 +8482,16 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                       <>
                         {grupos.map(([titulo, campos]) => (
                           <div key={titulo} style={{ marginBottom: 12 }}>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: C.textFaint, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>{titulo}</div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: C.textFaint, letterSpacing: 0, marginBottom: 6 }}>{titulo}</div>
                             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                               {campos.map(([lab, val, set, min, max, step, sym]) => (
                                 <div key={lab}>
-                                  <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: C.textMuted, marginBottom: 4 }}>
+                                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 4 }}>
                                     {lab} <span style={{ color: C.textFaint, fontStyle: "italic" }}>{sym}</span>
                                   </label>
                                   <input type="number" min={min} max={max} step={step} value={val} onChange={e => set(e.target.value)}
                                     placeholder={lab.startsWith("Tope") ? "sin tope" : lab.startsWith("Velocidad") ? "perfil CDMX" : ""}
-                                    style={{ width: 128, padding: "7px 9px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, fontWeight: 700, textAlign: "center", backgroundColor: C.white, color: C.text }} />
+                                    style={{ width: 128, padding: "7px 9px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, fontWeight: 600, textAlign: "center", backgroundColor: C.white, color: C.text }} />
                                 </div>
                               ))}
                             </div>
@@ -8491,7 +8510,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                           </label>
                         </div>
                         {parseFloat(pAlpha) > 0 && parseInt(pRmax) <= 1 && (
-                          <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
+                          <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
                             ⚠ Con α = {pAlpha} pero R_max = 1 el rebalanceo por horas no se ejecuta: hace falta más de una
                             ronda para que la duración medida regrese a la sectorización. Sube R_max a 10.
                           </div>
@@ -8500,7 +8519,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                     );
                   })()}
                   {puntos.length > 0 && Math.ceil(puntos.length / Math.max(numClusters, 1)) > (parseInt(pMM) || 60) && (
-                    <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 6, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
+                    <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, backgroundColor: C.yellowBg, color: C.yellow, fontSize: 11.5, fontWeight: 600 }}>
                       ⚠ Con {puntos.length.toLocaleString()} puntos y {numClusters} rutas tocan ~{Math.ceil(puntos.length / numClusters)} paradas por sector,
                       por encima del máximo de {pMM}. El balanceo no podrá cumplir el rango: sube el número de rutas a
                       al menos <b>{Math.ceil(puntos.length / (parseInt(pMM) || 60))}</b> o sube el máximo.
@@ -8513,7 +8532,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
 
           {/* Cluster legend */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, padding: "12px 18px", border: "1px solid " + C.border, marginBottom: 14, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: C.text, marginRight: 4 }}>Rutas:</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: C.text, marginRight: 4 }}>Rutas:</span>
             {Object.entries(clusterCount).sort((a, b) => +a[0] - +b[0]).map(([cl, cnt]) => {
               const clNum = +cl;
               const isExcl = clNum === -1;
@@ -8524,7 +8543,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                   <span style={{ fontSize: 11, color: C.textMuted }}>{cnt} pts</span>
                   {!isExcl && cnt >= 2 && (
                     <button onClick={() => { setSplitCluster(clNum); setSplitN(2); }} title={`Dividir Ruta ${clNum + 1} en N sub-rutas`}
-                      style={{ marginLeft: 4, padding: "1px 6px", borderRadius: 10, border: "none", backgroundColor: "transparent", color: C.textMuted, cursor: "pointer", fontSize: 12 }}
+                      style={{ marginLeft: 4, padding: "1px 6px", borderRadius: 12, border: "none", backgroundColor: "transparent", color: C.textMuted, cursor: "pointer", fontSize: 12 }}
                       onMouseEnter={e => e.currentTarget.style.backgroundColor = RCOLORS[clNum % RCOLORS.length] + "30"}
                       onMouseLeave={e => e.currentTarget.style.backgroundColor = "transparent"}>
                       ✂
@@ -8532,7 +8551,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                   )}
                   {!isExcl && Object.keys(clusterCount).filter(c => +c !== -1 && +c !== clNum).length > 0 && (
                     <button onClick={() => { setMergeCluster(clNum); setMergeTarget(null); }} title={`Fusionar Ruta ${clNum + 1} con otra ruta`}
-                      style={{ padding: "1px 6px", borderRadius: 10, border: "none", backgroundColor: "transparent", color: C.textMuted, cursor: "pointer", fontSize: 12 }}
+                      style={{ padding: "1px 6px", borderRadius: 12, border: "none", backgroundColor: "transparent", color: C.textMuted, cursor: "pointer", fontSize: 12 }}
                       onMouseEnter={e => e.currentTarget.style.backgroundColor = RCOLORS[clNum % RCOLORS.length] + "30"}
                       onMouseLeave={e => e.currentTarget.style.backgroundColor = "transparent"}>
                       🔗
@@ -8542,7 +8561,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
               );
             })}
             <button onClick={() => setShowSplitTable(s => !s)}
-              style={{ marginLeft: "auto", padding: "4px 12px", borderRadius: 6, border: "1px solid " + C.accent, backgroundColor: showSplitTable ? C.accent : C.accentLight, color: showSplitTable ? "white" : C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              style={{ marginLeft: "auto", padding: "4px 12px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: showSplitTable ? C.accent : C.accentLight, color: showSplitTable ? "white" : C.accent, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
               {showSplitTable ? "▴ Ocultar dividir rutas" : "✂ Dividir rutas en bloque"}
             </button>
           </div>
@@ -8552,7 +8571,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
             <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, marginBottom: 14, overflow: "hidden" }}>
               <div style={{ padding: "12px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Dividir rutas</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Dividir rutas</div>
                   <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Escribe el N para las rutas que quieras partir. Las que dejes vacías no se tocan.</div>
                 </div>
                 {(() => {
@@ -8572,7 +8591,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                         }
                         setSplitNByCluster({});
                       }}
-                      style={{ padding: "8px 18px", borderRadius: 8, border: "none", backgroundColor: splitSaving ? C.textMuted : C.accent, color: "white", fontSize: 12, fontWeight: 700, cursor: splitSaving ? "not-allowed" : "pointer" }}>
+                      style={{ padding: "8px 18px", borderRadius: 8, border: "none", backgroundColor: splitSaving ? C.textMuted : C.accent, color: "white", fontSize: 12, fontWeight: 600, cursor: splitSaving ? "not-allowed" : "pointer" }}>
                       {splitSaving ? "Procesando..." : `✂ Aplicar ${cuantas} divisione${cuantas === 1 ? "" : "s"}`}
                     </button>
                   );
@@ -8582,11 +8601,11 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead style={{ position: "sticky", top: 0, backgroundColor: C.bg, zIndex: 1 }}>
                     <tr>
-                      <th style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>Ruta</th>
-                      <th style={{ padding: "8px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>Puntos</th>
-                      <th style={{ padding: "8px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>Dividir en N</th>
-                      <th style={{ padding: "8px 14px", textAlign: "center", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>Promedio resultante</th>
-                      <th style={{ padding: "8px 14px", textAlign: "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border }}>Acción</th>
+                      <th style={{ padding: "8px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  borderBottom: "1px solid " + C.border }}>Ruta</th>
+                      <th style={{ padding: "8px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: C.textMuted,  borderBottom: "1px solid " + C.border }}>Puntos</th>
+                      <th style={{ padding: "8px 14px", textAlign: "center", fontSize: 12, fontWeight: 600, color: C.textMuted,  borderBottom: "1px solid " + C.border }}>Dividir en N</th>
+                      <th style={{ padding: "8px 14px", textAlign: "center", fontSize: 12, fontWeight: 600, color: C.textMuted,  borderBottom: "1px solid " + C.border }}>Promedio resultante</th>
+                      <th style={{ padding: "8px 14px", textAlign: "right", fontSize: 12, fontWeight: 600, color: C.textMuted,  borderBottom: "1px solid " + C.border }}>Acción</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -8602,7 +8621,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                           <td style={{ padding: "8px 14px" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <div style={{ width: 10, height: 10, borderRadius: "50%", backgroundColor: RCOLORS[clNum % RCOLORS.length] }} />
-                              <span style={{ fontWeight: 700, color: RCOLORS[clNum % RCOLORS.length] }}>Ruta {clNum + 1}</span>
+                              <span style={{ fontWeight: 600, color: RCOLORS[clNum % RCOLORS.length] }}>Ruta {clNum + 1}</span>
                             </div>
                           </td>
                           <td style={{ padding: "8px 14px", textAlign: "right", fontWeight: 600, color: C.text }}>{cnt}</td>
@@ -8618,14 +8637,14 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                                 });
                               }}
                               placeholder="—"
-                              style={{ width: 70, padding: "6px 8px", borderRadius: 6, border: "1px solid " + (valido ? C.accent : C.border), fontSize: 14, fontWeight: 700, textAlign: "center", backgroundColor: valido ? C.accentLight : C.white, color: valido ? C.accent : C.text }} />
+                              style={{ width: 70, padding: "6px 8px", borderRadius: 8, border: "1px solid " + (valido ? C.accent : C.border), fontSize: 14, fontWeight: 600, textAlign: "center", backgroundColor: valido ? C.accentLight : C.white, color: valido ? C.accent : C.text }} />
                           </td>
                           <td style={{ padding: "8px 14px", textAlign: "center", color: C.textMuted }}>
                             {valido ? `~${Math.round(cnt / nInt)} pts c/u` : "—"}
                           </td>
                           <td style={{ padding: "6px 14px", textAlign: "right" }}>
                             <button onClick={() => valido && dividirRuta(clNum, nInt)} disabled={!valido || splitSaving}
-                              style={{ padding: "5px 12px", borderRadius: 6, border: "none", backgroundColor: (!valido || splitSaving) ? C.bg : C.accent, color: (!valido || splitSaving) ? C.textMuted : "white", fontSize: 11, fontWeight: 700, cursor: (!valido || splitSaving) ? "not-allowed" : "pointer" }}>
+                              style={{ padding: "5px 12px", borderRadius: 8, border: "none", backgroundColor: (!valido || splitSaving) ? C.bg : C.accent, color: (!valido || splitSaving) ? C.textMuted : "white", fontSize: 11, fontWeight: 600, cursor: (!valido || splitSaving) ? "not-allowed" : "pointer" }}>
                               ✂ Dividir
                             </button>
                           </td>
@@ -8646,7 +8665,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
             <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, marginBottom: 14, overflow: "hidden" }}>
               <div style={{ padding: "12px 18px", borderBottom: showResumen ? "1px solid " + C.border : "none", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Resumen por ruta</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Resumen por ruta</div>
                   <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
                     {rutasResumen.reduce((s, r) => s + r.paradas, 0).toLocaleString()} paradas ·{" "}
                     {rutasResumen.reduce((s, r) => s + r.guias, 0).toLocaleString()} guías ·{" "}
@@ -8657,7 +8676,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                   </div>
                 </div>
                 <button onClick={() => setShowResumen(s => !s)}
-                  style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid " + C.border, backgroundColor: showResumen ? C.accentLight : "transparent", color: showResumen ? C.accent : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: showResumen ? C.accentLight : "transparent", color: showResumen ? C.accent : C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
                   {showResumen ? "▴ Ocultar" : "▾ Ver detalle por ruta"}
                 </button>
               </div>
@@ -8667,7 +8686,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                     <thead style={{ position: "sticky", top: 0, backgroundColor: C.bg, zIndex: 1 }}>
                       <tr>
                         {["Ruta", "Paradas", "Guías", "Km zona", "Km traslado", "Km total", "Jornada", "Última entrega", ""].map((h, ix) => (
-                          <th key={h + ix} style={{ padding: "8px 14px", textAlign: ix === 0 ? "left" : ix === 8 ? "center" : "right", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>{h}</th>
+                          <th key={h + ix} style={{ padding: "8px 14px", textAlign: ix === 0 ? "left" : ix === 8 ? "center" : "right", fontSize: 12, fontWeight: 600, color: C.textMuted,  borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -8677,19 +8696,19 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                           <td style={{ padding: "7px 14px" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <div style={{ width: 10, height: 10, borderRadius: "50%", backgroundColor: RCOLORS[r.cluster % RCOLORS.length] }} />
-                              <span style={{ fontWeight: 700, color: RCOLORS[r.cluster % RCOLORS.length] }}>Ruta {r.ruta}</span>
+                              <span style={{ fontWeight: 600, color: RCOLORS[r.cluster % RCOLORS.length] }}>Ruta {r.ruta}</span>
                             </div>
                           </td>
                           <td style={{ padding: "7px 14px", textAlign: "right", fontWeight: 600 }}>{r.paradas}</td>
                           <td style={{ padding: "7px 14px", textAlign: "right", color: C.textMuted }}>{r.guias}</td>
                           <td style={{ padding: "7px 14px", textAlign: "right" }}>{r.kmZona.toFixed(1)}</td>
                           <td style={{ padding: "7px 14px", textAlign: "right", color: C.textMuted }}>{r.kmTraslado.toFixed(1)}</td>
-                          <td style={{ padding: "7px 14px", textAlign: "right", fontWeight: 700 }}>{r.kmTotal.toFixed(1)}</td>
-                          <td style={{ padding: "7px 14px", textAlign: "right", fontWeight: 700, color: r.horas <= paramsRuteo.Tmax ? C.text : C.red }}>{r.horas.toFixed(2)} h</td>
+                          <td style={{ padding: "7px 14px", textAlign: "right", fontWeight: 600 }}>{r.kmTotal.toFixed(1)}</td>
+                          <td style={{ padding: "7px 14px", textAlign: "right", fontWeight: 600, color: r.horas <= paramsRuteo.Tmax ? C.text : C.red }}>{r.horas.toFixed(2)} h</td>
                           <td style={{ padding: "7px 14px", textAlign: "right", fontFamily: "monospace" }}>{hhmm(r.ultimaEntrega)}</td>
                           <td style={{ padding: "7px 14px", textAlign: "center" }}>
-                            {r.cumple ? <span style={{ color: C.green, fontWeight: 700 }}>✓</span>
-                              : <span style={{ color: C.red, fontWeight: 700, fontSize: 10 }}>FUERA</span>}
+                            {r.cumple ? <span style={{ color: C.green, fontWeight: 600 }}>✓</span>
+                              : <span style={{ color: C.red, fontWeight: 600, fontSize: 12 }}>FUERA</span>}
                           </td>
                         </tr>
                       ))}
@@ -8704,24 +8723,24 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
           <div style={{ backgroundColor: C.white, borderRadius: mapMaximized ? 0 : 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: mapMaximized ? 0 : 14, ...(mapMaximized ? { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999 } : {}) }}>
             {/* Toolbar */}
             <div style={{ padding: "10px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", backgroundColor: C.white }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Mapa interactivo</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Mapa interactivo</div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <button onClick={() => setMapMode("click")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + (mapMode === "click" ? C.accent : C.border), backgroundColor: mapMode === "click" ? C.accentLight : "transparent", color: mapMode === "click" ? C.accent : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                <button onClick={() => setMapMode("click")} style={{ padding: "5px 14px", borderRadius: 8, border: "1px solid " + (mapMode === "click" ? C.accent : C.border), backgroundColor: mapMode === "click" ? C.accentLight : "transparent", color: mapMode === "click" ? C.accent : C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                   👆 Selección individual
                 </button>
-                <button onClick={() => setMapMode("lasso")} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + (mapMode === "lasso" ? C.purple : C.border), backgroundColor: mapMode === "lasso" ? C.purpleBg : "transparent", color: mapMode === "lasso" ? C.purple : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                <button onClick={() => setMapMode("lasso")} style={{ padding: "5px 14px", borderRadius: 8, border: "1px solid " + (mapMode === "lasso" ? C.purple : C.border), backgroundColor: mapMode === "lasso" ? C.purpleBg : "transparent", color: mapMode === "lasso" ? C.purple : C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                   ✏️ Lasso (área)
                 </button>
                 {selectedIndices.size > 0 && (
-                  <button onClick={() => setSelectedIndices(new Set())} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: "transparent", color: C.textMuted, fontSize: 11, cursor: "pointer" }}>
+                  <button onClick={() => setSelectedIndices(new Set())} style={{ padding: "5px 10px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: "transparent", color: C.textMuted, fontSize: 11, cursor: "pointer" }}>
                     ✕ Limpiar ({selectedIndices.size})
                   </button>
                 )}
                 <button onClick={() => setMapStatic(s => !s)} title={mapStatic ? "Estático: todos los pines visibles SIEMPRE. Click para volver a agrupar con el zoom." : "Dinámico: pines se agrupan con el zoom. Click para mostrarlos TODOS sin agrupar."}
-                  style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + (mapStatic ? C.blue : C.border), backgroundColor: mapStatic ? C.blueBg : "transparent", color: mapStatic ? C.blue : C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                  style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid " + (mapStatic ? C.blue : C.border), backgroundColor: mapStatic ? C.blueBg : "transparent", color: mapStatic ? C.blue : C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
                   {mapStatic ? "📍 Estático" : "🔀 Dinámico"}
                 </button>
-                <button onClick={() => setMapMaximized(m => !m)} title={mapMaximized ? "Restaurar mapa" : "Maximizar mapa"} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid " + C.border, backgroundColor: mapMaximized ? C.sidebar : "transparent", color: mapMaximized ? "white" : C.textMuted, fontSize: 16, cursor: "pointer", lineHeight: 1 }}>
+                <button onClick={() => setMapMaximized(m => !m)} title={mapMaximized ? "Restaurar mapa" : "Maximizar mapa"} style={{ padding: "5px 10px", borderRadius: 8, border: "1px solid " + C.border, backgroundColor: mapMaximized ? C.sidebar : "transparent", color: mapMaximized ? "white" : C.textMuted, fontSize: 16, cursor: "pointer", lineHeight: 1 }}>
                   {mapMaximized ? "⊡" : "⛶"}
                 </button>
               </div>
@@ -8729,15 +8748,15 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
             {/* Bulk assignment bar */}
             {selectedIndices.size > 0 && (
               <div style={{ padding: "10px 18px", borderBottom: "1px solid " + C.border, backgroundColor: C.yellowBg, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: C.yellow }}>{selectedIndices.size} punto(s) seleccionado(s)</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: C.yellow }}>{selectedIndices.size} punto(s) seleccionado(s)</span>
                 <span style={{ fontSize: 12, color: C.textMuted }}>Reasignar a:</span>
                 <select value={bulkCluster} onChange={e => setBulkCluster(parseInt(e.target.value))} style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid " + C.border, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                   {Array.from({ length: totalRutas }, (_, ci) => <option key={ci} value={ci}>Ruta {ci + 1}</option>)}
                 </select>
-                <button onClick={applyBulk} style={{ padding: "5px 16px", borderRadius: 6, border: "none", backgroundColor: C.green, color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✓ Aplicar</button>
+                <button onClick={applyBulk} style={{ padding: "5px 16px", borderRadius: 8, border: "none", backgroundColor: C.green, color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✓ Aplicar</button>
                 <div style={{ width: 1, height: 22, backgroundColor: C.border }} />
-                <button onClick={excludeFromRoute} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #94A3B8", backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 12, fontWeight: 700, cursor: "pointer" }} title="Quitar de ruta — estos puntos no saldrán del almacén">✕ Excluir de ruta</button>
-                <button onClick={includeInRoute} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 12, fontWeight: 700, cursor: "pointer" }} title="Reincluir puntos excluidos en la ruta seleccionada">↻ Reincluir</button>
+                <button onClick={excludeFromRoute} style={{ padding: "5px 14px", borderRadius: 8, border: "1px solid #94A3B8", backgroundColor: C.panelAlt, color: C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Quitar de ruta — estos puntos no saldrán del almacén">✕ Excluir de ruta</button>
+                <button onClick={includeInRoute} style={{ padding: "5px 14px", borderRadius: 8, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Reincluir puntos excluidos en la ruta seleccionada">↻ Reincluir</button>
                 <span style={{ fontSize: 11, color: C.textMuted, marginLeft: "auto" }}>
                   {mapMode === "lasso" ? "Dibuja una curva sobre el mapa para seleccionar puntos" : "Clic en marcador para seleccionar/deseleccionar · acumulable"}
                 </span>
@@ -8753,7 +8772,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
           {/* Table */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
             <div style={{ padding: "11px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Tabla de asignaciones</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Tabla de asignaciones</span>
               <span style={{ fontSize: 12, color: C.textMuted }}>{puntos.length} puntos · cambios en dropdown se guardan en Supabase</span>
             </div>
             <div style={{ maxHeight: 340, overflowY: "auto" }}>
@@ -8761,7 +8780,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                 <thead style={{ position: "sticky", top: 0, backgroundColor: C.bg, zIndex: 1 }}>
                   <tr>
                     {["#", ...(guiaKey ? ["Guía"] : []), "Latitud", "Longitud", "Cluster / Ruta", ""].map(h => (
-                      <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                      <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -8826,9 +8845,9 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
       {/* Histórico de sesiones */}
       <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginTop: 20 }}>
         <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Histórico de ruteos</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Histórico de ruteos</div>
           <button onClick={() => { setShowHistorico(!showHistorico); if (!showHistorico && historico.length === 0) loadHistorico(); }}
-            style={{ padding: "6px 16px", borderRadius: 6, border: "1px solid " + (showHistorico ? C.textMuted : C.accent), backgroundColor: showHistorico ? C.bg : C.accentLight, color: showHistorico ? C.textMuted : C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            style={{ padding: "6px 16px", borderRadius: 8, border: "1px solid " + (showHistorico ? C.textMuted : C.accent), backgroundColor: showHistorico ? C.bg : C.accentLight, color: showHistorico ? C.textMuted : C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
             {showHistorico ? "Ocultar" : "Ver sesiones anteriores"}
           </button>
         </div>
@@ -8933,7 +8952,7 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
               <thead>
                 <tr style={{ borderBottom: "2px solid " + C.border }}>
                   {["Sesión", "Nombre", "Fecha", "Puntos", "Rutas", "Acciones"].map(h => (
-                    <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                    <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -8942,21 +8961,21 @@ map.fitBounds([${pts.map(p=>`[${p.lat},${p.lng}]`).join(",")}],{padding:[40,40]}
                   <tr key={h.sesion} style={{ borderBottom: "1px solid " + C.border }}
                     onMouseEnter={ev => ev.currentTarget.style.backgroundColor = C.panelAlt}
                     onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
-                    <td style={{ padding: "12px 14px", fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{h.sesion.substring(0, 14)}</td>
+                    <td style={{ padding: "12px 14px", fontSize: 12, fontFamily: "monospace", fontWeight: 600, color: C.accent }}>{h.sesion.substring(0, 14)}</td>
                     <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: h.nombre ? C.text : C.textMuted, fontStyle: h.nombre ? "normal" : "italic" }}>{h.nombre || "—"}</td>
                     <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{new Date(h.fecha).toLocaleString("es-MX", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
-                    <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700 }}>{h.puntos}</td>
+                    <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600 }}>{h.puntos}</td>
                     <td style={{ padding: "12px 14px" }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 10px", borderRadius: 4, backgroundColor: C.blueBg, color: C.blue }}>{h.rutas} rutas</span>
+                      <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 10px", borderRadius: 4, backgroundColor: C.blueBg, color: C.blue }}>{h.rutas} rutas</span>
                     </td>
                     <td style={{ padding: "12px 14px", display: "flex", gap: 6 }}>
-                      <button onClick={() => loadSesion(h.sesion)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                      <button onClick={() => loadSesion(h.sesion)} style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                         <IC.MapPin /> Cargar
                       </button>
-                      <button onClick={() => exportHistMapHTML(h.sesion)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                      <button onClick={() => exportHistMapHTML(h.sesion)} style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid " + C.blue, backgroundColor: C.blueBg, color: C.blue, fontSize: 11, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                         <IC.Map /> Mapa HTML
                       </button>
-                      <button onClick={() => deleteHistSesion(h.sesion)} style={{ padding: "5px 8px", borderRadius: 6, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red }}><IC.Trash /></button>
+                      <button onClick={() => deleteHistSesion(h.sesion)} style={{ padding: "5px 8px", borderRadius: 8, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red }}><IC.Trash /></button>
                     </td>
                   </tr>
                 ))}
@@ -10226,7 +10245,7 @@ function ModuleOpsType({ tipo, color }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>{tipo}</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>{tipo}</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>KPIs específicos de {tipo}</p>
         </div>
         <select style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600, backgroundColor: C.white }}>
@@ -10243,29 +10262,29 @@ function ModuleOpsType({ tipo, color }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20 }}>
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 22, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>% Entrega</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>% Entrega</div>
           <GaugeChart value={data.pct} label={tipo} size={180} />
         </div>
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 22, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>Tendencia de envíos</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 14 }}>Tendencia de envíos</div>
           <MiniBarChart data={monthlyData.map(d => ({...d, envios: Math.round(d.envios * (data.envios / 30788))}))} dataKey="envios" color={color} />
         </div>
       </div>
 
       <div style={{ backgroundColor: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-        <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, fontSize: 13, fontWeight: 700 }}>Envíos recientes — {tipo}</div>
+        <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, fontSize: 13, fontWeight: 600 }}>Envíos recientes — {tipo}</div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>
               {["ID", "Fecha", "Operador", "Ruta", "Pqtes", "Status"].map(h => (
-                <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {enviosFiltrados.length > 0 ? enviosFiltrados.map((e, i) => (
               <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{e.id}</td>
+                <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "monospace", fontWeight: 600, color: C.accent }}>{e.id}</td>
                 <td style={{ padding: "10px 12px", fontSize: 12, color: C.textMuted }}>{e.fecha}</td>
                 <td style={{ padding: "10px 12px", fontSize: 12 }}>{e.operador}</td>
                 <td style={{ padding: "10px 12px", fontSize: 12 }}>{e.origen} → {e.destino}</td>
@@ -10533,12 +10552,12 @@ function ModuleManifiesto() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>Manifiesto</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Manifiesto</h1>
           <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Genera manifiestos de carga para operadores registrados en asistencia</p>
         </div>
         <button onClick={() => { setShowCreate(!showCreate); setGuias([]); setSelectedOp(null); setMsg(""); setObservaciones(""); }} style={{
           padding: "10px 20px", borderRadius: 8, border: "none", backgroundColor: showCreate ? C.textMuted : C.accent,
-          color: "white", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+          color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
         }}>
           {showCreate ? <><IC.X /> Cancelar</> : <><IC.Plus /> Nuevo manifiesto</>}
         </button>
@@ -10555,11 +10574,11 @@ function ModuleManifiesto() {
       {/* Create form */}
       {showCreate && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 24, border: "2px solid " + C.accent, marginBottom: 20 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, color: C.accent }}>Nuevo manifiesto de carga</div>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 18, color: C.accent }}>Nuevo manifiesto de carga</div>
 
           {/* Step 1: Select operator */}
           <div style={{ marginBottom: 18 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 1 — Seleccionar operador (registrado en asistencia)</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 8, letterSpacing: 0 }}>Paso 1 — Seleccionar operador (registrado en asistencia)</div>
             {operadores.length === 0 ? (
               <div style={{ padding: "16px", backgroundColor: C.yellowBg, borderRadius: 8, fontSize: 13, color: C.yellow, fontWeight: 600 }}>
                 No hay operadores registrados en asistencia. Primero registra operadores en el módulo "Registro Diario".
@@ -10570,13 +10589,13 @@ function ModuleManifiesto() {
                   const isSel = selectedOp && selectedOp.nombre === op.nombre;
                   return (
                     <button key={i} onClick={() => setSelectedOp(op)} style={{
-                      padding: "12px 16px", borderRadius: 10, border: isSel ? "2px solid " + C.accent : "1px solid " + C.border,
+                      padding: "12px 16px", borderRadius: 12, border: isSel ? "2px solid " + C.accent : "1px solid " + C.border,
                       backgroundColor: isSel ? C.accentLight : C.white, cursor: "pointer", textAlign: "left",
                       transition: "all 0.15s",
                     }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{op.nombre}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{op.nombre}</div>
                       <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{op.proveedor} · {op.tipo_unidad} · {op.tipo_operacion}</div>
-                      <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1 }}>Asistencia: {op.fecha}</div>
+                      <div style={{ fontSize: 12, color: C.textMuted, marginTop: 1 }}>Asistencia: {op.fecha}</div>
                     </button>
                   );
                 })}
@@ -10587,11 +10606,11 @@ function ModuleManifiesto() {
           {/* Step 2: Upload guías */}
           {selectedOp && (
             <div style={{ marginBottom: 18, borderTop: "1px solid " + C.border, paddingTop: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 2 — Cargar archivo de guías</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 8, letterSpacing: 0 }}>Paso 2 — Cargar archivo de guías</div>
               <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
                 <div style={{ flex: "1 1 300px" }}>
-                  <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Archivo Excel o CSV con guías</label>
-                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleGuiasFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt }} />
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Archivo Excel o CSV con guías</label>
+                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleGuiasFile} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", backgroundColor: C.panelAlt }} />
                   <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>Columna de guía detectada automáticamente. Columnas opcionales: Destino, Peso, Paquetes.</div>
                 </div>
               </div>
@@ -10603,13 +10622,13 @@ function ModuleManifiesto() {
           {/* Guías preview table */}
           {guias.length > 0 && (
             <div style={{ marginBottom: 18, borderTop: "1px solid " + C.border, paddingTop: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>Paso 3 — Revisar guías ({guias.length})</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 8, letterSpacing: 0 }}>Paso 3 — Revisar guías ({guias.length})</div>
               <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid " + C.border, borderRadius: 8 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid " + C.border, backgroundColor: C.panelAlt }}>
                       {["#", "No. Guía", "Destino", "Peso", "Paquetes", ""].map(h => (
-                        <th key={h} style={{ padding: "6px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                        <th key={h} style={{ padding: "6px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -10617,12 +10636,12 @@ function ModuleManifiesto() {
                     {guias.map((g, i) => (
                       <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
                         <td style={{ padding: "6px 12px", fontSize: 12, color: C.textMuted }}>{i + 1}</td>
-                        <td style={{ padding: "6px 12px", fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: C.text }}>{g.numero}</td>
+                        <td style={{ padding: "6px 12px", fontSize: 13, fontFamily: "monospace", fontWeight: 600, color: C.text }}>{g.numero}</td>
                         <td style={{ padding: "6px 12px", fontSize: 12, color: C.textMuted }}>{g.destino || "—"}</td>
                         <td style={{ padding: "6px 12px", fontSize: 12, color: C.textMuted }}>{g.peso || "—"}</td>
                         <td style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600 }}>{g.paquetes || 1}</td>
                         <td style={{ padding: "6px 12px" }}>
-                          <button onClick={() => removeGuia(i)} style={{ padding: "2px 6px", borderRadius: 4, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red, fontSize: 10 }}><IC.X /></button>
+                          <button onClick={() => removeGuia(i)} style={{ padding: "2px 6px", borderRadius: 4, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red, fontSize: 12 }}><IC.X /></button>
                         </td>
                       </tr>
                     ))}
@@ -10632,8 +10651,8 @@ function ModuleManifiesto() {
 
               {/* Observaciones */}
               <div style={{ marginTop: 14 }}>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: C.text, marginBottom: 4 }}>Observaciones (opcional)</label>
-                <textarea value={observaciones} onChange={e => setObservaciones(e.target.value)} placeholder="Notas adicionales para el manifiesto..." rows={2} style={{ width: "100%", padding: "9px 12px", borderRadius: 6, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", resize: "vertical" }} />
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 4 }}>Observaciones (opcional)</label>
+                <textarea value={observaciones} onChange={e => setObservaciones(e.target.value)} placeholder="Notas adicionales para el manifiesto..." rows={2} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid " + C.border, fontSize: 13, boxSizing: "border-box", resize: "vertical" }} />
               </div>
 
               {/* Summary + save */}
@@ -10644,7 +10663,7 @@ function ModuleManifiesto() {
                 </div>
                 <button onClick={saveManifiesto} style={{
                   padding: "10px 28px", borderRadius: 8, border: "none", backgroundColor: C.green,
-                  color: "white", fontSize: 14, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
+                  color: "white", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
                 }}>
                   <IC.Download /> Generar manifiesto y PDF
                 </button>
@@ -10678,7 +10697,7 @@ function ModuleManifiesto() {
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
                 {["ID Manifiesto", "Fecha", "Operador", "Proveedor", "Unidad", "Tipo", "Guías", "Notas", "Acciones"].map(h => (
-                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" }}>{h}</th>
+                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -10687,7 +10706,7 @@ function ModuleManifiesto() {
                 <tr key={m.id} style={{ borderBottom: "1px solid " + C.border }}
                   onMouseEnter={ev => ev.currentTarget.style.backgroundColor = C.panelAlt}
                   onMouseLeave={ev => ev.currentTarget.style.backgroundColor = "transparent"}>
-                  <td style={{ padding: "12px 14px", fontSize: 13, fontFamily: "monospace", fontWeight: 700, color: C.accent }}>{m.id_manifiesto}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 13, fontFamily: "monospace", fontWeight: 600, color: C.accent }}>{m.id_manifiesto}</td>
                   <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{m.fecha}</td>
                   <td style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: C.text }}>{m.operador}</td>
                   <td style={{ padding: "12px 14px", fontSize: 12, color: C.textMuted }}>{m.proveedor}</td>
@@ -10699,10 +10718,10 @@ function ModuleManifiesto() {
                       const tp = m.tipo_operacion || "Última Milla";
                       const tpMap = { "Última Milla": { bg: C.accentLight, c: C.accent }, "CrossDock": { bg: C.blueBg, c: C.blue }, "Logística Inversa": { bg: C.purpleBg, c: C.purple } };
                       const tc = tpMap[tp] || { bg: C.panelAlt, c: C.textMuted };
-                      return <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, backgroundColor: tc.bg, color: tc.c }}>{tp}</span>;
+                      return <span style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 20, backgroundColor: tc.bg, color: tc.c }}>{tp}</span>;
                     })()}
                   </td>
-                  <td style={{ padding: "12px 14px", fontSize: 14, fontWeight: 700, color: C.text }}>{m.total_guias}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 14, fontWeight: 600, color: C.text }}>{m.total_guias}</td>
                   <td style={{ padding: "12px 14px", textAlign: "center" }}>
                     {m.observaciones && m.observaciones.trim() !== "" ? (
                       <span title={m.observaciones} style={{ color: C.green, fontSize: 18, cursor: "help" }}>✓</span>
@@ -10711,10 +10730,10 @@ function ModuleManifiesto() {
                     )}
                   </td>
                   <td style={{ padding: "12px 14px", display: "flex", gap: 6 }}>
-                    <button onClick={() => redownload(m)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                    <button onClick={() => redownload(m)} style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid " + C.accent, backgroundColor: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                       <IC.Download /> PDF
                     </button>
-                    <button onClick={() => deleteManifiesto(m.id)} style={{ padding: "5px 8px", borderRadius: 6, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red }}><IC.Trash /></button>
+                    <button onClick={() => deleteManifiesto(m.id)} style={{ padding: "5px 8px", borderRadius: 8, border: "none", backgroundColor: C.redBg, cursor: "pointer", color: C.red }}><IC.Trash /></button>
                   </td>
                 </tr>
               ))}
@@ -10727,7 +10746,7 @@ function ModuleManifiesto() {
       {manifiestos.length === 0 && !loading && (
         <div style={{ marginTop: 20, fontSize: 11, color: C.textMuted, backgroundColor: C.bg, padding: "14px 20px", borderRadius: 8, border: "1px solid " + C.border }}>
           <b>SQL requerido en Supabase:</b>
-          <pre style={{ fontSize: 10, marginTop: 8, whiteSpace: "pre-wrap", color: C.text }}>{`CREATE TABLE manifiestos (
+          <pre style={{ fontSize: 12, marginTop: 8, whiteSpace: "pre-wrap", color: C.text }}>{`CREATE TABLE manifiestos (
   id bigserial PRIMARY KEY,
   id_manifiesto text UNIQUE NOT NULL,
   operador text,
@@ -11554,7 +11573,7 @@ function FactDataTable({ title, sub, columns, rows }) {
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE));
   const cur = Math.min(page, pages - 1);
   const slice = filtered.slice(cur * PAGE, cur * PAGE + PAGE);
-  const th = { padding: "9px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.03em", whiteSpace: "nowrap" };
+  const th = { padding: "9px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  letterSpacing: "0.03em", whiteSpace: "nowrap" };
   const td = { padding: "8px 12px", fontSize: 12.5, color: C.text, whiteSpace: "nowrap" };
 
   if (!rows.length) {
@@ -11568,7 +11587,7 @@ function FactDataTable({ title, sub, columns, rows }) {
     <div style={{ background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 180 }}>
-          <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{title}</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{title}</div>
           {sub && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{sub}</div>}
         </div>
         <input value={q} onChange={e => { setQ(e.target.value); setPage(0); }} placeholder="Buscar…"
@@ -11596,10 +11615,10 @@ function FactDataTable({ title, sub, columns, rows }) {
       {pages > 1 && (
         <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10 }}>
           <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={cur === 0}
-            style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 12, cursor: cur === 0 ? "default" : "pointer", opacity: cur === 0 ? 0.5 : 1 }}>← Anterior</button>
+            style={{ padding: "5px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 12, cursor: cur === 0 ? "default" : "pointer", opacity: cur === 0 ? 0.5 : 1 }}>← Anterior</button>
           <span style={{ fontSize: 12, color: C.textMuted }}>Página {cur + 1} de {pages}</span>
           <button onClick={() => setPage(p => Math.min(pages - 1, p + 1))} disabled={cur >= pages - 1}
-            style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 12, cursor: cur >= pages - 1 ? "default" : "pointer", opacity: cur >= pages - 1 ? 0.5 : 1 }}>Siguiente →</button>
+            style={{ padding: "5px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 12, cursor: cur >= pages - 1 ? "default" : "pointer", opacity: cur >= pages - 1 ? 0.5 : 1 }}>Siguiente →</button>
         </div>
       )}
     </div>
@@ -11799,8 +11818,8 @@ function ModuleFacturacion() {
 
   const hayDatos = envios.length || facturas.length || nc.length;
   const upBtn = (kind, label) => (
-    <label style={{ flex: 1, minWidth: 220, padding: "16px 18px", borderRadius: 10, border: `1px dashed ${C.border}`, background: C.panelAlt, cursor: busy ? "default" : "pointer", display: "block" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 4 }}>{label}</div>
+    <label style={{ flex: 1, minWidth: 220, padding: "16px 18px", borderRadius: 12, border: `1px dashed ${C.border}`, background: C.panelAlt, cursor: busy ? "default" : "pointer", display: "block" }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 11, color: fileNames[kind] ? C.green : C.textMuted }}>{busy === kind ? "Procesando…" : (fileNames[kind] || "Seleccionar .xlsx / .csv")}</div>
       <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => handleFile(kind, e)} disabled={!!busy} style={{ display: "none" }} />
     </label>
@@ -11809,7 +11828,7 @@ function ModuleFacturacion() {
   // Muestra a qué encabezado real del Excel se mapeó cada campo (verde = encontrado, rojo = no)
   const detCols = (kind, labels) => detected[kind] ? (
     <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12, padding: "10px 14px", background: C.panelAlt, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 11 }}>
-      <span style={{ color: C.textMuted, fontWeight: 700 }}>Columnas detectadas:</span>
+      <span style={{ color: C.textMuted, fontWeight: 600 }}>Columnas detectadas:</span>
       {labels.map(([f, l]) => (
         <span key={f} style={{ color: C.textMuted }}>
           {l} → <strong style={{ color: detected[kind][f] ? C.green : C.red }}>{detected[kind][f] || "no encontrada"}</strong>
@@ -11818,14 +11837,14 @@ function ModuleFacturacion() {
     </div>
   ) : null;
 
-  const th = { padding: "9px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.03em", whiteSpace: "nowrap" };
+  const th = { padding: "9px 12px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  letterSpacing: "0.03em", whiteSpace: "nowrap" };
   const thR = { ...th, textAlign: "right" };
   const td = { padding: "9px 12px", fontSize: 13, color: C.text };
   const tdR = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
   const card = { background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 18 };
   const cardHead = (t, sub) => (
     <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-      <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{t}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{t}</div>
       {sub && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{sub}</div>}
     </div>
   );
@@ -11833,7 +11852,7 @@ function ModuleFacturacion() {
   return (
     <div>
       <div style={{ marginBottom: 18 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Facturación</h1>
+        <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0, color: C.text }}>Facturación</h1>
         <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>Base de datos · Base de facturas · Base de NC → costos por proveedor, cobranza por cliente y NC por empresa</p>
       </div>
 
@@ -11846,16 +11865,16 @@ function ModuleFacturacion() {
         </div>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Periodo</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textMuted,  marginBottom: 4 }}>Periodo</div>
             <input value={periodo} onChange={e => setPeriodo(e.target.value)} placeholder="2026-06"
               style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 13, width: 140 }} />
           </div>
           <button onClick={guardar} disabled={!!busy || !hayDatos}
-            style={{ padding: "10px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontSize: 13, fontWeight: 700, cursor: busy || !hayDatos ? "default" : "pointer", opacity: busy || !hayDatos ? 0.5 : 1, alignSelf: "flex-end" }}>
+            style={{ padding: "10px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontSize: 13, fontWeight: 600, cursor: busy || !hayDatos ? "default" : "pointer", opacity: busy || !hayDatos ? 0.5 : 1, alignSelf: "flex-end" }}>
             {busy === "save" ? "Guardando…" : "Guardar en Supabase"}
           </button>
           <button onClick={exportar} disabled={!!busy || !hayDatos}
-            style={{ padding: "10px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 13, fontWeight: 700, cursor: busy || !hayDatos ? "default" : "pointer", opacity: busy || !hayDatos ? 0.5 : 1, alignSelf: "flex-end" }}>
+            style={{ padding: "10px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 13, fontWeight: 600, cursor: busy || !hayDatos ? "default" : "pointer", opacity: busy || !hayDatos ? 0.5 : 1, alignSelf: "flex-end" }}>
             {busy === "export" ? "Exportando…" : "Exportar Excel"}
           </button>
           {rawProviders.length > 0 && (
@@ -11877,7 +11896,7 @@ function ModuleFacturacion() {
               <div key={p.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
                 <span style={{ flex: 1, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={p.label}>{p.label}</span>
                 <select value={bucketOf(p.label)} onChange={e => setOverrides(o => ({ ...o, [p.key]: e.target.value }))}
-                  style={{ padding: "5px 8px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 12 }}>
+                  style={{ padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.text, fontSize: 12 }}>
                   {FACT_BUCKETS.map(b => <option key={b} value={b}>{b}</option>)}
                 </select>
               </div>
@@ -11890,7 +11909,7 @@ function ModuleFacturacion() {
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
         {[["resumen", "Resúmenes"], ["envios", "Base de envíos"], ["nc", "Base de NC"]].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
-            style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${tab === id ? C.accent : C.border}`, background: tab === id ? C.accent : C.white, color: tab === id ? "#fff" : C.textMuted, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+            style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${tab === id ? C.accent : C.border}`, background: tab === id ? C.accent : C.white, color: tab === id ? "#fff" : C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             {label}
           </button>
         ))}
@@ -11927,7 +11946,7 @@ function ModuleFacturacion() {
             ].map((k, i) => (
               <div key={i} style={{ flex: 1, minWidth: 180, background: C.panelGrad, borderRadius: 12, border: `1px solid ${C.border}`, padding: "16px 18px" }}>
                 <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, marginBottom: 8 }}>{k.label}</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: C.text, letterSpacing: "-0.02em" }}>{k.value}</div>
+                <div style={{ fontSize: 22, fontWeight: 600, color: C.text, letterSpacing: "-0.02em" }}>{k.value}</div>
                 <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{k.sub}</div>
               </div>
             ))}
@@ -11953,8 +11972,8 @@ function ModuleFacturacion() {
                     <td style={tdR}>{factFmt(calc.totMontoIva)}</td>
                   </tr>
                   {(() => { const rSin = cobTot.sinIva - calc.totMonto, rCon = cobTot.total - calc.totMontoIva; return (
-                    <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 800 }}>
-                      <td style={{ ...td, fontWeight: 800 }}>Resultado (ingreso − gasto)</td>
+                    <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 600 }}>
+                      <td style={{ ...td, fontWeight: 600 }}>Resultado (ingreso − gasto)</td>
                       <td style={{ ...tdR, color: rSin >= 0 ? C.green : C.red }}>{factFmt(rSin)}</td>
                       <td style={{ ...tdR, color: rCon >= 0 ? C.green : C.red }}>{factFmt(rCon)}</td>
                     </tr>
@@ -11983,8 +12002,8 @@ function ModuleFacturacion() {
                       <td style={{ ...tdR, color: p.nc ? C.yellow : C.textMuted }}>{factFmt(p.nc)}</td>
                     </tr>
                   ); })}
-                  <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 800 }}>
-                    <td style={{ ...td, fontWeight: 800 }}>TOTAL</td>
+                  <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 600 }}>
+                    <td style={{ ...td, fontWeight: 600 }}>TOTAL</td>
                     <td style={tdR}>{factFmt(calc.totMonto)}</td>
                     <td style={tdR}>{factFmt(calc.totMontoIva)}</td>
                     <td style={tdR}>{factFmtInt(calc.totEnvios)}</td>
@@ -12014,8 +12033,8 @@ function ModuleFacturacion() {
                       <td style={tdR}>{factFmt(v.total)}</td>
                     </tr>
                   ))}
-                  <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 800 }}>
-                    <td style={{ ...td, fontWeight: 800 }}>Total general</td>
+                  <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 600 }}>
+                    <td style={{ ...td, fontWeight: 600 }}>Total general</td>
                     <td style={tdR}>{factFmtInt(cobTot.guias)}</td>
                     <td style={tdR}>{factFmt(cobTot.sinIva)}</td>
                     <td style={tdR}>{factFmt(cobTot.total - cobTot.sinIva)}</td>
@@ -12042,8 +12061,8 @@ function ModuleFacturacion() {
                       <td style={tdR}>{factFmt(v.costo)}</td>
                     </tr>
                   ))}
-                  <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 800 }}>
-                    <td style={{ ...td, fontWeight: 800 }}>Total general</td>
+                  <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 600 }}>
+                    <td style={{ ...td, fontWeight: 600 }}>Total general</td>
                     <td style={tdR}>{factFmtInt(ncTot.guias)}</td>
                     <td style={tdR}>{factFmt(ncTot.costo)}</td>
                   </tr>
@@ -12116,7 +12135,7 @@ function ProPanel({ title, sub, right, children, tone }) {
       {(title || right) && (
         <div style={{ padding: "13px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>{title}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{title}</div>
             {sub && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3, maxWidth: 780, lineHeight: 1.5 }}>{sub}</div>}
           </div>
           {right}
@@ -12134,7 +12153,7 @@ function ProTabla({ cols, rows, vacio = "Sin datos", compacta }) {
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: compacta ? 11 : 12 }}>
         <thead>
           <tr>{cols.map((c, i) => (
-            <th key={i} style={{ textAlign: c.num ? "right" : "left", padding: "7px 10px", borderBottom: `1px solid ${C.border}`, color: C.textMuted, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{c.label}</th>
+            <th key={i} style={{ textAlign: c.num ? "right" : "left", padding: "7px 10px", borderBottom: `1px solid ${C.border}`, color: C.textMuted, fontSize: 12, fontWeight: 600, letterSpacing: "0.04em",  whiteSpace: "nowrap" }}>{c.label}</th>
           ))}</tr>
         </thead>
         <tbody>
@@ -12177,9 +12196,9 @@ function ProCurvaMaduracion({ curva, alto = 150 }) {
         ))}
       </div>
       <div style={{ display: "flex", marginTop: 4 }}>
-        {ks.map(k => <div key={k} style={{ flex: 1, textAlign: "center", fontSize: 9, color: k === curva.medianaK ? C.accent : C.textMuted, fontWeight: k === curva.medianaK ? 800 : 500 }}>{k}</div>)}
+        {ks.map(k => <div key={k} style={{ flex: 1, textAlign: "center", fontSize: 11, color: k === curva.medianaK ? C.accent : C.textMuted, fontWeight: k === curva.medianaK ? 800 : 500 }}>{k}</div>)}
       </div>
-      <div style={{ fontSize: 10, color: C.textMuted, marginTop: 6, display: "flex", gap: 14, flexWrap: "wrap" }}>
+      <div style={{ fontSize: 12, color: C.textMuted, marginTop: 6, display: "flex", gap: 14, flexWrap: "wrap" }}>
         <span><span style={{ display: "inline-block", width: 8, height: 8, background: C.blue, borderRadius: 2, marginRight: 4 }} />h(k) — sale en el día k</span>
         <span><span style={{ display: "inline-block", width: 8, height: 2, background: C.yellow, marginRight: 4, verticalAlign: "middle" }} />S(k) — sigue en almacén</span>
         <span>Eje x = días desde la creación</span>
@@ -12200,10 +12219,10 @@ function ProVarianza({ pron }) {
   ];
   return (
     <div>
-      <div style={{ display: "flex", height: 26, borderRadius: 6, overflow: "hidden", marginBottom: 10 }}>
+      <div style={{ display: "flex", height: 26, borderRadius: 8, overflow: "hidden", marginBottom: 10 }}>
         {partes.map(p => p.v > 0.5 && (
           <div key={p.k} style={{ width: `${p.v}%`, backgroundColor: p.color, display: "flex", alignItems: "center", justifyContent: "center" }} title={`${p.k}: ${p.v.toFixed(1)}% de la varianza`}>
-            <span style={{ fontSize: 10, fontWeight: 800, color: "#fff" }}>{p.v >= 8 ? `${Math.round(p.v)}%` : ""}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{p.v >= 8 ? `${Math.round(p.v)}%` : ""}</span>
           </div>
         ))}
       </div>
@@ -12228,7 +12247,7 @@ function ProAviso({ tipo = "warn", children }) {
   const bg = tipo === "error" ? C.redBg : tipo === "ok" ? C.greenBg : C.yellowBg;
   return (
     <div style={{ background: bg, border: `1px solid ${col}44`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.text, lineHeight: 1.6, marginBottom: 12 }}>
-      <span style={{ color: col, fontWeight: 800, marginRight: 6 }}>{tipo === "error" ? "BLOQUEADO" : tipo === "ok" ? "OK" : "OJO"}</span>
+      <span style={{ color: col, fontWeight: 600, marginRight: 6 }}>{tipo === "error" ? "BLOQUEADO" : tipo === "ok" ? "OK" : "OJO"}</span>
       {children}
     </div>
   );
@@ -12615,22 +12634,22 @@ function ModulePronostico() {
   const p0Pendientes = diag.bloqueantes.filter(b => b.sev === "P0");
 
   const cardFuente = (kind, titulo, desc, conSupabase) => (
-    <div style={{ background: C.panelGrad, border: `1px solid ${fuentes[kind] ? C.green + "55" : C.border}`, borderRadius: 10, padding: 16, flex: 1, minWidth: 250 }}>
-      <div style={{ fontSize: 12, fontWeight: 800, color: C.text }}>{titulo}</div>
+    <div style={{ background: C.panelGrad, border: `1px solid ${fuentes[kind] ? C.green + "55" : C.border}`, borderRadius: 12, padding: 16, flex: 1, minWidth: 250 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{titulo}</div>
       <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3, minHeight: 30, lineHeight: 1.5 }}>{desc}</div>
       <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-        <label style={{ padding: "7px 12px", borderRadius: 6, backgroundColor: C.accent, color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+        <label style={{ padding: "7px 12px", borderRadius: 8, backgroundColor: C.accent, color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
           {cargando === kind ? "Procesando…" : "Subir archivo"}
           <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => subir(kind, e)} disabled={!!cargando} style={{ display: "none" }} />
         </label>
         {conSupabase && (
           <button onClick={() => desdeSupabase(kind)} disabled={!!cargando}
-            style={{ padding: "7px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
             Usar Supabase
           </button>
         )}
       </div>
-      <div style={{ fontSize: 10, color: fuentes[kind] ? C.green : C.textMuted, marginTop: 8, fontWeight: 600 }}>
+      <div style={{ fontSize: 12, color: fuentes[kind] ? C.green : C.textMuted, marginTop: 8, fontWeight: 600 }}>
         {fuentes[kind] || "Sin cargar"}
       </div>
     </div>
@@ -12639,7 +12658,7 @@ function ModulePronostico() {
   return (
     <div>
       <div style={{ marginBottom: 18 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: C.text }}>Pronóstico de carga y flota</h1>
+        <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0, color: C.text }}>Pronóstico de carga y flota</h1>
         <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>
           Backlog observado + maduración a 48 h → paradas → unidades. Compromiso en D−{cfg.leadDias || 2}.
         </p>
@@ -12648,7 +12667,7 @@ function ModulePronostico() {
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
         {TABS.map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
-            style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${tab === id ? C.accent : C.border}`, background: tab === id ? C.accent : C.white, color: tab === id ? "#fff" : C.textMuted, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+            style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${tab === id ? C.accent : C.border}`, background: tab === id ? C.accent : C.white, color: tab === id ? "#fff" : C.textMuted, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             {label}
           </button>
         ))}
@@ -12685,7 +12704,7 @@ function ModulePronostico() {
                   return (
                     <button key={est}
                       onClick={() => guardar({ estatusBacklog: activo ? cfg.estatusBacklog.filter(x => x !== est) : [...cfg.estatusBacklog, est] })}
-                      style={{ padding: "6px 12px", borderRadius: 16, border: `1px solid ${activo ? C.accent : C.border}`, background: activo ? C.accentLight : C.panelAlt, color: activo ? C.accent : C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      style={{ padding: "6px 12px", borderRadius: 16, border: `1px solid ${activo ? C.accent : C.border}`, background: activo ? C.accentLight : C.panelAlt, color: activo ? C.accent : C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
                       {est} <span style={{ opacity: 0.7 }}>({nf(n)})</span>
                     </button>
                   );
@@ -12693,7 +12712,7 @@ function ModulePronostico() {
               </div>
               <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <button onClick={() => guardar({ estatusBacklog: PRONO.sugerirEstatusBacklog((diag.creacion?.estatusUnicos || []).map(x => x[0])) })}
-                  style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
                   Sugerir automáticamente
                 </button>
                 <span style={{ fontSize: 12, color: C.textMuted }}>
@@ -12796,8 +12815,8 @@ function ModulePronostico() {
                   { label: "% del día", num: true, render: r => pct(r.pctSaturadas, 0) },
                   { label: "Piezas sin registro", num: true, render: r => nf(r.sinRegistro) },
                   { label: "Estado", render: r => r.saturado
-                    ? <span style={{ color: C.red, fontWeight: 700 }}>saturado</span>
-                    : r.rebote ? <span style={{ color: C.yellow, fontWeight: 700 }}>rebote</span>
+                    ? <span style={{ color: C.red, fontWeight: 600 }}>saturado</span>
+                    : r.rebote ? <span style={{ color: C.yellow, fontWeight: 600 }}>rebote</span>
                     : <span style={{ color: C.green }}>operable</span> },
                 ]}
                 rows={sat.detalle.slice(-30).reverse().map(r => ({ ...r, _destaca: r.saturado }))}
@@ -12810,7 +12829,7 @@ function ModulePronostico() {
               ? <ProAviso tipo="ok">No hay bloqueantes detectados con los datos cargados.</ProAviso>
               : <ProTabla
                   cols={[
-                    { label: "Sev", render: r => <span style={{ padding: "2px 7px", borderRadius: 4, fontSize: 10, fontWeight: 800, background: r.sev === "P0" ? C.redBg : C.yellowBg, color: r.sev === "P0" ? C.red : C.yellow }}>{r.sev}</span> },
+                    { label: "Sev", render: r => <span style={{ padding: "2px 7px", borderRadius: 4, fontSize: 12, fontWeight: 600, background: r.sev === "P0" ? C.redBg : C.yellowBg, color: r.sev === "P0" ? C.red : C.yellow }}>{r.sev}</span> },
                     { label: "Hueco", key: "hueco" },
                     { label: "Estado hoy", key: "estado" },
                     { label: "Impacto", key: "impacto", wrap: true },
@@ -12844,7 +12863,7 @@ function ModulePronostico() {
             <ProPanel title="Mapeo de columnas detectado" sub="Si algo quedó en rojo, el campo no se encontró y la etapa que depende de él va a estar apagada.">
               {Object.entries(mapeos).map(([kind, col]) => (
                 <div key={kind} style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: C.text, marginBottom: 6, textTransform: "capitalize" }}>{kind}</div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 6, textTransform: "capitalize" }}>{kind}</div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 5 }}>
                     {Object.entries(col).map(([campo, header]) => (
                       <div key={campo} style={{ fontSize: 11 }}>
@@ -12866,16 +12885,16 @@ function ModulePronostico() {
           <ProPanel title="Día a planear" sub="El único horizonte que decide algo es el del compromiso. Todo lo que entra al modelo se corta en la fecha de corte: nada de lo que pasó después existe para el pronóstico.">
             <div style={{ display: "flex", gap: 18, alignItems: "flex-end", flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, marginBottom: 4 }}>DÍA OBJETIVO (D)</div>
+                <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 600, marginBottom: 4 }}>DÍA OBJETIVO (D)</div>
                 {/* Ignora el vacío: limpiar el campo dejaría el corte sin fecha
                     y todo el pipeline calcularía sobre un día inexistente. */}
                 <input type="date" value={objetivo} onChange={(e) => e.target.value && setObjetivo(e.target.value)}
-                  style={{ padding: "7px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 13 }} />
+                  style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 13 }} />
               </div>
               <div>
-                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, marginBottom: 4 }}>LEAD TIME (DÍAS)</div>
+                <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 600, marginBottom: 4 }}>LEAD TIME (DÍAS)</div>
                 <input type="number" min="1" max="7" value={cfg.leadDias} onChange={(e) => guardar({ leadDias: Math.max(1, Math.min(7, parseInt(e.target.value) || 2)) })}
-                  style={{ width: 70, padding: "7px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 13 }} />
+                  style={{ width: 70, padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 13 }} />
               </div>
               <div style={{ fontSize: 12, color: C.textMuted, paddingBottom: 8 }}>
                 Corte en <strong style={{ color: C.accent }}>{corte}</strong> · horizonte {cfg.leadDias} día{cfg.leadDias > 1 ? "s" : ""}
@@ -13018,12 +13037,12 @@ function ModulePronostico() {
                       />
                       {clavesRaw.length > 0 && (
                         <div style={{ marginTop: 16 }}>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: C.text, marginBottom: 8 }}>Factores del horizonte</div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: C.text, marginBottom: 8 }}>Factores del horizonte</div>
                           <ProTabla
                             cols={[
                               { label: "Evento", render: r => r.k === "__feriado__" ? "Feriado (LFT)" : r.k },
                               { label: "Medido", num: true, render: r => r.med ? `×${nf(r.med.factor, 2)} (${r.med.n} días)` : <span style={{ color: C.textMuted }}>sin historia</span> },
-                              { label: "", render: r => r.med?.confundido ? <span style={{ color: C.yellow, fontSize: 10 }}>⚠ se traslapa con otro evento</span> : "" },
+                              { label: "", render: r => r.med?.confundido ? <span style={{ color: C.yellow, fontSize: 12 }}>⚠ se traslapa con otro evento</span> : "" },
                               { label: "Override manual", num: true, render: r => (
                                 <input type="number" step="0.1" min="0" placeholder={r.med ? nf(r.med.factor, 2) : "1.0"}
                                   value={cfg.factoresCalendario?.[r.k] ?? ""}
@@ -13067,7 +13086,7 @@ function ModulePronostico() {
                     { label: "Factor", num: true, render: r => `×${nf(cfg.factoresCalendario?.[r.nombre] ?? 1, 2)}` },
                     { label: "", render: r => (
                       <button onClick={() => guardar({ overlays: (cfg.overlays || []).filter(o => o.nombre !== r.nombre) })}
-                        style={{ padding: "2px 8px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.red, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Quitar</button>
+                        style={{ padding: "2px 8px", borderRadius: 4, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.red, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Quitar</button>
                     ) },
                   ]}
                   rows={cfg.overlays || []}
@@ -13076,10 +13095,10 @@ function ModulePronostico() {
                 <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
                   {[["nombre", "Nombre", "text", 190], ["desde", "Desde", "date", 150], ["hasta", "Hasta", "date", 150], ["factor", "Factor", "number", 80]].map(([k, label, tipo, w]) => (
                     <div key={k}>
-                      <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, marginBottom: 3 }}>{label.toUpperCase()}</div>
+                      <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 600, marginBottom: 3 }}>{label.toUpperCase()}</div>
                       <input type={tipo} step={tipo === "number" ? "0.1" : undefined} value={nuevoOverlay[k]}
                         onChange={(e) => setNuevoOverlay(o => ({ ...o, [k]: e.target.value }))}
-                        style={{ width: w, padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 12 }} />
+                        style={{ width: w, padding: "6px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 12 }} />
                     </div>
                   ))}
                   <button
@@ -13094,7 +13113,7 @@ function ModulePronostico() {
                       setNuevoOverlay({ nombre: "", desde: "", hasta: "", factor: "1.5" });
                       setMsg("✓ Overlay agregado: ya está afectando el inbound del horizonte.");
                     }}
-                    style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: C.accent, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                     Agregar
                   </button>
                 </div>
@@ -13123,7 +13142,7 @@ function ModulePronostico() {
                   { label: "Horas en ruta", num: true, render: r => nf(r.horasRuta, 1) },
                   { label: "Capacidad jornada", num: true, render: r => <strong style={{ color: C.accent }}>{nf(r.capacidadJornada)}</strong> },
                   { label: "Se carga", num: true, render: r => nf(r.cargadasMediana) },
-                  { label: "Sobrecarga", num: true, render: r => <span style={{ color: r.sobrecarga > 0 ? C.red : C.green, fontWeight: 700 }}>{r.sobrecarga > 0 ? "+" : ""}{nf(r.sobrecarga)}</span> },
+                  { label: "Sobrecarga", num: true, render: r => <span style={{ color: r.sobrecarga > 0 ? C.red : C.green, fontWeight: 600 }}>{r.sobrecarga > 0 ? "+" : ""}{nf(r.sobrecarga)}</span> },
                   { label: "% entrega", num: true, render: r => pct(r.pctEntrega, 0) },
                   { label: "Censuradas", num: true, render: r => pct(r.pctCensuradas, 0) },
                 ]}
@@ -13143,7 +13162,7 @@ function ModulePronostico() {
             title="Tipos de unidad"
             sub="Los rangos son piso y techo, no promedio. El techo es capacidad física; el piso es donde despachar deja de rendir. Se traslapan a propósito: por eso elegir la combinación más barata es optimización entera y no una división."
             right={<button onClick={precargarCostos} disabled={!carriers.length}
-              style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.accent}`, background: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.accent}`, background: C.accentLight, color: C.accent, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
               Precargar costos de Carriers
             </button>}
           >
@@ -13158,7 +13177,7 @@ function ModulePronostico() {
                   )
                 })),
                 { label: "Techo efectivo", num: true, render: r => (
-                  <span style={{ color: r.inviable ? C.red : r.limitadoPorJornada ? C.yellow : C.text, fontWeight: 700 }}>
+                  <span style={{ color: r.inviable ? C.red : r.limitadoPorJornada ? C.yellow : C.text, fontWeight: 600 }}>
                     {r.inviable ? "inviable" : nf(r.techoEfectivo)}{r.limitadoPorJornada && !r.inviable ? " ↓" : ""}
                   </span>
                 ) },
@@ -13212,7 +13231,7 @@ function ModulePronostico() {
               sub="Corre el ruteador de la tesis sobre las paradas muestreadas y busca el mínimo de vehículos con el que TODAS las rutas caben en la jornada. El conteo dice cuántas unidades caben por capacidad; esto dice cuántas exige la geografía. Ata la que se rompa primero."
               right={
                 <button onClick={simular} disabled={!!simEstado}
-                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: simEstado ? C.border : C.accent, color: "#fff", fontSize: 12, fontWeight: 700, cursor: simEstado ? "default" : "pointer" }}>
+                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: simEstado ? C.border : C.accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: simEstado ? "default" : "pointer" }}>
                   {simEstado ? "Simulando…" : "Simular ruteo"}
                 </button>
               }
@@ -13273,7 +13292,7 @@ function ModulePronostico() {
                         { label: "Paradas mín/máx", num: true, render: r => `${nf(r.minN)} / ${nf(r.maxN)}` },
                         { label: "Distancia total", num: true, render: r => `${nf(r.D)} km` },
                         { label: "CV (balance)", num: true, render: r => nf(r.CV, 3) },
-                        { label: "", render: r => <span style={{ color: r.ok ? C.green : C.red, fontWeight: 800 }}>{r.ok ? "cabe" : "no cabe"}</span> },
+                        { label: "", render: r => <span style={{ color: r.ok ? C.green : C.red, fontWeight: 600 }}>{r.ok ? "cabe" : "no cabe"}</span> },
                       ]}
                       rows={(res?.intentos || []).map(i => ({ ...i, _destaca: i.k === res?.k }))}
                     />
@@ -13296,7 +13315,7 @@ function ModulePronostico() {
                   <span style={{ fontSize: 11, color: C.textMuted }}>Días</span>
                   <input type="number" min="2" max="14" value={cfg.diasHorizonteMulti}
                     onChange={(e) => guardar({ diasHorizonteMulti: Math.max(2, Math.min(14, parseInt(e.target.value) || 5)) })}
-                    style={{ width: 58, padding: "5px 8px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 12, textAlign: "right" }} />
+                    style={{ width: 58, padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.text, fontSize: 12, textAlign: "right" }} />
                 </div>
               }
             >
@@ -13361,7 +13380,7 @@ function ModulePronostico() {
                       const csv = "Latitud,Longitud,Codigo postal,Municipio\n" + muestra.map(p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)},${p.cp || ""},${(p.municipio || "").replace(/,/g, " ")}`).join("\n");
                       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
                       const a = document.createElement("a"); a.href = url; a.download = `paradas_pronostico_${objetivo}.csv`; a.click(); URL.revokeObjectURL(url);
-                    }} style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: C.accent, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>
+                    }} style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", marginBottom: 14 }}>
                       Descargar paradas para el ruteador
                     </button>
                     <ProTabla
@@ -13385,14 +13404,14 @@ function ModulePronostico() {
           >
             <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-end" }}>
               <div>
-                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, marginBottom: 4 }}>C_FALTANTE — COSTO DE UNA ENTREGA NO REALIZADA ($)</div>
+                <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 600, marginBottom: 4 }}>C_FALTANTE — COSTO DE UNA ENTREGA NO REALIZADA ($)</div>
                 <input type="number" min="0" value={cfg.cFaltante} placeholder="reprogramación + reintento + SLA + cliente"
                   onChange={(e) => guardar({ cFaltante: e.target.value })}
-                  style={{ width: 260, padding: "8px 10px", borderRadius: 6, border: `1px solid ${+cfg.cFaltante > 0 ? C.border : C.red}`, background: C.panelAlt, color: C.text, fontSize: 13 }} />
+                  style={{ width: 260, padding: "8px 10px", borderRadius: 8, border: `1px solid ${+cfg.cFaltante > 0 ? C.border : C.red}`, background: C.panelAlt, color: C.text, fontSize: 13 }} />
               </div>
               <div>
-                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, marginBottom: 4 }}>C_OCIOSO — DÍA DE UNIDAD ($)</div>
-                <div style={{ padding: "8px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.panelAlt, color: cOciosoMedio > 0 ? C.text : C.red, fontSize: 13, width: 240 }}>
+                <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 600, marginBottom: 4 }}>C_OCIOSO — DÍA DE UNIDAD ($)</div>
+                <div style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panelAlt, color: cOciosoMedio > 0 ? C.text : C.red, fontSize: 13, width: 240 }}>
                   {cOciosoMedio > 0 ? `${money(cOciosoMedio)} (media de los tipos activos)` : "captúralos en la pestaña Flota"}
                 </div>
               </div>
@@ -13494,7 +13513,7 @@ function ModulePronostico() {
             sub="Replica la información disponible al comprometer la flota: en cada fold, todo lo que entra al modelo se corta en la fecha de compromiso. Se evalúa end-to-end — carga, paradas, asignación de unidades y costo — porque lo que decide algo son las unidades que el sistema habría pedido, no el error en paquetes."
             right={
               <button onClick={correrBacktest} disabled={btCargando || !creacion.length}
-                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: creacion.length ? C.accent : C.border, color: "#fff", fontSize: 12, fontWeight: 700, cursor: creacion.length ? "pointer" : "default" }}>
+                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: creacion.length ? C.accent : C.border, color: "#fff", fontSize: 12, fontWeight: 600, cursor: creacion.length ? "pointer" : "default" }}>
                 {btCargando ? "Corriendo…" : "Correr backtest"}
               </button>
             }
@@ -13514,7 +13533,7 @@ function ModulePronostico() {
                     { label: "Criterio de aceptación (§8)", key: "k", wrap: true },
                     { label: "Umbral", key: "u" },
                     { label: "Medido", key: "v", num: true },
-                    { label: "", render: r => <span style={{ color: r.pasa ? C.green : C.red, fontWeight: 800 }}>{r.pasa ? "PASA" : "NO PASA"}</span> },
+                    { label: "", render: r => <span style={{ color: r.pasa ? C.green : C.red, fontWeight: 600 }}>{r.pasa ? "PASA" : "NO PASA"}</span> },
                   ]}
                   rows={[
                     { k: "Cobertura — el intervalo p10–p90 cubre entre 75% y 85% de los días reales", u: "75–85%", v: pct(bt.metricas.cobertura, 0), pasa: bt.metricas.cobertura >= 75 && bt.metricas.cobertura <= 85 },
@@ -13549,7 +13568,7 @@ function ModulePronostico() {
                   { label: "Mejora vs capa anterior", num: true, render: r => r.mejoraPct == null
                     ? <span style={{ color: C.textMuted }}>línea base</span>
                     : <strong style={{ color: r.mejoraPct >= 5 ? C.green : r.mejoraPct > 0 ? C.yellow : C.red }}>{r.mejoraPct > 0 ? "+" : ""}{nf(r.mejoraPct, 1)}%</strong> },
-                  { label: "§8", render: r => r.pasa == null ? "—" : <span style={{ color: r.pasa ? C.green : C.red, fontWeight: 800 }}>{r.pasa ? "PASA" : "NO PASA"}</span> },
+                  { label: "§8", render: r => r.pasa == null ? "—" : <span style={{ color: r.pasa ? C.green : C.red, fontWeight: 600 }}>{r.pasa ? "PASA" : "NO PASA"}</span> },
                 ]}
                 rows={bt.fva.map(f => ({ ...f, _destaca: f.capa === "completo" }))}
               />
@@ -13586,10 +13605,10 @@ function ModulePronostico() {
                   { label: "p50", num: true, render: r => nf(r.p50) },
                   { label: "Error", num: true, render: r => <span style={{ color: Math.abs(r.p50 - r.real) > 0.15 * Math.max(1, r.real) ? C.red : C.text }}>{r.p50 - r.real > 0 ? "+" : ""}{nf(r.p50 - r.real)}</span> },
                   { label: "Naive", num: true, render: r => nf(r.naive) },
-                  { label: "En banda", render: r => <span style={{ color: r.dentroBanda ? C.green : C.red, fontWeight: 700 }}>{r.dentroBanda ? "sí" : "no"}</span> },
+                  { label: "En banda", render: r => <span style={{ color: r.dentroBanda ? C.green : C.red, fontWeight: 600 }}>{r.dentroBanda ? "sí" : "no"}</span> },
                   { label: "Unid. pedidas", num: true, render: r => nf(r.unidadesPron) },
                   { label: "Unid. necesarias", num: true, render: r => nf(r.unidadesReal) },
-                  { label: "Δ", num: true, render: r => <span style={{ color: Math.abs(r.errorUnidades) <= 1 ? C.green : C.red, fontWeight: 700 }}>{r.errorUnidades > 0 ? "+" : ""}{nf(r.errorUnidades)}</span> },
+                  { label: "Δ", num: true, render: r => <span style={{ color: Math.abs(r.errorUnidades) <= 1 ? C.green : C.red, fontWeight: 600 }}>{r.errorUnidades > 0 ? "+" : ""}{nf(r.errorUnidades)}</span> },
                   { label: "Utilización", num: true, render: r => pct(r.utilizacion, 0) },
                   { label: "Faltantes", num: true, render: r => nf(r.faltantes) },
                 ]}
@@ -13609,12 +13628,12 @@ function ModulePronostico() {
             right={
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={construirDs} disabled={!!dsEstado || !creacion.length}
-                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: creacion.length ? C.accent : C.border, color: "#fff", fontSize: 12, fontWeight: 700, cursor: creacion.length ? "pointer" : "default" }}>
+                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: creacion.length ? C.accent : C.border, color: "#fff", fontSize: 12, fontWeight: 600, cursor: creacion.length ? "pointer" : "default" }}>
                   {dsEstado || "Construir dataset"}
                 </button>
                 {ds?.filas.length > 0 && (
                   <button onClick={() => exportarDataset(true)}
-                    style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.accent}`, background: C.accentLight, color: C.accent, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.accent}`, background: C.accentLight, color: C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                     Exportar XLSX
                   </button>
                 )}
@@ -13666,7 +13685,7 @@ function ModulePronostico() {
                     { label: "pred", num: true, render: r => nf(r.pred_media) },
                     { label: "y_carga", num: true, render: r => r.y_carga == null ? <span style={{ color: C.accent }}>por planear</span> : nf(r.y_carga) },
                     { label: "residual", num: true, render: r => r.residual == null ? "—" : <span style={{ color: Math.abs(r.residual) > 0.2 * Math.max(1, r.y_carga) ? C.red : C.text }}>{r.residual > 0 ? "+" : ""}{nf(r.residual)}</span> },
-                    { label: "cens.", render: r => r.y_censurado ? <span style={{ color: C.red, fontWeight: 700 }}>sí</span> : "—" },
+                    { label: "cens.", render: r => r.y_censurado ? <span style={{ color: C.red, fontWeight: 600 }}>sí</span> : "—" },
                   ]}
                   rows={ds.filas.slice(-40).reverse()}
                 />
@@ -13680,7 +13699,7 @@ function ModulePronostico() {
               sub="Árboles de regresión con gradiente sobre el residual del stack A0–A2, con las features de negocio del dataset. La validación es un bloque final contiguo, no aleatoria: barajar filas de días consecutivos filtra el futuro por la puerta de atrás. Los días censurados se excluyen del entrenamiento — su residual mide falta de camiones, no error de pronóstico."
               right={
                 <button onClick={entrenarA4} disabled={!!a4Estado}
-                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: a4Estado ? C.border : C.accent, color: "#fff", fontSize: 12, fontWeight: 700, cursor: a4Estado ? "default" : "pointer" }}>
+                  style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: a4Estado ? C.border : C.accent, color: "#fff", fontSize: 12, fontWeight: 600, cursor: a4Estado ? "default" : "pointer" }}>
                   {a4Estado || "Entrenar A4"}
                 </button>
               }
@@ -13728,7 +13747,7 @@ function ModulePronostico() {
             <ProTabla
               compacta
               cols={[
-                { label: "Etapa", render: r => <span style={{ padding: "2px 7px", borderRadius: 4, fontSize: 10, fontWeight: 800, background: C.panelAlt, color: r.etapa === "target" ? C.green : r.etapa === "modelo" ? C.purple : C.textMuted }}>{r.etapa}</span> },
+                { label: "Etapa", render: r => <span style={{ padding: "2px 7px", borderRadius: 4, fontSize: 12, fontWeight: 600, background: C.panelAlt, color: r.etapa === "target" ? C.green : r.etapa === "modelo" ? C.purple : C.textMuted }}>{r.etapa}</span> },
                 { label: "Columna", render: r => <code style={{ fontSize: 11, color: C.text }}>{r.col}</code> },
                 { label: "Qué es", key: "desc", wrap: true },
               ]}
@@ -13745,7 +13764,7 @@ function ModulePronostico() {
 function ModulePlaceholder({ title, desc }) {
   return (
     <div>
-      <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>{title}</h1>
+      <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>{title}</h1>
       <p style={{ color: C.textMuted, fontSize: 13, marginTop: 2, marginBottom: 24 }}>{desc}</p>
       <div style={{ backgroundColor: C.white, borderRadius: 12, padding: 48, border: `1px solid ${C.border}`, textAlign: "center" }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>🚧</div>
@@ -13791,7 +13810,7 @@ export default function T1OpsFlotilla({ user, onLogout }) {
       return (
         <div style={{ padding: 40, textAlign: "center", color: C.textMuted }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>🔒</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 6 }}>Sin acceso</div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 6 }}>Sin acceso</div>
           <div style={{ fontSize: 13 }}>Tu rol ({ROLE_LABELS[role] || role}) no tiene permiso para este módulo.</div>
         </div>
       );
@@ -13823,20 +13842,21 @@ export default function T1OpsFlotilla({ user, onLogout }) {
     <div style={{ display: "flex", height: "100vh", fontFamily: "var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif", backgroundColor: C.bg, overflow: "hidden" }}>
       {/* Sidebar */}
       <aside style={{
-        width: sidebarCollapsed ? 60 : 230, backgroundColor: C.sidebar, display: "flex", flexDirection: "column",
+        width: sidebarCollapsed ? 60 : 236, backgroundColor: C.sidebar, display: "flex", flexDirection: "column",
         transition: "width 0.2s", flexShrink: 0, overflow: "hidden",
+        borderRight: `1px solid ${C.sidebarBorde}`,
       }}>
         {/* Logo */}
-        <div style={{ padding: sidebarCollapsed ? "16px 12px" : "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center", minHeight: 58 }}>
+        <div style={{ padding: sidebarCollapsed ? "16px 12px" : "16px 20px", borderBottom: `1px solid ${C.sidebarBorde}`, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 58 }}>
           <img src="/logo-t1.svg" alt="T1 Envíos" style={{ height: sidebarCollapsed ? 24 : 32, objectFit: "contain" }} />
         </div>
 
         {/* Navigation */}
         <nav style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
           {visibleSections.map((section, si) => (
-            <div key={si} style={{ marginBottom: 4 }}>
+            <div key={si} style={{ marginBottom: 6, padding: sidebarCollapsed ? 0 : "0 10px" }}>
               {!sidebarCollapsed && (
-                <div style={{ padding: "10px 20px 4px", fontSize: 9, fontWeight: 800, color: "rgba(255,255,255,0.25)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                <div style={{ padding: "10px 20px 4px", fontSize: 10.5, fontWeight: 600, color: C.sidebarSection, letterSpacing: "0.04em" }}>
                   {section.label}
                 </div>
               )}
@@ -13845,20 +13865,21 @@ export default function T1OpsFlotilla({ user, onLogout }) {
                 return (
                   <button key={item.id} onClick={() => setActivePage(item.id)} style={{
                     width: "100%", display: "flex", alignItems: "center", gap: 10,
-                    padding: sidebarCollapsed ? "9px 0" : "9px 20px",
+                    padding: sidebarCollapsed ? "10px 0" : "10px 14px",
                     justifyContent: sidebarCollapsed ? "center" : "flex-start",
                     backgroundColor: isActive ? C.sidebarActive : "transparent",
-                    color: isActive ? "white" : "rgba(255,255,255,0.50)",
-                    border: "none", cursor: "pointer", fontSize: 13, fontWeight: isActive ? 600 : 400,
-                    borderLeft: isActive ? `3px solid ${C.accent}` : "3px solid transparent",
-                    transition: "all 0.15s",
+                    color: isActive ? C.sidebarTextActive : C.sidebarText,
+                    border: "none", cursor: "pointer", fontSize: 14, fontWeight: isActive ? 600 : 500,
+                    // Píldora redondeada separada del borde, como T1 — no una
+                    // franja a sangre con barra de acento a la izquierda.
+                    borderRadius: 8, transition: "background-color .15s, color .15s",
                   }}
-                  onMouseEnter={e => { if (!isActive) { e.currentTarget.style.backgroundColor = C.sidebarHover; e.currentTarget.style.color = "white"; }}}
-                  onMouseLeave={e => { if (!isActive) { e.currentTarget.style.backgroundColor = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.50)"; }}}>
+                  onMouseEnter={e => { if (!isActive) { e.currentTarget.style.backgroundColor = C.sidebarHover; e.currentTarget.style.color = C.sidebarTextActive; }}}
+                  onMouseLeave={e => { if (!isActive) { e.currentTarget.style.backgroundColor = "transparent"; e.currentTarget.style.color = C.sidebarText; }}}>
                     <item.icon />
                     {!sidebarCollapsed && <span style={{ flex: 1, textAlign: "left" }}>{item.label}</span>}
                     {!sidebarCollapsed && item.badge && (
-                      <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 4, backgroundColor: C.accent, color: "white" }}>{item.badge}</span>
+                      <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 4, backgroundColor: C.accent, color: "white" }}>{item.badge}</span>
                     )}
                   </button>
                 );
@@ -13868,10 +13889,10 @@ export default function T1OpsFlotilla({ user, onLogout }) {
         </nav>
 
         {/* Collapse */}
-        <div style={{ padding: 10, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+        <div style={{ padding: 10, borderTop: `1px solid ${C.sidebarBorde}` }}>
           <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} style={{
-            width: "100%", padding: 8, borderRadius: 6, border: "none",
-            backgroundColor: "transparent", color: "rgba(255,255,255,0.3)",
+            width: "100%", padding: 8, borderRadius: 8, border: "none",
+            backgroundColor: "transparent", color: C.sidebarSection,
             cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
           }}>
             <IC.Menu />
@@ -13913,16 +13934,16 @@ export default function T1OpsFlotilla({ user, onLogout }) {
               <span style={{ position: "absolute", top: 4, right: 4, width: 8, height: 8, borderRadius: "50%", backgroundColor: C.accent }} />
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 34, height: 34, borderRadius: "50%", backgroundColor: C.accent, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12, fontWeight: 800 }}>
+              <div style={{ width: 34, height: 34, borderRadius: "50%", backgroundColor: C.accent, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: 12, fontWeight: 600 }}>
                 {(user?.nombre || "OPS").substring(0, 2).toUpperCase()}
               </div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{user?.nombre || "OPS T1 Envíos"}</div>
-                <div style={{ fontSize: 10, color: C.textMuted }}>{ROLE_LABELS[role] || "Flotilla Propia"}</div>
+                <div style={{ fontSize: 12, color: C.textMuted }}>{ROLE_LABELS[role] || "Flotilla Propia"}</div>
               </div>
               {onLogout && (
                 <button onClick={onLogout} type="button" title="Cerrar sesión"
-                  style={{ marginLeft: 4, padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.border}`, backgroundColor: C.bg, color: C.textMuted, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  style={{ marginLeft: 4, padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.border}`, backgroundColor: C.bg, color: C.textMuted, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
                   Salir
                 </button>
               )}
