@@ -104,5 +104,19 @@ await esperar(9000);
 await volcar("MODO RANGO (20 sep – 20 oct)");
 await foto("rango-02-rango");
 
+// Bajar a las tablas de costo: no caben en el primer pantallazo.
+for (const [ancla, nombre] of [["Half mile — costo del servicio", "rango-03-halfmile"],
+                               ["Entrega final por proveedor", "rango-04-final"],
+                               ["todo incluido", "rango-05-graficas"]]) {
+  const ok = await js(`(() => {
+    const d = [...document.querySelectorAll("div")].find(x => x.children.length === 0 &&
+      x.textContent.trim().startsWith(${JSON.stringify(ancla)}));
+    if (!d) return false;
+    d.scrollIntoView({ block: "start" }); window.scrollBy(0, -90); return true; })()`);
+  if (!ok) { console.log(`  ⚠ no encontré «${ancla}»`); continue; }
+  await esperar(900);
+  await foto(nombre);
+}
+
 ws.close(); chrome.kill();
 try { rmSync(perfil, { recursive: true, force: true }); } catch {}

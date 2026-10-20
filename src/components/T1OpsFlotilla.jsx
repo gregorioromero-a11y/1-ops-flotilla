@@ -2648,6 +2648,19 @@ const evalFormula = (expr, costo) => {
 // Normalize strings for operator name matching (case/accents/spaces insensitive)
 const norm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
 
+// Clave de agrupación de PROVEEDOR. Además de lo que hace `norm`, descarta
+// espacios y puntuación.
+//
+// `norm` junta "VERDE DISEÑO LOGISTIC" con "Verde Diseño Logistic" porque sólo
+// cambian mayúsculas y acentos, pero NO podía juntar "EXCLUSIDELIVERY" con
+// "EXCLUSI DELIVERY": ahí falta un espacio, no sobra. El resultado era el mismo
+// proveedor partido en dos renglones de la tabla de costos, con dos costos por
+// paquete distintos y ninguno correcto.
+//
+// Se usa SÓLO para proveedores. Aplicarlo a nombres de operador sería arriesgado
+// —dos personas pueden diferir sólo por un espacio— y ahí `norm` basta.
+const normProv = s => norm(s).replace(/[^a-z0-9]/g, "");
+
 // Lookup unit + provider + base cost for a ruta based on matching automatic asistencia
 // record (same day + same operator name) joined with carriers catalog.
 // Special cases:
@@ -2949,7 +2962,7 @@ function calcularCostos(rutas, motor) {
   const costosPorCarrier = {};
   rutaCosto.forEach(x => {
     const orig = (x.r.carrier || "Sin carrier").trim() || "Sin carrier";
-    const key = norm(orig) || "sin carrier";
+    const key = normProv(orig) || "sin carrier";
     if (!costosPorCarrier[key]) costosPorCarrier[key] = {
       carrier: orig, _nameCounts: {}, _operadores: new Set(),
       rutas: 0, rutasUM: 0, rutasHM: 0, costo: 0, costoUM: 0, costoHM: 0, entregadosUM: 0, entregadosHM: 0,
@@ -3964,10 +3977,10 @@ function ModuleEnvios() {
     if (filter === "En riesgo" && !(getRisk(r) === "high" || getRisk(r) === "medium")) return false;
     if (filter === "Completadas" && r.status !== "Completada") return false;
     if (filterProveedor !== "Todos") {
-      const provNorm = norm(filterProveedor);
-      const carrierMatch = norm(r.carrier) === provNorm;
+      const provNorm = normProv(filterProveedor);
+      const carrierMatch = normProv(r.carrier) === provNorm;
       const info = carrierMatch ? null : (r._esAsistencia ? null : getCostoInfo(r));
-      const inferidoMatch = info && info.proveedor && norm(info.proveedor) === provNorm;
+      const inferidoMatch = info && info.proveedor && normProv(info.proveedor) === provNorm;
       if (!carrierMatch && !inferidoMatch) return false;
     }
     if (filterOperador !== "Todos" && norm(r.operador) !== norm(filterOperador)) return false;
@@ -3983,7 +3996,7 @@ function ModuleEnvios() {
     const counts = new Map();
     rutas.forEach(r => {
       if (!r.carrier || r.carrier === "—") return;
-      const k = norm(r.carrier);
+      const k = normProv(r.carrier);
       if (!counts.has(k)) counts.set(k, new Map());
       counts.get(k).set(r.carrier, (counts.get(k).get(r.carrier) || 0) + 1);
     });
@@ -4023,7 +4036,7 @@ function ModuleEnvios() {
   // (el costo unitario se comparte y los paquetes se suman). No aplica a tipos
   // de tarifa fija porque ya cobran por paquete (dedup es equivalente).
   // Agregación compartida (ver calcularCostos, a nivel de módulo).
-  const { esDedup, getDedupInfo, rutaCosto, costoTotalDiaNuevo, entregadosTotal, costoPorPaqGlobal, sinAsistencia, sinAsistenciaPermisible, crossSinRecol, bucketDeOperacion, DESGLOSE_ORDEN, DESGLOSE_COLOR, desgloseList, desgloseTotalPaqFinal, carrierCostList, carrierTotCostoUM, carrierTotCostoHM, carrierTotEntHM, hmVolumenMalCapturado, asignadosFinalTotal, entregadosFinalTotal } = useMemo(
+  const { esDedup, getDedupInfo, rutaCosto, costoTotalDiaNuevo, entregadosTotal, costoPorPaqGlobal, sinAsistencia, sinAsistenciaPermisible, crossSinRecol, bucketDeOperacion, DESGLOSE_ORDEN, DESGLOSE_COLOR, desgloseList, desgloseTotalPaqFinal, carrierCostList, carrierTotCostoUM, carrierTotCostoHM, carrierTotEntHM, hmVolumenMalCapturado, asignadosFinalTotal, entregadosFinalTotal, movidosHMTotal, costoFinalTotal } = useMemo(
     () => calcularCostos(rutas, { getCostoInfo, esPermisible }),
     [rutas, getCostoInfo, esPermisible]
   );
@@ -4032,10 +4045,99 @@ function ModuleEnvios() {
   // Salen de carrierCostList, que ya está acotado al periodo de la barra de
   // fechas (rutas se recarga al cambiarla), así que gráficas y tablas no pueden
   // mostrar periodos distintos.
-  const graficaCostoProv = useMemo(() => carrierCostList
-    .map(c => ({ nombre: c.carrier, valores: { um: c.costoUM, mm: c.costoHM }, total: c.costoUM + c.costoHM }))
-    .filter(d => d.total > 0)
-    .sort((a, b) => b.total - a.total), [carrierCostList]);
+  // ── MODELO DE COSTO EN DOS SERVICIOS ───────────────────────────────────
+  //
+  // Half mile y entrega final son SERVICIOS DISTINTOS y se costean por
+  // separado. Mezclarlos castiga a quien hace los dos: la tabla anterior metía
+  // el costo de half mile de un proveedor en el numerador y lo dividía entre
+  // sus entregas de última milla, que no son el servicio que ese gasto compró.
+  // Verde Diseño Logistic salía en $78.22 cuando su entrega final cuesta
+  // $49.61 — 58 % de inflación, puro artefacto de atribución.
+  //
+  // El half mile es un servicio DE RED: mueve paquetes que después entrega
+  // cualquiera. Su costo se convierte en tarifa unitaria y se cobra como
+  // recargo fijo sobre cada paquete entregado, lo haga quien lo haga.
+  //
+  //   tarifa HM = costo total de half mile ÷ paquetes que half mile movió
+  //   todo incluido = (costo de entrega final ÷ entregados) + tarifa HM
+  //
+  // OJO CON EL CUADRE: la tarifa se calcula sobre paquetes MOVIDOS y se aplica
+  // sobre paquetes ENTREGADOS, que no son el mismo conteo. La diferencia se
+  // reporta en pantalla en vez de esconderse — quien prefactura necesita saber
+  // que el reparto por proveedor no suma exactamente el costo real.
+  // NOMBRES DE PROVEEDOR SOSPECHOSAMENTE PARECIDOS.
+  //
+  // `normProv` junta las grafías que sólo difieren en mayúsculas, acentos,
+  // espacios o puntuación. Lo que NO puede es adivinar una errata:
+  // "ExcatoLogistica" y "EXACTO LOGISTICA" eran el mismo proveedor —Excato por
+  // Exacto— y vivieron meses como dos renglones con $48.28 y $38.66 por
+  // paquete, ninguno real. Nadie lo notó porque nada lo señalaba.
+  //
+  // Esto no corrige: avisa. Corregir por parecido automáticamente fusionaría
+  // proveedores distintos de nombre similar, que es un error peor y silencioso.
+  const nombresSospechosos = useMemo(() => {
+    const vistos = new Map();
+    for (const r of rutas) {
+      const c = (r.carrier || "").trim();
+      if (!c || c === "—") continue;
+      const k = normProv(c);
+      if (!vistos.has(k)) vistos.set(k, { nombre: c, rutas: 0 });
+      vistos.get(k).rutas++;
+    }
+    const lista = [...vistos.values()];
+    const pares = [];
+    for (let i = 0; i < lista.length; i++) {
+      for (let j = i + 1; j < lista.length; j++) {
+        const a = normProv(lista[i].nombre), b = normProv(lista[j].nombre);
+        if (Math.abs(a.length - b.length) > 3) continue;
+        // Similitud por bigramas: barata y suficiente para erratas de 1–2 letras.
+        const big = s => { const g = new Set(); for (let k = 0; k < s.length - 1; k++) g.add(s.slice(k, k + 2)); return g; };
+        const ga = big(a), gb = big(b);
+        if (!ga.size || !gb.size) continue;
+        let comunes = 0; for (const g of ga) if (gb.has(g)) comunes++;
+        const sim = (2 * comunes) / (ga.size + gb.size);
+        if (sim >= 0.8) pares.push({ a: lista[i], b: lista[j], sim });
+      }
+    }
+    return pares.sort((x, y) => y.sim - x.sim);
+  }, [rutas]);
+
+  const tarifaHM = movidosHMTotal > 0 ? carrierTotCostoHM / movidosHMTotal : 0;
+  const hmRepartido = tarifaHM * entregadosFinalTotal;
+  const hmDescuadre = hmRepartido - carrierTotCostoHM;
+
+  // Proveedores que PRESTAN half mile, con su propia unidad de trabajo.
+  const provHM = useMemo(() => carrierCostList
+    .filter(c => c.costoHM > 0)
+    .map(c => ({ ...c, unit: c.movidosHM > 0 ? c.costoHM / c.movidosHM : null }))
+    .sort((a, b) => b.costoHM - a.costoHM), [carrierCostList]);
+
+  // Proveedores que ENTREGAN al cliente final (última milla, foráneo y PETCO:
+  // los tres terminan en la puerta). Numerador y denominador del mismo
+  // conjunto, sin nada de half mile.
+  const provFinal = useMemo(() => carrierCostList
+    .filter(c => c.costoFinal > 0 || c.entregadosFinal > 0)
+    .map(c => {
+      const propio = c.entregadosFinal > 0 ? c.costoFinal / c.entregadosFinal : null;
+      return { ...c, propio, todoIncluido: propio != null ? propio + tarifaHM : null };
+    })
+    .sort((a, b) => b.costoFinal - a.costoFinal), [carrierCostList, tarifaHM]);
+
+  const graficaCostoHM = useMemo(() => provHM
+    .filter(c => c.unit != null)
+    .map(c => ({ nombre: c.carrier, valores: { u: c.unit }, total: c.unit }))
+    .sort((a, b) => b.total - a.total), [provHM]);
+
+  // La gráfica que de verdad compara: todos los proveedores en la misma vara,
+  // con el recargo de red ya incluido.
+  const graficaTodoIncluido = useMemo(() => provFinal
+    .filter(c => c.todoIncluido != null && c.entregadosFinal >= 20)
+    .map(c => ({ nombre: c.carrier, valores: { propio: c.propio, hm: tarifaHM }, total: c.todoIncluido }))
+    .sort((a, b) => b.total - a.total), [provFinal, tarifaHM]);
+
+  const promedioTodoIncluido = entregadosFinalTotal > 0
+    ? (costoFinalTotal / entregadosFinalTotal) + tarifaHM : 0;
+
 
   // % de entrega = entregas finales ÷ asignados finales. Excluye media milla:
   // una recolección no es una entrega y mezclarla inventaría un porcentaje que
@@ -4298,56 +4400,148 @@ function ModuleEnvios() {
         </div>
       )}
 
-      {/* Cost by carrier table */}
-      {carrierCostList.length > 0 && (
+      {nombresSospechosos.length > 0 && (
+        <div style={{ backgroundColor: C.yellowBg, borderRadius: 12, border: "1px solid " + C.yellow + "55", padding: "12px 16px", marginBottom: 20, fontSize: 12, color: C.yellow, lineHeight: 1.6 }}>
+          <b>Nombres de proveedor casi idénticos.</b> Se están contando como distintos, así que su costo por paquete sale partido y ninguno es el real.
+          {nombresSospechosos.slice(0, 4).map((pr, i) => (
+            <div key={i} style={{ marginTop: 5 }}>
+              · <b>{pr.a.nombre}</b> ({pr.a.rutas} rutas) y <b>{pr.b.nombre}</b> ({pr.b.rutas} rutas) — {Math.round(pr.sim * 100)} % de parecido
+            </div>
+          ))}
+          <div style={{ marginTop: 7, color: C.textMuted }}>
+            Si son el mismo proveedor, hay que corregir la grafía en la base: mientras siga mal escrita, se vuelve a partir en Consultas, en el manifiesto y en la prefactura.
+          </div>
+        </div>
+      )}
+
+      {/* ── SERVICIO 1 · HALF MILE ────────────────────────────────────────
+          Sólo los proveedores que PRESTAN el servicio, medidos contra su propia
+          unidad de trabajo: los paquetes que movieron. Antes este costo se
+          sumaba al del proveedor y se dividía entre sus entregas de última
+          milla, lo que inflaba a quien hace las dos cosas. */}
+      {provHM.length > 0 && (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, fontSize: 13, fontWeight: 600, color: C.text }}>
-            Costo por Carrier — Periodo seleccionado
-            <span style={{ fontWeight: 500, color: C.textMuted, fontSize: 11, marginLeft: 8 }}>(costo real calculado)</span>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Half mile — costo del servicio</div>
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Movimiento intermedio. No es entrega al cliente.</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 24, fontWeight: 600, color: VIZ.costo, lineHeight: 1.1 }}>${tarifaHM.toFixed(2)}</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>tarifa de red por paquete movido</div>
+            </div>
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "2px solid " + C.border }}>
-                {["Carrier", "Rutas", "Costo ÚM", "Costo HM", "Costo Total", "Entregados ÚM", "Entregados HM", "Costo/Paquete"].map(h => (
-                  <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 12, fontWeight: 600, color: C.textMuted,  }}>{h}</th>
+                {["Proveedor", "Rutas", "Paquetes movidos", "Costo half mile", "$/paquete movido"].map((h, n) => (
+                  <th key={h} style={{ padding: "8px 14px", textAlign: n === 0 ? "left" : "right", fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {carrierCostList.map((cc, i) => {
-                // Costo/paquete = costo total ÷ entregados finales (ÚM/foráneo/PETCO),
-                // EXCLUYE los entregados HM (recolecciones intermedias).
-                const cppq = cc.entregadosUM > 0 ? (cc.costo / cc.entregadosUM).toFixed(2) : "—";
-                return (
-                  <tr key={i} style={{ borderBottom: "1px solid " + C.border }}>
-                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{cc.carrier}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13 }}>{cc.rutas}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, color: C.green, fontWeight: 600 }}>${Math.round(cc.costoUM).toLocaleString()}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, color: C.blue, fontWeight: 600 }}>${Math.round(cc.costoHM).toLocaleString()}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600 }}>${Math.round(cc.costo).toLocaleString()}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{cc.entregadosUM.toLocaleString()}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, color: C.textMuted }}>{cc.entregadosHM > 0 ? cc.entregadosHM.toLocaleString() : "—"}</td>
-                    <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.accent }}>{typeof cppq === "string" && cppq === "—" ? "—" : "$" + cppq}</td>
-                  </tr>
-                );
-              })}
+              {provHM.map((c, n) => (
+                <tr key={n} style={{ borderBottom: "1px solid " + C.border }}>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{c.carrier}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right" }}>{c.rutasHM}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right" }}>{c.movidosHM.toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", color: VIZ.costo, fontWeight: 600 }}>${Math.round(c.costoHM).toLocaleString()}</td>
+                  {/* Contra el promedio de red: quién mueve caro y quién barato. */}
+                  <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600, color: c.unit == null ? C.textFaint : (c.unit > tarifaHM * 1.15 ? C.red : c.unit < tarifaHM * 0.85 ? C.green : C.text) }}>
+                    {c.unit != null ? "$" + c.unit.toFixed(2) : "—"}
+                  </td>
+                </tr>
+              ))}
               <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
                 <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>TOTAL</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{carrierCostList.reduce((s, c) => s + c.rutas, 0)}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.green }}>${Math.round(carrierTotCostoUM).toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.blue }}>${Math.round(carrierTotCostoHM).toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 14, fontWeight: 600 }}>${Math.round(costoTotalDiaNuevo).toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>{entregadosTotal.toLocaleString()}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.textMuted }}>{carrierTotEntHM > 0 ? carrierTotEntHM.toLocaleString() : "—"}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: C.accent }}>{entregadosTotal > 0 ? "$" + costoPorPaqGlobal.toFixed(2) : "—"}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600 }}>{provHM.reduce((s, c) => s + c.rutasHM, 0)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600 }}>{movidosHMTotal.toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600, color: VIZ.costo }}>${Math.round(carrierTotCostoHM).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600 }}>${tarifaHM.toFixed(2)}</td>
               </tr>
             </tbody>
           </table>
-          <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border }}>
-            Costo/Paquete = Costo Total ÷ Entregados ÚM (incluye foráneo/PETCO como entrega final). Los Entregados HM son recolecciones intermedias: no entran al denominador, su costo se amortiza en última milla.
+          {hmVolumenMalCapturado > 0 && (
+            <div style={{ padding: "10px 18px", fontSize: 11, color: C.yellow, backgroundColor: C.yellowBg, borderTop: "1px solid " + C.border }}>
+              ⚠ {hmVolumenMalCapturado} ruta(s) traen su volumen en <b>entregados</b> en vez de en <b>recolecciones</b>. Se contaron igual para no dejar el denominador en cero, pero la tarifa de red depende de ese conteo.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── SERVICIO 2 · ENTREGA FINAL, Y EL COSTO TODO INCLUIDO ──────────
+          Una sola tabla y no dos: separar "costo de entrega final" de "costo
+          total" repetiría los mismos proveedores en dos bloques, que es
+          justo lo que se acaba de quitar de esta pantalla.
+
+          `costoFinal` abarca última milla, foráneo y PETCO: los tres terminan
+          en la puerta del cliente, así que numerador y denominador son del
+          mismo conjunto. Half mile no entra — entra después, como recargo. */}
+      {provFinal.length > 0 && (
+        <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Entrega final por proveedor — costo propio y todo incluido</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+              Última milla, foráneo y PETCO. El recargo de red de ${tarifaHM.toFixed(2)} lo paga cada paquete entregado, lo haya movido quien lo haya movido.
+            </div>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid " + C.border }}>
+                {["Proveedor", "Rutas", "Entregados", "Costo entrega final", "$/paquete propio", "+ recargo HM", "Todo incluido", "Costo facturado"].map((h, n) => (
+                  <th key={h} style={{ padding: "8px 14px", textAlign: n === 0 ? "left" : "right", fontSize: 12, fontWeight: 600, color: C.textMuted, letterSpacing: 0, whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {provFinal.map((c, n) => (
+                <tr key={n} style={{ borderBottom: "1px solid " + C.border }}>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>{c.carrier}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right" }}>{c.rutasFinal}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right" }}>{c.entregadosFinal.toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", color: VIZ.entrega, fontWeight: 600 }}>${Math.round(c.costoFinal).toLocaleString()}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600 }}>{c.propio != null ? "$" + c.propio.toFixed(2) : "—"}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 12, textAlign: "right", color: C.textMuted }}>{c.propio != null ? "+$" + tarifaHM.toFixed(2) : "—"}</td>
+                  {/* La cifra con la que se comparan proveedores entre sí. */}
+                  <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600, color: C.accent }}>{c.todoIncluido != null ? "$" + c.todoIncluido.toFixed(2) : "—"}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", color: C.textMuted }} title="Lo que se le paga a este proveedor: entrega final + el half mile que haya prestado">
+                    ${Math.round(c.costo).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+              <tr style={{ backgroundColor: C.panelAlt, borderTop: "2px solid " + C.border }}>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>TOTAL</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600 }}>{provFinal.reduce((s, c) => s + c.rutasFinal, 0)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600 }}>{entregadosFinalTotal.toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600, color: VIZ.entrega }}>${Math.round(costoFinalTotal).toLocaleString()}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600 }}>{entregadosFinalTotal > 0 ? "$" + (costoFinalTotal / entregadosFinalTotal).toFixed(2) : "—"}</td>
+                <td style={{ padding: "10px 14px", fontSize: 12, textAlign: "right", color: C.textMuted }}>+${tarifaHM.toFixed(2)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600, color: C.accent }}>${promedioTodoIncluido.toFixed(2)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, textAlign: "right", fontWeight: 600 }}>${Math.round(costoTotalDiaNuevo).toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+          {/* EL DESCUADRE, A LA VISTA. La tarifa se calcula sobre paquetes
+              MOVIDOS y se cobra sobre paquetes ENTREGADOS, que no son el mismo
+              conteo. Quien prefactura tiene que saber que la columna "todo
+              incluido" no suma exactamente el costo real. */}
+          <div style={{ padding: "10px 18px", fontSize: 11, color: C.textMuted, borderTop: "1px solid " + C.border, lineHeight: 1.55 }}>
+            <b>$/paquete propio</b> es el costo de entrega de cada proveedor, sin half mile: con esto se juzga su operación.
+            <b> Todo incluido</b> le suma el recargo de red y es la cifra con la que se comparan entre sí.
+            <b> Costo facturado</b> es lo que se le paga —entrega final más el half mile que haya prestado— y es lo que suma el total real.
+            {Math.abs(hmDescuadre) >= 1 && (
+              <> {" "}· La tarifa de red sale de dividir entre paquetes <b>movidos</b> ({movidosHMTotal.toLocaleString()}) y se cobra sobre paquetes <b>entregados</b> ({entregadosFinalTotal.toLocaleString()}),
+              así que el recargo reparte ${Math.round(hmRepartido).toLocaleString()} contra ${Math.round(carrierTotCostoHM).toLocaleString()} de costo real:{" "}
+              <b style={{ color: hmDescuadre > 0 ? C.yellow : C.blue }}>
+                {hmDescuadre > 0 ? "sobreasigna" : "subasigna"} ${Math.abs(Math.round(hmDescuadre)).toLocaleString()} ({Math.abs(hmDescuadre / carrierTotCostoHM * 100).toFixed(1)} %)
+              </b>. Para facturar manda la columna <b>Costo facturado</b>.</>
+            )}
           </div>
         </div>
       )}
+
 
       {/* DESGLOSE POR PROVEEDOR — COLAPSADO.
           Estas tres tablas son SUBCONJUNTOS de "Costo por Carrier", que está
@@ -4532,23 +4726,55 @@ function ModuleEnvios() {
           tabular justo arriba, así que ningún valor queda detrás de un color ni
           de un tooltip. Las dos leen del mismo periodo que las tablas —el que
           fija la barra de fechas— porque `rutas` ya viene acotado al rango. */}
-      {graficaCostoProv.length > 0 && (
+      {provFinal.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 16, marginBottom: 20 }}>
+          {/* La gráfica que COMPARA proveedores: todos en la misma vara, con
+              el recargo de red incluido, y la línea de referencia en el
+              promedio. Apilada para que se vea cuánto del costo es suyo y
+              cuánto es la red — un proveedor caro por su operación y uno caro
+              por el recargo exigen decisiones distintas.
+
+              Sustituye a la gráfica de costo total apilado ÚM+MM, que sumaba
+              dos servicios distintos en una barra y repetía lo que la tabla
+              ya decía. */}
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
             <div style={{ padding: "14px 18px 12px" }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Costo por proveedor</div>
-              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Última milla y media milla, ordenado por costo total</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Costo por paquete entregado, todo incluido</div>
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                Costo propio de entrega más el recargo de red de ${tarifaHM.toFixed(2)}. Desde 20 entregas.
+              </div>
             </div>
             <BarrasHorizontales
-              datos={graficaCostoProv}
+              datos={graficaTodoIncluido}
               series={[
-                { key: "um", label: "Última milla", color: VIZ.entrega },
-                { key: "mm", label: "Media milla", color: VIZ.costo },
+                { key: "propio", label: "Costo propio de entrega", color: VIZ.entrega },
+                { key: "hm", label: "Recargo half mile", color: VIZ.costo },
               ]}
-              fmt={v => "$" + Math.round(v).toLocaleString("es-MX")}
+              fmt={v => "$" + v.toFixed(2)}
               anchoEtiqueta={168}
+              refValor={promedioTodoIncluido}
+              refEtiqueta={`Promedio de red: $${promedioTodoIncluido.toFixed(2)}`}
             />
           </div>
+
+          {graficaCostoHM.length > 0 && (
+            <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
+              <div style={{ padding: "14px 18px 12px" }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Half mile — costo por paquete movido</div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                  Sólo quien presta el servicio, contra su propia unidad de trabajo
+                </div>
+              </div>
+              <BarrasHorizontales
+                datos={graficaCostoHM}
+                series={[{ key: "u", label: "$/paquete movido", color: VIZ.costo }]}
+                fmt={v => "$" + v.toFixed(2)}
+                anchoEtiqueta={168}
+                refValor={tarifaHM}
+                refEtiqueta={`Tarifa de red: $${tarifaHM.toFixed(2)}`}
+              />
+            </div>
+          )}
 
           <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden" }}>
             <div style={{ padding: "14px 18px 12px" }}>
