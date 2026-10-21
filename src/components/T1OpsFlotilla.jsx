@@ -4419,7 +4419,7 @@ function ModuleEnvios() {
           unidad de trabajo: los paquetes que movieron. Antes este costo se
           sumaba al del proveedor y se dividía entre sus entregas de última
           milla, lo que inflaba a quien hace las dos cosas. */}
-      {provHM.length > 0 && (
+      {provHM.length > 0 ? (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
           <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 10 }}>
             <div>
@@ -4467,6 +4467,11 @@ function ModuleEnvios() {
             </div>
           )}
         </div>
+      ) : (
+        <div style={{ backgroundColor: C.panel, borderRadius: 12, border: "1px dashed " + C.border, padding: "18px 20px", marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Half mile — costo del servicio</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 5, lineHeight: 1.5 }}>No hubo rutas de media milla en este periodo, así que no hay tarifa de red que calcular. Si esperabas ver movimiento, revisa que las rutas estén marcadas con tipo HalfMile o Crossdock.</div>
+        </div>
       )}
 
       {/* ── SERVICIO 2 · ENTREGA FINAL, Y EL COSTO TODO INCLUIDO ──────────
@@ -4477,7 +4482,7 @@ function ModuleEnvios() {
           `costoFinal` abarca última milla, foráneo y PETCO: los tres terminan
           en la puerta del cliente, así que numerador y denominador son del
           mismo conjunto. Half mile no entra — entra después, como recargo. */}
-      {provFinal.length > 0 && (
+      {provFinal.length > 0 ? (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
           <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Entrega final por proveedor — costo propio y todo incluido</div>
@@ -4539,6 +4544,11 @@ function ModuleEnvios() {
               </b>. Para facturar manda la columna <b>Costo facturado</b>.</>
             )}
           </div>
+        </div>
+      ) : (
+        <div style={{ backgroundColor: C.panel, borderRadius: 12, border: "1px dashed " + C.border, padding: "18px 20px", marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Entrega final por proveedor — costo propio y todo incluido</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 5, lineHeight: 1.5 }}>No hubo rutas de entrega final en este periodo. Ojo: las filas marcadas ASISTENCIA son registros de operador sin volumen capturado y no se costean — aparecen en la tabla de abajo pero no aquí.</div>
         </div>
       )}
 

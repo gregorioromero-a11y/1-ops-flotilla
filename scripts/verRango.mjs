@@ -83,6 +83,7 @@ const volcar = async (etapa) => {
   return r;
 };
 
+await esperar(5000);
 await volcar("MODO DÍA");
 await foto("rango-01-dia");
 
