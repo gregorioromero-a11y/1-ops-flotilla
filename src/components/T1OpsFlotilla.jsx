@@ -3096,6 +3096,15 @@ function ModuleEnvios() {
     almacen: "T1 ENVIOS",
   });
   const [manualForm, setManualForm] = useState(blankManual());
+  // Turno de carga. loadRutas se dispara desde varios lados a la vez —montaje,
+  // cambio de "desde", cambio de "hasta", y los eventos de focus y
+  // visibilitychange— y cada invocación tarda ~16 s porque baja la tabla
+  // completa. Sin este guardia la PRIMERA en terminar apagaba `loading` y
+  // escribía SU resultado, aunque fuera de un rango de fechas ya descartado:
+  // la pantalla mostraba "Total rutas 0" y "No hubo rutas en este periodo"
+  // durante diez segundos con los datos aún bajando, y a veces se quedaba con
+  // el resultado de un rango viejo. Gana la más reciente, no la más rápida.
+  const turnoCarga = useRef(0);
 
   // Load rutas and costos when date changes
   useEffect(() => { loadRutas(); loadCostos(); loadAsistenciaCarriers(); }, [fechaDesde, fechaHasta]);
@@ -3204,6 +3213,7 @@ function ModuleEnvios() {
   };
 
   const loadRutas = async () => {
+    const miTurno = ++turnoCarga.current;
     setLoading(true);
     // Supabase caps a single select at 1000 rows. Use keyset pagination on
     // `id` (unique PK, monotonically increasing) instead of offset-based to
@@ -3221,6 +3231,9 @@ function ModuleEnvios() {
       if (chunk.length < pageSize) break;
       cursor = chunk[chunk.length - 1].id;
     }
+    // Otra carga más reciente arrancó mientras ésta bajaba: su resultado es el
+    // bueno. Escribir aquí pisaría datos nuevos con datos viejos.
+    if (miTurno !== turnoCarga.current) return;
     const data = Array.from(byId.values()).sort((a, b) => (a.created_at || "").localeCompare(b.created_at || "") * -1 || b.id - a.id);
     if (data && data.length > 0) {
       // First load: auto-adjust date range to the min/max of available data
@@ -3259,7 +3272,9 @@ function ModuleEnvios() {
     } else {
       setRutas([]);
     }
-    setLoading(false);
+    // Sólo la carga vigente apaga el indicador: si lo apagara cualquiera, la
+    // pantalla diría "listo" con descargas todavía en vuelo.
+    if (miTurno === turnoCarga.current) setLoading(false);
   };
 
   const updateRuta = async (index, field, value) => {
@@ -4419,7 +4434,12 @@ function ModuleEnvios() {
           unidad de trabajo: los paquetes que movieron. Antes este costo se
           sumaba al del proveedor y se dividía entre sus entregas de última
           milla, lo que inflaba a quien hace las dos cosas. */}
-      {provHM.length > 0 ? (
+      {loading && !provHM.length ? (
+        <div style={{ backgroundColor: C.panel, borderRadius: 12, border: "1px solid " + C.border, padding: "18px 20px", marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Half mile — costo del servicio</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 5 }}>Cargando rutas del periodo…</div>
+        </div>
+      ) : provHM.length > 0 ? (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
           <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 10 }}>
             <div>
@@ -4482,7 +4502,12 @@ function ModuleEnvios() {
           `costoFinal` abarca última milla, foráneo y PETCO: los tres terminan
           en la puerta del cliente, así que numerador y denominador son del
           mismo conjunto. Half mile no entra — entra después, como recargo. */}
-      {provFinal.length > 0 ? (
+      {loading && !provFinal.length ? (
+        <div style={{ backgroundColor: C.panel, borderRadius: 12, border: "1px solid " + C.border, padding: "18px 20px", marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Entrega final por proveedor — costo propio y todo incluido</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 5 }}>Cargando rutas del periodo…</div>
+        </div>
+      ) : provFinal.length > 0 ? (
         <div style={{ backgroundColor: C.white, borderRadius: 12, border: "1px solid " + C.border, overflow: "hidden", marginBottom: 20 }}>
           <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Entrega final por proveedor — costo propio y todo incluido</div>
