@@ -3599,12 +3599,30 @@ function ModuleEnvios() {
         return;
       }
 
+      // El catálogo se busca por DOS nombres: el del menú (`provNorm`, que sale
+      // de rutas.carrier) y el del proveedor que resolvió el tipo_unidad
+      // (`info.proveedor`, que sale de asistencia). No siempre son el mismo
+      // texto, y el primero es el menos confiable porque lo escribe el Excel de
+      // origen: las rutas de Ramsoj llegan como "CONSULTORES RAMSOJ - GC"
+      // mientras su asistencia y su tarifa están a nombre de "CONSULTORES
+      // RAMSOJ". Con una sola clave, el paso 1 declaraba inválido un SmallVan
+      // que sí existe en el catálogo, el paso 2 no encontraba candidatos, y las
+      // 11 unidades acababan en `ignoradas`: cero en todas las operaciones y el
+      // botón de descarga apagado sin explicar por qué.
+      //
+      // Se valida primero contra el proveedor que entregó el dato, que es quien
+      // tiene autoridad sobre el par (proveedor, tipo_unidad).
+      const clavesCatalogo = info.proveedor
+        ? [norm(info.proveedor), provNorm]
+        : [provNorm];
+      const esDelProveedor = (c) => clavesCatalogo.includes(norm(c.proveedor));
+
       // 1) Validar tipo_unidad contra catálogo del proveedor. Si la
       //    asistencia dice "Moto" pero Partrunner sólo tiene Sedan, el
       //    dato de asistencia está mal — forzar el fallback al catálogo.
       if (tipo_unidad) {
         const existeEnCatalogo = carriers.some(c =>
-          norm(c.proveedor) === provNorm && c.tipo_unidad === tipo_unidad
+          esDelProveedor(c) && c.tipo_unidad === tipo_unidad
         );
         if (!existeEnCatalogo) {
           tipo_unidad = null;
@@ -3626,7 +3644,7 @@ function ModuleEnvios() {
           return true;
         };
         const candidates = carriers.filter(c =>
-          norm(c.proveedor) === provNorm
+          esDelProveedor(c)
           && c.tipo_unidad && c.tipo_unidad !== "---" && c.tipo_unidad !== "—"
           && opMatchCarrier(c.operacion)
         );
@@ -3677,12 +3695,30 @@ function ModuleEnvios() {
       console.table(decisionados);
       console.groupEnd();
     }
-    return out;
+    return { unidades: out, ignoradas };
   };
 
   const conteoOperacion = (proveedor, opCanonica) => {
     if (!proveedor || !opCanonica) return 0;
-    return unidadesEnvios(norm(proveedor), new Set([opCanonica])).length;
+    return unidadesEnvios(norm(proveedor), new Set([opCanonica])).unidades.length;
+  };
+
+  // Por qué un proveedor que SÍ tiene rutas en el periodo no produce ni una
+  // unidad facturable. Antes esto no se decía en ninguna parte: las cuentas
+  // salían en cero, `prefactOperaciones` quedaba vacío y el botón "Generar PDF"
+  // se apagaba sin más. Desde la pantalla era indistinguible de un botón roto
+  // —el reporte fue literalmente "no se puede descargar"— cuando en realidad
+  // faltaba un nombre en el catálogo.
+  const motivoSinUnidades = (proveedor) => {
+    if (!proveedor) return null;
+    const { unidades, ignoradas } = unidadesEnvios(norm(proveedor), null);
+    if (unidades.length > 0 || ignoradas.length === 0) return null;
+    const porRazon = new Map();
+    ignoradas.forEach(ig => porRazon.set(ig.razon, (porRazon.get(ig.razon) || 0) + 1));
+    const [razon, n] = [...porRazon.entries()].sort((a, b) => b[1] - a[1])[0];
+    return `Las ${ignoradas.length} rutas del periodo quedaron fuera del conteo`
+      + ` (${n} por «${razon}»). Revisa que «${proveedor}» exista en el catálogo`
+      + ` de Carriers con tarifa para el tipo de unidad de esas rutas.`;
   };
 
   const generatePrefactura = (proveedor, conIVA, operacionesFiltro) => {
@@ -3695,7 +3731,7 @@ function ModuleEnvios() {
     // 1) Recolectar unidades desde lo que aparece en Registrar Envíos
     //    (rutas reales + asistencias sintéticas). Mismo source que la tabla
     //    para garantizar consistencia visual ↔ prefactura.
-    const unidades = unidadesEnvios(provNorm, opsPermitidas);
+    const { unidades } = unidadesEnvios(provNorm, opsPermitidas);
 
     // 2) Costo por tipo_unidad desde catálogo carriers
     const costoPorTipo = {};
@@ -3738,9 +3774,21 @@ function ModuleEnvios() {
     rutas.forEach(r => {
       const f = (r.salida || "").substring(0, 10);
       if (!f || f < fechaDesde || f > fechaHasta) return;
+      // Mismo criterio de pertenencia que `unidadesEnvios`: la ruta es de este
+      // proveedor si lo dice su columna carrier O el proveedor que resolvió su
+      // costo. Con `info.proveedor || r.carrier` bastaba que la asistencia
+      // trajera otra grafía del mismo nombre para que la ruta dejara de
+      // reconocerse y su ajuste se perdiera — y el ajuste siempre se perdía a
+      // favor de quien cobra: las rutas de Ramsoj llegan como "CONSULTORES
+      // RAMSOJ - GC" y su asistencia como "CONSULTORES RAMSOJ", así que la
+      // penalización 2600*.89 no bajaba del total y la prefactura pedía $286 de
+      // más. Las unidades ya se contaban con esta regla; los descuentos no, de
+      // modo que una misma ruta podía facturarse aquí y descontarse en otra
+      // prefactura.
       const info = getCostoInfo(r);
-      const provFromRow = info.proveedor || r.carrier;
-      if (!provFromRow || norm(provFromRow) !== provNorm) return;
+      const esDeEsteProveedor = norm(r.carrier) === provNorm
+        || (info.proveedor && norm(info.proveedor) === provNorm);
+      if (!esDeEsteProveedor) return;
       if (opsPermitidas && !opsPermitidas.has(normalizeOperacion(r.tipoRuta))) return;
       const { baseCost, costoNuevo } = getCostoReal(r);
       const ajuste = baseCost - costoNuevo;
@@ -5500,6 +5548,15 @@ function ModuleEnvios() {
                         Crossdock = "CrossDock" + "Logística Inversa" (es la misma unidad).<br />
                         Si una unidad está registrada con varios labels el mismo día, se cuenta una sola vez.
                       </div>
+                      {(() => {
+                        const motivo = motivoSinUnidades(prefactProveedor);
+                        if (!motivo) return null;
+                        return (
+                          <div style={{ marginTop:10, padding:"10px 12px", borderRadius:8, backgroundColor:C.yellowBg, border:"1px solid "+C.yellow, fontSize:11.5, color:C.text, lineHeight:1.5 }}>
+                            <b style={{ color:C.yellow }}>No hay unidades que facturar.</b> {motivo}
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })()}
