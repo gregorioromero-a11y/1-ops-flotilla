@@ -5516,6 +5516,13 @@ function ModuleEnvios() {
                 {(() => {
                   const opsDisp = OPERACIONES_CANONICAS;
                   const todasSeleccionadas = opsDisp.every(o => prefactOperaciones.includes(o));
+                  // Una pasada por operación y ya; `conteoOperacion` recorre todas
+                  // las rutas del periodo y, por cada una, filtra toda la
+                  // asistencia, así que no conviene llamarlo dos veces por lo
+                  // mismo. El diagnóstico de abajo sólo se calcula cuando no hay
+                  // NADA que facturar, que es justo cuando hace falta explicarlo.
+                  const cuentas = new Map(opsDisp.map(o => [o, conteoOperacion(prefactProveedor, o)]));
+                  const totalUnidades = [...cuentas.values()].reduce((a, b) => a + b, 0);
                   return (
                     <div style={{ marginBottom:16 }}>
                       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
@@ -5531,7 +5538,7 @@ function ModuleEnvios() {
                       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(180px, 1fr))", gap:6, padding:10, backgroundColor:C.bg, borderRadius:8, border:"1px solid "+C.border }}>
                         {opsDisp.map(o => {
                           const sel = prefactOperaciones.includes(o);
-                          const cuenta = conteoOperacion(prefactProveedor, o);
+                          const cuenta = cuentas.get(o) || 0;
                           const sinDatos = cuenta === 0;
                           return (
                             <label key={o} style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px", borderRadius:6, backgroundColor:sel?C.accentLight:C.white, border:"1px solid "+(sel?C.accent:C.border), cursor:sinDatos&&!sel?"default":"pointer", fontSize:12, opacity:sinDatos&&!sel?0.55:1 }}>
@@ -5549,7 +5556,7 @@ function ModuleEnvios() {
                         Si una unidad está registrada con varios labels el mismo día, se cuenta una sola vez.
                       </div>
                       {(() => {
-                        const motivo = motivoSinUnidades(prefactProveedor);
+                        const motivo = totalUnidades === 0 ? motivoSinUnidades(prefactProveedor) : null;
                         if (!motivo) return null;
                         return (
                           <div style={{ marginTop:10, padding:"10px 12px", borderRadius:8, backgroundColor:C.yellowBg, border:"1px solid "+C.yellow, fontSize:11.5, color:C.text, lineHeight:1.5 }}>
